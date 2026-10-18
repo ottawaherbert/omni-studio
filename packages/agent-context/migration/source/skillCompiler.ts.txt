@@ -1,0 +1,450 @@
+import crypto from 'crypto';
+import type {
+  AppliedSkillSnapshot,
+  CompilableSkill,
+  CompiledSkillPrompt,
+  SkillContractEvent,
+  SkillCompatibility,
+  SkillInjection,
+} from './types';
+import {
+  assertSkillOutputModeSupported,
+  contractEventForFailure,
+  normalizeSkillTokenPolicy,
+  schemaHash,
+  skillTokenEstimate,
+  snapshotForSkill,
+  tokenContract,
+  validateSkillInput,
+  type SkillOutputExecutionMode,
+} from './runtimeContracts';
+
+export const SKILL_SLOT_MARKERS = {
+  systemRules: '{{skillSystemRules}}',
+  contextRules: '{{skillContextRules}}',
+  genesisRules: '{{skillGenesisRules}}',
+  writerGuidance: '{{skillWriterGuidance}}',
+  validatorRules: '{{skillValidatorRules}}',
+  transformerRules: '{{skillTransformerRules}}',
+} as const;
+
+const DEFAULT_SLOT = 'writerGuidance';
+
+export class SkillCompileError extends Error {
+  code: string;
+  status: number;
+  userMessage: string;
+  details: Record<string, unknown>;
+
+  constructor(code: string, message: string, details: Record<string, unknown> = {}) {
+    super(message);
+    this.name = 'SkillCompileError';
+    this.code = code;
+    this.status = 400;
+    this.userMessage = message;
+    this.details = details;
+  }
+}
+
+export interface CompileSkillPromptInput {
+  basePrompt: string;
+  skills?: CompilableSkill[];
+  variables?: Record<string, unknown>;
+  strictVariables?: boolean;
+  allowInactive?: boolean;
+  outputExecutionMode?: SkillOutputExecutionMode;
+  maxSkillTokens?: number;
+}
+
+export function compileSkillPrompt(input: CompileSkillPromptInput): CompiledSkillPrompt {
+  const skills = normalizeSkills(input.skills || [], input.allowInactive === true);
+  const variables = input.variables || {};
+  const slotTexts: Record<string, string[]> = {};
+  const appliedSkills: AppliedSkillSnapshot[] = [];
+  const warnings: string[] = [];
+  const outputExecutionMode = input.outputExecutionMode || 'PROMPT_INJECTION';
+  const maxSkillTokens = normalizeSharedTokenBudget(input.maxSkillTokens);
+  let remainingTokens = maxSkillTokens;
+
+  const prepared = skills.map(skill => {
+    const injection = asInjection(skill.version.injection);
+    const slot = injection.slot || DEFAULT_SLOT;
+    const snapshot = snapshotForSkill(skill, slot);
+    const inputValidation = safelyValidateInput(skill, variables, snapshot);
+    let outputSchema: Record<string, unknown>;
+    try {
+      outputSchema = assertSkillOutputModeSupported(skill, outputExecutionMode);
+    } catch (error) {
+      throw new SkillCompileError('SKILL_OUTPUT_CONTRACT_UNSUPPORTED', errorMessage(error), {
+        skillId: skill.id,
+        skillKey: skill.key,
+        contractEvent: {
+          skill: snapshot,
+          status: 'FAILED',
+          reasonCode: 'SKILL_OUTPUT_CONTRACT_UNSUPPORTED',
+          reason: errorMessage(error),
+          input: inputValidation,
+          output: { status: 'FAILED', schemaHash: schemaHash(skill.version.outputSchema), errors: [errorMessage(error)] },
+          tokens: tokenContract(skill, 0, 0),
+        },
+      });
+    }
+
+    const missingVariables = missingSkillVariables(skill, variables);
+    if (missingVariables.length > 0) {
+      const message = `技能 ${skill.name} 缺少变量：${missingVariables.join(', ')}`;
+      if (input.strictVariables !== false) {
+        throw new SkillCompileError('SKILL_VARIABLE_MISSING', message, {
+          skillId: skill.id,
+          skillKey: skill.key,
+          variables: missingVariables,
+          contractEvent: contractEventForFailure(skill, 'FAILED', 'SKILL_VARIABLE_MISSING', message),
+        });
+      }
+      warnings.push(message);
+    }
+
+    const rendered = renderVariables(skill.version.content, variables);
+    const block = wrapSkillBlock(skill.name, rendered, injection.title);
+    return {
+      skill,
+      injection,
+      slot,
+      snapshot,
+      inputValidation,
+      outputSchema,
+      block,
+      requestedTokens: skillTokenEstimate(block),
+      missingVariables,
+      policy: safelyNormalizeTokenPolicy(skill, snapshot),
+    };
+  });
+
+  const decisions = new Map<string, {
+    text: string;
+    usedTokens: number;
+    status: 'APPLIED' | 'SKIPPED';
+    reasonCode: string | null;
+    reason: string | null;
+  }>();
+  const allocationOrder = [...prepared].sort((left, right) => (
+    (right.policy.priority || 0) - (left.policy.priority || 0)
+    || (left.injection.sortOrder ?? 0) - (right.injection.sortOrder ?? 0)
+    || left.skill.key.localeCompare(right.skill.key)
+  ));
+
+  for (const preparedSkill of allocationOrder) {
+    if (preparedSkill.missingVariables.length > 0) {
+      // A missing substitution can erase a rule's subject or prohibition.
+      // Non-strict callers may continue without this skill, never with a
+      // partial rule recorded as fully applied.
+      decisions.set(preparedSkill.skill.version.id, {
+        text: '',
+        usedTokens: 0,
+        status: 'SKIPPED',
+        reasonCode: 'SKILL_VARIABLE_MISSING',
+        reason: `技能 ${preparedSkill.skill.name} 缺少变量：${preparedSkill.missingVariables.join(', ')}，本次未注入`,
+      });
+      continue;
+    }
+    const individualLimit = preparedSkill.policy.maxTokens ?? Number.POSITIVE_INFINITY;
+    const sharedLimit = remainingTokens ?? Number.POSITIVE_INFINITY;
+    const available = Math.max(0, Math.min(individualLimit, sharedLimit));
+    if (preparedSkill.requestedTokens <= available) {
+      decisions.set(preparedSkill.skill.version.id, {
+        text: preparedSkill.block,
+        usedTokens: preparedSkill.requestedTokens,
+        status: 'APPLIED',
+        reasonCode: null,
+        reason: null,
+      });
+      if (remainingTokens !== undefined) remainingTokens -= preparedSkill.requestedTokens;
+      continue;
+    }
+
+    const reason = `技能 ${preparedSkill.skill.name} 需要约 ${preparedSkill.requestedTokens} tokens，可用预算为 ${Number.isFinite(available) ? available : '无限制'}`;
+    // A partial core rule cannot be recorded as APPLIED: its missing tail may
+    // contain a prohibition. Legacy TRUNCATE policies now fail explicitly.
+    if (preparedSkill.policy.overflow !== 'SKIP') {
+      throw new SkillCompileError('SKILL_TOKEN_BUDGET_EXCEEDED', reason, {
+        skillId: preparedSkill.skill.id,
+        skillKey: preparedSkill.skill.key,
+        contractEvent: {
+          skill: preparedSkill.snapshot,
+          status: 'FAILED',
+          reasonCode: 'SKILL_TOKEN_BUDGET_EXCEEDED',
+          reason,
+          input: preparedSkill.inputValidation,
+          output: {
+            status: 'NOT_CHECKED',
+            schemaHash: schemaHash(preparedSkill.outputSchema),
+            errors: [],
+          },
+          tokens: tokenContract(preparedSkill.skill, preparedSkill.requestedTokens, 0),
+        },
+      });
+    }
+    if (preparedSkill.policy.overflow === 'SKIP') {
+      warnings.push(`${reason}，已按 Token 策略跳过`);
+      decisions.set(preparedSkill.skill.version.id, {
+        text: '',
+        usedTokens: 0,
+        status: 'SKIPPED',
+        reasonCode: 'SKILL_TOKEN_BUDGET_SKIPPED',
+        reason,
+      });
+      continue;
+    }
+
+  }
+
+  const appliedPrepared = prepared.filter(item => decisions.get(item.skill.version.id)?.status === 'APPLIED');
+  validateCompatibility(appliedPrepared.map(item => item.skill));
+
+  const contractEvents: SkillContractEvent[] = prepared.map(preparedSkill => {
+    const decision = decisions.get(preparedSkill.skill.version.id);
+    if (!decision) throw new Error(`SKILL_TOKEN_DECISION_MISSING:${preparedSkill.skill.key}`);
+    return {
+      skill: preparedSkill.snapshot,
+      status: decision.status,
+      reasonCode: decision.reasonCode,
+      reason: decision.reason,
+      input: preparedSkill.inputValidation,
+      output: {
+        status: decision.status === 'SKIPPED'
+          ? 'NOT_CHECKED' as const
+          : Object.keys(preparedSkill.outputSchema).length > 0 ? 'PENDING' as const : 'NOT_DECLARED' as const,
+        schemaHash: schemaHash(preparedSkill.outputSchema),
+        errors: [],
+      },
+      tokens: tokenContract(preparedSkill.skill, preparedSkill.requestedTokens, decision.usedTokens),
+    };
+  });
+
+  for (const preparedSkill of appliedPrepared) {
+    const decision = decisions.get(preparedSkill.skill.version.id);
+    if (!decision || !decision.text) continue;
+    if (!slotTexts[preparedSkill.slot]) slotTexts[preparedSkill.slot] = [];
+    slotTexts[preparedSkill.slot].push(decision.text);
+    appliedSkills.push(preparedSkill.snapshot);
+  }
+
+  const prompt = renderSkillSlots(renderVariables(input.basePrompt, variables), slotTexts);
+  return {
+    prompt,
+    promptHash: hashText(prompt),
+    appliedSkills,
+    warnings,
+    slotTexts,
+    contractEvents,
+    runtimeContracts: appliedPrepared.map(item => ({
+      skill: item.snapshot,
+      outputSchema: item.outputSchema,
+    })),
+  };
+}
+
+export function hashText(value: string) {
+  return crypto.createHash('sha256').update(value).digest('hex');
+}
+
+function normalizeSkills(skills: CompilableSkill[], allowInactive: boolean) {
+  return skills
+    .filter(skill => allowInactive || (
+      skill.status === 'ACTIVE'
+      && (skill.version.status === 'ACTIVE' || Boolean(skill.mount))
+    ))
+    .sort((a, b) => {
+      const left = asInjection(a.version.injection).sortOrder ?? 0;
+      const right = asInjection(b.version.injection).sortOrder ?? 0;
+      if (left !== right) return left - right;
+      return a.key.localeCompare(b.key);
+    });
+}
+
+function validateCompatibility(skills: CompilableSkill[]) {
+  const keys = new Set(skills.map(skill => skill.key));
+  for (const skill of skills) {
+    const compatibility = asCompatibility(skill.version.compatibility);
+    const conflicts = [
+      ...(compatibility.conflictsWith || []),
+      ...(compatibility.exclusiveWith || []),
+    ].filter(key => keys.has(key));
+    if (conflicts.length > 0) {
+      const reason = `技能 ${skill.name} 与 ${conflicts.join(', ')} 冲突`;
+      throw new SkillCompileError('SKILL_CONFLICT', reason, {
+        skillId: skill.id,
+        skillKey: skill.key,
+        conflicts,
+        contractEvent: contractEventForFailure(skill, 'FAILED', 'SKILL_CONFLICT', reason),
+      });
+    }
+    const missingRequired = (compatibility.requires || []).filter(key => !keys.has(key));
+    if (missingRequired.length > 0) {
+      const reason = `技能 ${skill.name} 缺少依赖：${missingRequired.join(', ')}`;
+      throw new SkillCompileError('SKILL_REQUIREMENT_MISSING', reason, {
+        skillId: skill.id,
+        skillKey: skill.key,
+        requires: missingRequired,
+        contractEvent: contractEventForFailure(skill, 'FAILED', 'SKILL_REQUIREMENT_MISSING', reason),
+      });
+    }
+  }
+}
+
+function missingSkillVariables(skill: CompilableSkill, variables: Record<string, unknown>) {
+  const declared = Array.isArray(skill.version.variables)
+    ? skill.version.variables
+    : [];
+  return declared
+    .map(value => typeof value === 'string' ? normalizeVariableName(value) : '')
+    .filter(Boolean)
+    .filter(name => variables[name] === undefined || variables[name] === null);
+}
+
+function renderVariables(template: string, variables: Record<string, unknown>) {
+  const slotMarkers = new Set<string>(Object.values(SKILL_SLOT_MARKERS));
+  return template.replace(/\{\{([^{}]+)\}\}/g, (_, rawKey: string) => {
+    const key = rawKey.trim();
+    const marker = `{{${key}}}`;
+    if (slotMarkers.has(marker)) return marker;
+    const value = variables[key];
+    if (value === undefined || value === null) return '';
+    return typeof value === 'object' ? JSON.stringify(value, null, 2) : String(value);
+  });
+}
+
+function renderSkillSlots(basePrompt: string, slotTexts: Record<string, string[]>) {
+  let prompt = basePrompt;
+  const consumed = new Set<string>();
+  for (const [slot, marker] of Object.entries(SKILL_SLOT_MARKERS)) {
+    const text = joinSlotTexts(slotTexts[slot]);
+    if (prompt.includes(marker)) {
+      prompt = prompt.replaceAll(marker, text);
+      consumed.add(slot);
+    }
+  }
+
+  const remaining = Object.entries(slotTexts)
+    .filter(([slot]) => !consumed.has(slot))
+    .flatMap(([, texts]) => texts);
+  if (remaining.length > 0) {
+    prompt = `${prompt.trim()}\n\n【写作技能补充】\n${remaining.join('\n\n')}`.trim();
+  }
+
+  for (const marker of Object.values(SKILL_SLOT_MARKERS)) {
+    prompt = prompt.replaceAll(marker, '');
+  }
+  return prompt.trim();
+}
+
+function joinSlotTexts(texts?: string[]) {
+  return texts && texts.length > 0 ? texts.join('\n\n') : '';
+}
+
+function wrapSkillBlock(name: string, content: string, title?: string) {
+  const heading = title || name;
+  return `【${heading}】\n${content.trim()}`;
+}
+
+function normalizeVariableName(value: string) {
+  return value.replace(/^\{\{/, '').replace(/\}\}$/, '').trim();
+}
+
+function asInjection(value: unknown): SkillInjection {
+  return value && typeof value === 'object' && !Array.isArray(value)
+    ? value as SkillInjection
+    : {};
+}
+
+function asCompatibility(value: unknown): SkillCompatibility {
+  return value && typeof value === 'object' && !Array.isArray(value)
+    ? value as SkillCompatibility
+    : {};
+}
+
+function safelyValidateInput(
+  skill: CompilableSkill,
+  variables: Record<string, unknown>,
+  snapshot: AppliedSkillSnapshot,
+) {
+  let validation: ReturnType<typeof validateSkillInput>;
+  try {
+    validation = validateSkillInput(skill, variables);
+  } catch (error) {
+    const message = errorMessage(error);
+    throw new SkillCompileError('SKILL_INPUT_SCHEMA_INVALID', message, {
+      skillId: skill.id,
+      skillKey: skill.key,
+      contractEvent: {
+        skill: snapshot,
+        status: 'FAILED',
+        reasonCode: 'SKILL_INPUT_SCHEMA_INVALID',
+        reason: message,
+        input: { status: 'FAILED', schemaHash: schemaHash(skill.version.inputSchema), errors: [message] },
+        output: { status: 'NOT_CHECKED', schemaHash: schemaHash(skill.version.outputSchema), errors: [] },
+        tokens: tokenContract(skill, 0, 0),
+      },
+    });
+  }
+  if (validation.status === 'FAILED') {
+    const message = `技能 ${skill.name} 的运行输入不符合 inputSchema：${validation.errors.join('；')}`;
+    throw new SkillCompileError('SKILL_INPUT_SCHEMA_MISMATCH', message, {
+      skillId: skill.id,
+      skillKey: skill.key,
+      errors: validation.errors,
+      contractEvent: {
+        skill: snapshot,
+        status: 'FAILED',
+        reasonCode: 'SKILL_INPUT_SCHEMA_MISMATCH',
+        reason: message,
+        input: validation,
+        output: { status: 'NOT_CHECKED', schemaHash: schemaHash(skill.version.outputSchema), errors: [] },
+        tokens: tokenContract(skill, 0, 0),
+      },
+    });
+  }
+  return validation;
+}
+
+function safelyNormalizeTokenPolicy(skill: CompilableSkill, snapshot: AppliedSkillSnapshot) {
+  try {
+    return normalizeSkillTokenPolicy(skill.version.tokenPolicy);
+  } catch (error) {
+    const message = `技能 ${skill.name} 的 Token 策略无效：${errorMessage(error)}`;
+    throw new SkillCompileError('SKILL_TOKEN_POLICY_INVALID', message, {
+      skillId: skill.id,
+      skillKey: skill.key,
+      contractEvent: {
+        skill: snapshot,
+        status: 'FAILED',
+        reasonCode: 'SKILL_TOKEN_POLICY_INVALID',
+        reason: message,
+        input: { status: 'NOT_CHECKED', schemaHash: schemaHash(skill.version.inputSchema), errors: [] },
+        output: { status: 'NOT_CHECKED', schemaHash: schemaHash(skill.version.outputSchema), errors: [] },
+        tokens: {
+          requestedTokens: 0,
+          usedTokens: 0,
+          maxTokens: null,
+          priority: 0,
+          overflow: 'ERROR',
+        },
+      },
+    });
+  }
+}
+
+function normalizeSharedTokenBudget(value: number | undefined) {
+  if (value === undefined) return undefined;
+  if (!Number.isInteger(value) || value < 0 || value > 64_000) {
+    throw new SkillCompileError(
+      'SKILL_SHARED_TOKEN_BUDGET_INVALID',
+      'Surface 传入的 Skill 总预算必须是 0 到 64000 的整数',
+    );
+  }
+  return value;
+}
+
+function errorMessage(error: unknown) {
+  return error instanceof Error ? error.message : String(error);
+}

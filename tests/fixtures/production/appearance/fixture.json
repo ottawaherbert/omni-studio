@@ -1,0 +1,44 @@
+{
+  "id": "appearance-ui-20260912",
+  "title": "外观连续性验收",
+  "type": "tv_series",
+  "createdAt": 1789172277913,
+  "updatedAt": 1789172277913,
+  "characters": [
+    {
+      "id": "appearance-lin",
+      "name": "林岚",
+      "description": "外观状态测试角色",
+      "visualIdentity": "成年东亚女性，短黑发，面容清晰，基本身份始终相同。",
+      "variants": []
+    }
+  ],
+  "assets": [],
+  "episodes": [
+    {
+      "id": "appearance-ep1",
+      "title": "第1集",
+      "order": 1,
+      "scenes": [
+        {
+          "id": "appearance-s1",
+          "title": "受伤与换装",
+          "script": "林岚穿蓝外套，袖口有泥。他摔倒，左颊擦伤。\n随后换上黑外套，伤口仍在。",
+          "description": "林岚穿蓝外套，袖口有泥。他摔倒，左颊擦伤。\n随后换上黑外套，伤口仍在。",
+          "valueCharge": "neutral",
+          "targetDuration": 1,
+          "shots": []
+        },
+        {
+          "id": "appearance-s2",
+          "title": "稍后出门",
+          "script": "林岚穿黑外套走出门，左颊伤口还在，袖口仍有泥。",
+          "description": "林岚穿黑外套走出门，左颊伤口还在，袖口仍有泥。",
+          "valueCharge": "neutral",
+          "targetDuration": 1,
+          "shots": []
+        }
+      ]
+    }
+  ]
+}

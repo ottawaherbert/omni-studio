@@ -1,0 +1,13 @@
+import test from 'node:test';
+import assert from 'node:assert/strict';
+import React from 'react';
+import {renderToStaticMarkup} from 'react-dom/server';
+import {createScriptProject,newScene} from '../packages/script/src/project';
+import {createScriptCreationProfile} from '../packages/script/src/creation';
+import {ScriptGoalProgress} from '../apps/web/src/features/script/components/ScriptGoalProgress';
+import type {ScriptGoalReviewView} from '../apps/web/src/clients/scriptClient';
+const fixture=()=>{const p=createScriptProject('覆盖验收',createScriptCreationProfile('short-film',1,5));const u=p.units[0];u.scenes[0].title='别段未完场';u.scenes[0].generation={status:'partial',checkpointId:'checkpoint-test',appliedSteps:[]};u.scenes[0].blocks[0].text='已保存';u.scenes.push(newScene('本段场'));return p;};
+const review=(status:'PARTIAL'|'DRAFT_READY',done:boolean):ScriptGoalReviewView['review']=>({reviewId:'r',workspaceId:'w',manifestHash:'hash',workspaceRevision:1,targetUnitIds:[],repairRoundsUsed:0,maxRepairRounds:1,tasks:[],findings:[],coverage:{localComplete:done,globalComplete:done,missingTaskIds:[],invalidReceipts:[]},storyProgress:[{id:'requirement',unitId:'u',ownerKind:'unit',ownerId:'u',sourceHash:'hash',start:0,end:2,text:'送信',status,evidence:[],reason:'依据稿件'}]});
+test('partial progress does not scan a sibling scene outside the frozen selection',()=>{const p=fixture(),u=p.units[0];const html=renderToStaticMarkup(<ScriptGoalProgress project={p} sceneScope={{[u.id]:[u.scenes[1].id]}} review={review('DRAFT_READY',true)}/>);assert.ok(!html.includes('别段未完场'));assert.ok(html.includes('初稿齐备'));assert.ok(html.includes('所需检查完成'));});
+test('an explicitly empty node never falls back to all scenes in the unit',()=>{const p=fixture(),u=p.units[0];const html=renderToStaticMarkup(<ScriptGoalProgress project={p} sceneScope={{[u.id]:[]}} review={undefined}/>);assert.equal(html,'');});
+test('saved partial scene exposes recovery position without promoting draft or checks',()=>{const p=fixture(),u=p.units[0];const html=renderToStaticMarkup(<ScriptGoalProgress project={p} sceneScope={{[u.id]:[u.scenes[0].id]}} review={review('PARTIAL',false)}/>);assert.ok(html.includes('恢复位置'));assert.ok(html.includes('别段未完场'));assert.ok(html.includes('已保存 1 段'));assert.ok(!html.includes('checkpoint-test'));assert.ok(!html.includes('所需检查完成'));});

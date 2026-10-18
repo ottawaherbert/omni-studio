@@ -1,0 +1,14 @@
+{
+  "model": "gpt-6-sol",
+  "simulation": true,
+  "producer": "GPT-6 Sol 子 Agent 模拟生成",
+  "agentPath": "/root/model_fixtures",
+  "requestEvidencePath": "/Users/yang/Desktop/code/movie/a-22/artifacts/agent-foundation-study-2026-09-26/sol-chat-second-request.json",
+  "externalRequestId": "external_a90e6338-235d-45e5-94e6-360a4eb5e036",
+  "inputHash": "100d0e47e89b879b8aca6434d2518068cc36786d880be1b279b3d79e5f47356f",
+  "scope": "作者点选“门外让位”后的第二轮构思对话；只讨论，不创建或修改作品。",
+  "limitations": [
+    "未调用外部模型 provider 或提交回填 API。",
+    "这是模拟返回，不构成真实模型结果或作品艺术质量验收。"
+  ]
+}

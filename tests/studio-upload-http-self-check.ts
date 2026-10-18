@@ -1,0 +1,120 @@
+import assert from 'node:assert/strict';
+import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
+import { execFileSync } from 'node:child_process';
+import express from 'express';
+import { assetClient } from '../apps/web/src/clients/assetClient';
+import { MAX_ASSET_UPLOAD_BYTES } from '../packages/domain/src/asset';
+import { createMediaAssetReference } from '../src/utils/mediaProvenance';
+import { adoptShotTake, reviseShotTakeAudio, type ShotTake } from '../src/services/production/shotTakeReview';
+import type { Episode } from '../src/types/project';
+
+const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'a22-studio-upload-'));
+const mediaDir = path.join(directory, 'media'); fs.mkdirSync(mediaDir);
+process.env.OMNI_DB_PATH = path.join(directory, 'test.db');
+const { db, dbHelpers } = await import('../src/server/db');
+const { registerAssetRoutes } = await import('../src/server/routes/assetRoutes');
+const { registerLegacyProjectRoutes } = await import('../src/server/routes/legacyProjectRoutes');
+const { registerStudioCandidateRoutes } = await import('../src/server/routes/studioCandidateRoutes');
+execFileSync('ffmpeg', ['-v', 'error', '-f', 'lavfi', '-i', 'testsrc2=size=320x180:rate=24', '-f', 'lavfi', '-i', 'sine=frequency=440:sample_rate=48000', '-t', '2', '-c:v', 'libx264', '-pix_fmt', 'yuv420p', '-c:a', 'aac', path.join(directory, 'with-audio.mp4')]);
+execFileSync('ffmpeg', ['-v', 'error', '-i', path.join(directory, 'with-audio.mp4'), '-c:v', 'copy', '-an', path.join(directory, 'silent.mp4')]);
+const projectId = 'studio-upload';
+dbHelpers.saveProject({ id: projectId, title: '[验收] 现成素材导入', type: 'single-work', workType: '实验影像', aspectRatio: '16:9', characters: [], assets: [], episodes: [] });
+const initialEpisode: Episode = { id: 'upload-episode', title: '现成素材', inspiration: '', scenes: [{ id: 'upload-scene', title: '片段', description: '', valueCharge: 'neutral', shots: [{ id: 'upload-shot', duration: 2, visualAction: '导入现有视频', imagePrompt: '', videoPrompt: '', takes: [] }] }] };
+dbHelpers.updateEpisode(projectId, initialEpisode.id, initialEpisode);
+const app = express(); app.use(express.json({ limit: '50mb' }));
+let uploadRequests = 0;
+app.use((req, _res, next) => { if (req.path === '/api/assets/upload-file') uploadRequests++; next(); });
+registerAssetRoutes(app, { mediaAssetsDir: mediaDir }); registerLegacyProjectRoutes(app); registerStudioCandidateRoutes(app);
+const serve = process.argv.includes('--serve');
+let vite: import('vite').ViteDevServer | undefined;
+if (serve) {
+  const { registerSystemRoutes } = await import('../src/server/routes/systemRoutes'); registerSystemRoutes(app, { mediaAssetsDir: mediaDir });
+  const { registerAiConfigRoutes } = await import('../src/server/routes/aiConfigRoutes'); registerAiConfigRoutes(app, { getProviderKeyStatus: () => ({}) });
+  app.post('/api/runtime-logs', (_req, res) => res.json({ ok: true }));
+  app.use('/api', (_req, res) => res.status(404).json({ error: '隔离验收未启用此服务' }));
+  const { createServer } = await import('vite');
+  vite = await createServer({ server: { middlewareMode: true, hmr: false, proxy: {} }, appType: 'spa' });
+  app.use(vite.middlewares);
+}
+const server = app.listen(serve ? Number(process.env.PORT || 4324) : 0, '127.0.0.1');
+await new Promise<void>((resolve) => server.once('listening', resolve));
+const base = `http://127.0.0.1:${(server.address() as import('node:net').AddressInfo).port}`;
+const fetchOriginal = globalThis.fetch;
+globalThis.fetch = (input, init) => fetchOriginal(typeof input === 'string' && input.startsWith('/') ? base + input : input, init);
+const request = async (route: string, method = 'GET', body?: unknown) => {
+  const response = await fetch(base + route, { method, headers: { 'Content-Type': 'application/json' }, body: body === undefined ? undefined : JSON.stringify(body) });
+  assert.ok(response.ok, await response.clone().text()); return response.json();
+};
+try {
+  const original = fs.readFileSync(path.join(directory, 'with-audio.mp4'));
+  const uploaded = await assetClient.uploadFile(new File([original], '原声片段.mp4', { type: 'video/mp4' }), projectId);
+  assert.ok(uploaded.url?.startsWith(`/media/${projectId}/`));
+  assert.deepEqual(uploaded.videoMetadata, { durationSeconds: 2, width: 320, height: 180, hasAudio: true });
+  assert.deepEqual(Buffer.from(await (await fetch(base + uploaded.url)).arrayBuffer()), original);
+  assert.equal((await assetClient.uploadFile(new File([original], 'same.mp4', { type: 'video/mp4' }), projectId)).url, uploaded.url, 'repeated content is reusable without overwriting another file');
+  const silent = await assetClient.uploadFile(new File([fs.readFileSync(path.join(directory, 'silent.mp4'))], 'silent.mp4', { type: 'video/mp4' }), projectId);
+  assert.equal(silent.videoMetadata?.hasAudio, false);
+  const mov = await assetClient.uploadFile(new File([original], 'camera.mov', { type: 'video/quicktime' }), projectId);
+  assert.ok(mov.url?.endsWith('.mov'));
+  assert.match((await fetch(base + mov.url)).headers.get('content-type') || '', /video\/quicktime/);
+  const padded = Buffer.concat([original, Buffer.alloc(40 * 1024 * 1024 - original.length)]);
+  const large = await assetClient.uploadFile(new File([padded], 'transport-40MiB.mp4', { type: 'video/mp4' }), projectId);
+  assert.equal(fs.statSync(path.join(mediaDir, large.url!.slice('/media/'.length))).size, padded.length, 'binary upload must not hit the 50 MB JSON/base64 ceiling');
+  assert.equal(large.videoMetadata?.hasAudio, true);
+  const beforeValidation = uploadRequests;
+  await assert.rejects(assetClient.uploadFile(new File([], 'empty.mp4', { type: 'video/mp4' }), projectId), /文件为空/);
+  await assert.rejects(assetClient.uploadFile(new File([Buffer.alloc(MAX_ASSET_UPLOAD_BYTES + 1)], 'too-large.mp4', { type: 'video/mp4' }), projectId), /100 MiB/);
+  assert.equal(uploadRequests, beforeValidation, 'client rejects empty or oversized files before sending them');
+  await assert.rejects(assetClient.uploadFile(new File(['not a movie'], 'broken.mp4', { type: 'video/mp4' }), projectId), /无法读取这个视频/);
+  await assert.rejects(assetClient.uploadFile(new File([original], 'bad-project.mp4', { type: 'video/mp4' }), '../escape'), /项目标识无效/);
+  const empty = await fetch(base + '/api/assets/upload-file', { method: 'POST', headers: { 'Content-Type': 'video/mp4' } }); assert.equal(empty.status, 400);
+  const unsupported = await fetch(base + '/api/assets/upload-file', { method: 'POST', headers: { 'Content-Type': 'text/html' }, body: '<script>1</script>' }); assert.equal(unsupported.status, 415);
+  const executablePath = process.env.PATH;
+  try {
+    process.env.PATH = path.join(directory, 'no-probe-installed');
+    await assert.rejects(assetClient.uploadFile(new File([original], 'probe-unavailable.mp4', { type: 'video/mp4' }), projectId), /缺少视频检查工具 ffprobe/);
+  } finally { process.env.PATH = executablePath; }
+
+  const take: ShotTake = { id: 'uploaded-take', videoUrl: uploaded.url, videoMedia: createMediaAssetReference({ kind: 'video', source: 'upload', url: uploaded.url }), createdAt: Date.now(), generationAudit: { action: 'import_video', targetKind: 'shot', shotId: 'upload-shot', sourceHash: 'fixture', promptHash: '', modelId: 'manual-upload', selectedSkillIds: [], selectedSkillTitles: [], selectedContextIds: [], selectedAssetIds: [], selectedAssetBoardItemIds: [], referenceImageUrls: [], createdAt: Date.now(), audioProvenance: { source: 'imported', embeddedAudio: uploaded.videoMetadata!.hasAudio, masterAudioAssetIds: [], mustNotAutoDub: true } } };
+  const episodeRoute = `/api/projects/${projectId}/episodes/${initialEpisode.id}`;
+  await request(`${episodeRoute}/scenes/upload-scene/studio-candidates`, 'POST', { shotId: 'upload-shot', take });
+  const candidateEpisode = await request(episodeRoute) as Episode;
+  assert.equal(candidateEpisode.scenes[0].shots[0].videoUrl, undefined, 'importing must not auto-adopt');
+  const adopted = adoptShotTake(candidateEpisode.scenes[0].shots[0], take.id, 'video');
+  assert.equal(adopted.imageUrl, undefined, 'an existing video needs no fabricated start frame');
+  await request(episodeRoute, 'PUT', { ...candidateEpisode, scenes: [{ ...candidateEpisode.scenes[0], shots: [adopted] }] });
+  const persisted = await request(episodeRoute) as Episode;
+  assert.equal(persisted.scenes[0].shots[0].activeTakeId, take.id);
+  assert.equal(persisted.scenes[0].shots[0].takes![0].generationAudit?.audioProvenance?.embeddedAudio, true);
+  const film = await assetClient.composeEpisodeFilm({ projectId, aspectRatio: '16:9', shots: [{ videoUrl: persisted.scenes[0].shots[0].videoUrl, durationSeconds: 2 }] });
+  assert.ok(film.url);
+  const filmFile = path.join(mediaDir, film.url!.slice('/media/'.length));
+  const probe = JSON.parse(execFileSync('ffprobe', ['-v', 'error', '-show_streams', '-of', 'json', filmFile], { encoding: 'utf8' }));
+  assert.ok(probe.streams.some((stream: { codec_type: string }) => stream.codec_type === 'audio'));
+  const pcm = execFileSync('ffmpeg', ['-v', 'error', '-i', filmFile, '-map', '0:a:0', '-ac', '1', '-f', 'f32le', '-'], { maxBuffer: 2 * 1024 * 1024 });
+  let energy = 0; for (let i = 0; i < pcm.length; i += 4) energy += pcm.readFloatLE(i) ** 2;
+  const rms = Math.sqrt(energy / (pcm.length / 4)); assert.ok(rms > 0.01, 'export must preserve actual source audio, not merely add a silent stream');
+  const originalSnapshot = structuredClone(persisted.scenes[0].shots[0]);
+  const stripped = await assetClient.rewriteVideoAudio({ projectId, videoUrl: uploaded.url!, mode: 'strip' });
+  const revised = reviseShotTakeAudio(originalSnapshot, take.id, { takeId: 'silent-version', videoUrl: stripped.url!, mode: 'strip', createdAt: Date.now() });
+  assert.equal(revised.activeTakeId, 'silent-version');
+  assert.equal(revised.takes?.length, 2);
+  assert.deepEqual(revised.takes?.find((item) => item.id === take.id), originalSnapshot.takes![0], 'audio edits must preserve the complete original take and provenance');
+  assert.equal(adoptShotTake(revised, take.id, 'video').videoUrl, uploaded.url, 'the original audio version remains selectable');
+  assert.equal(revised.takes?.find((item) => item.id === 'silent-version')?.generationAudit?.audioRevision?.originalVideoUrl, uploaded.url);
+  assert.throws(() => reviseShotTakeAudio(revised, take.id, { takeId: take.id, videoUrl: stripped.url!, mode: 'strip', createdAt: Date.now() }), /未覆盖/);
+  const inactiveRevision = reviseShotTakeAudio({ ...revised, activeTakeId: 'silent-version' }, take.id, { takeId: 'alternate-silent', videoUrl: stripped.url!, mode: 'strip', createdAt: Date.now() });
+  assert.equal(inactiveRevision.activeTakeId, 'silent-version', 'editing a non-active version must not change the current selection');
+  const strippedProbe = JSON.parse(execFileSync('ffprobe', ['-v', 'error', '-show_streams', '-of', 'json', path.join(mediaDir, stripped.url!.slice('/media/'.length))], { encoding: 'utf8' }));
+  assert.equal(strippedProbe.streams.some((stream: { codec_type: string }) => stream.codec_type === 'audio'), false);
+  await request(episodeRoute, 'PUT', { ...persisted, scenes: [{ ...persisted.scenes[0], shots: [revised] }] });
+  assert.equal((await request(episodeRoute)).scenes[0].shots[0].takes.length, 2);
+  if (serve) dbHelpers.updateEpisode(projectId, initialEpisode.id, initialEpisode);
+  const evidence = { passed: true, directory, base, projectId, uploaded, silent, largeBytes: padded.length, exportUrl: film.url, exportAudioRms: rms, assertions: 'binary upload, real probe, original bytes, MOV MIME, 40 MiB transport, errors, no-frame candidate persistence, audible film export, non-destructive audio revision and return to original', fixtureSource: 'ffmpeg test pattern and sine; padded bytes are a transport fixture, not a 40 MiB recording' };
+  fs.writeFileSync(path.join(directory, 'evidence.json'), JSON.stringify(evidence, null, 2));
+  console.log(JSON.stringify(evidence));
+} catch (error) { await vite?.close(); server.close(); db.close(); throw error; }
+finally { globalThis.fetch = fetchOriginal; }
+if (!serve) { await new Promise<void>((resolve) => server.close(() => resolve())); db.close(); }

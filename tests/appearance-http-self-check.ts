@@ -1,0 +1,48 @@
+import assert from 'node:assert/strict';
+import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
+import express from 'express';
+import type { Project, Episode } from '../src/types/project';
+import { appearanceAssetPatch, normalizeShotAppearances, appearanceSourceShots } from '../src/services/production/productionAppearance';
+const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'appearance-http-'));
+process.env.OMNI_DB_PATH = path.join(dir, 'test.db');
+const { db } = await import('../src/server/db');
+const { registerLegacyProjectRoutes } = await import('../src/server/routes/legacyProjectRoutes');
+const app = express(); app.use(express.json({limit:'5mb'})); registerLegacyProjectRoutes(app);
+const server = app.listen(0, '127.0.0.1'); await new Promise<void>(resolve => server.once('listening', resolve));
+const base = `http://127.0.0.1:${(server.address() as import('node:net').AddressInfo).port}`;
+const request = async (route: string, body?: unknown, method = body ? 'PUT' : 'GET', status = 200) => { const response = await fetch(base + route, {method, headers:{'Content-Type':'application/json'}, body: body ? JSON.stringify(body) : undefined}); const text = await response.text(); assert.equal(response.status, status, text); return JSON.parse(text); };
+try {
+  const fixture = JSON.parse(fs.readFileSync('tests/fixtures/production/appearance/fixture.json', 'utf8')) as Project;
+  const episode = fixture.episodes[0] as Episode;
+  await request('/api/projects', fixture, 'POST');
+  const raw = JSON.parse(fs.readFileSync('tests/fixtures/production/appearance/manual-shots.json','utf8'));
+  const shots = normalizeShotAppearances(fixture, episode.scenes[0], raw.map((s: any, i: number) => ({...s,id:`test-shot-${i}`})), raw);
+  const patch = appearanceAssetPatch(fixture, shots);
+  const next = { ...episode, scenes: episode.scenes.map((s,i)=>i===0 ? {...s,shots:patch.shots, shotHistory:[{at:1,shots:[{id:'old-media',imageUrl:'/preserve.png',duration:1}]}]} : s) };
+  const route = `/api/projects/${fixture.id}`;
+  await request(`${route}/appearance-snapshot`, {project:{...fixture,characters:patch.characters,assets:patch.assets},episodes:[next]});
+  const savedProject = await request(route);
+  const savedEpisode = await request(`${route}/episodes/${episode.id}`);
+  assert.equal(savedProject.characters[0].variants.length,2, 'the text-only first shot does not create its own start/end variants');
+  assert.equal(savedEpisode.scenes[0].shots[0].appearance.states[0].startVariantId, undefined);
+  assert.equal(savedEpisode.scenes[0].shots[1].appearance.states[0].end.injury,'左颊擦伤');
+  assert.equal(savedEpisode.scenes[0].shotHistory[0].shots[0].imageUrl,'/preserve.png');
+  const workspace = await request(`${route}/episodes/${episode.id}?view=storyboard&sceneId=appearance-s1`);
+  assert.equal(workspace.scenes[0].shots[0].appearance.states[0].end.injury,'左颊擦伤');
+  const ctx = await request(`${route}/episodes/${episode.id}/storyboard-team-context?sceneId=appearance-s2`);
+  const history = appearanceSourceShots(savedEpisode, ctx.productionTeamContext);
+  assert.ok(history.some(s=>s.id==='test-shot-1' && s.appearance?.states[0].end.clothing==='黑外套'));
+  // Force a failure after project metadata is updated; the outer transaction must roll back both writes.
+  db.exec("CREATE TRIGGER fail_appearance_test BEFORE INSERT ON shots WHEN NEW.id = 'fail-shot' BEGIN SELECT RAISE(ABORT, 'intentional transaction failure'); END");
+  const failureEpisode = {...next, scenes:next.scenes.map((s,i)=>i===0 ? {...s,shots:[...s.shots,{id:'fail-shot',duration:1}]} : s)};
+  await request(`${route}/appearance-snapshot`, {project:{...savedProject,title:'MUST ROLLBACK'},episodes:[failureEpisode]}, 'PUT', 500);
+  assert.equal((await request(route)).title,fixture.title);
+  assert.equal((await request(`${route}/episodes/${episode.id}`)).scenes[0].shots.length,2);
+  const other = {...fixture,id:'other-project',episodes:[{...episode,id:'other-episode',scenes:[]}]};
+  await request('/api/projects',other,'POST');
+  await request(`${route}/appearance-snapshot`,{project:{...savedProject,title:'NO CROSS PROJECT'},episodes:[{...next,id:'other-episode'}]},'PUT',409);
+  assert.equal((await request(route)).title,fixture.title);
+  console.log('外观 HTTP 验收通过：状态与变体原子保存、工作区刷新、前序镜头上下文、旧媒体保留、失败回滚、跨项目归属保护。');
+} finally { await new Promise<void>(resolve => server.close(()=>resolve())); db.close(); fs.rmSync(dir,{recursive:true,force:true}); }

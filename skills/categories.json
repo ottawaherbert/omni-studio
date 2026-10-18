@@ -1,0 +1,58 @@
+[
+  {
+    "id": "cat_1782695831524",
+    "name": "角色与表演",
+    "sortOrder": 0,
+    "createdAt": 1782695831524,
+    "updatedAt": 1782699000000
+  },
+  {
+    "id": "cat_1782696084107",
+    "name": "故事结构",
+    "sortOrder": 10,
+    "createdAt": 1782696084107,
+    "updatedAt": 1782699000000
+  },
+  {
+    "id": "cat_1782700001000",
+    "name": "节奏与钩子",
+    "sortOrder": 15,
+    "createdAt": 1782700000000,
+    "updatedAt": 1782700000000
+  },
+  {
+    "id": "cat_1782696415587",
+    "name": "导演与视听",
+    "sortOrder": 20,
+    "createdAt": 1782696415587,
+    "updatedAt": 1782699000000
+  },
+  {
+    "id": "cat_1782699001000",
+    "name": "台词风格",
+    "sortOrder": 30,
+    "createdAt": 1782699000000,
+    "updatedAt": 1782699000000
+  },
+  {
+    "id": "cat_1782699002000",
+    "name": "分场节拍",
+    "sortOrder": 40,
+    "createdAt": 1782699000000,
+    "updatedAt": 1782699000000
+  },
+  {
+    "id": "cat_1782699003000",
+    "name": "质检改写",
+    "sortOrder": 50,
+    "createdAt": 1782699000000,
+    "updatedAt": 1782699000000
+  },
+  {
+    "id": "cat_1782699004000",
+    "name": "世界观设定",
+    "sortOrder": 60,
+    "createdAt": 1782699000000,
+    "updatedAt": 1782699000000
+  }
+]

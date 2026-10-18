@@ -1,0 +1,94 @@
+/** An application input budget, not a guess about a model's capacity/name.
+ * Estimates include the whole provider payload (instructions, schemas, history
+ * and tool results). The deployment may lower it for an explicitly known limit.
+ */
+export type ModelInputCapacity = {
+  contextWindowTokens?: number;
+  maxInputTokens?: number;
+  outputReserveTokens?: number;
+};
+
+export function modelInputBudgetPolicy(capacity: ModelInputCapacity = {}, env = process.env) {
+  const limits: Array<{ source: string; tokens: number }> = [];
+  const positive = (value: unknown) => typeof value === 'number' && Number.isFinite(value) && value > 0;
+  const configured = Number(env.BOOK_AGENT_MODEL_INPUT_MAX_TOKENS);
+  if (positive(configured)) limits.push({ source: 'APPLICATION_ENV', tokens: Math.floor(configured) });
+  if (positive(capacity.maxInputTokens)) limits.push({ source: 'ROUTE_MAX_INPUT', tokens: Math.floor(capacity.maxInputTokens!) });
+  if (positive(capacity.contextWindowTokens)) limits.push({ source: 'ROUTE_CONTEXT_MINUS_OUTPUT',
+    tokens: Math.max(0, Math.floor(capacity.contextWindowTokens! - Math.max(0, capacity.outputReserveTokens || 0))) });
+  // The estimator already includes framing/safety headroom; do not deduct it twice.
+  if (!limits.length) limits.push({ source: 'UNKNOWN_CAPACITY_FALLBACK', tokens: 48_000 });
+  return { tokens: Math.min(...limits.map(limit => limit.tokens)), limits,
+    outputReserveTokens: capacity.outputReserveTokens || 0 };
+}
+
+export function modelInputTokenBudget(env = process.env) {
+  return modelInputBudgetPolicy({}, env).tokens;
+}
+export function estimateModelInputTokens(text: string) {
+  let ascii = 0;
+  let other = 0;
+  for (const character of text) {
+    if (character.codePointAt(0)! < 128) ascii++;
+    else other++;
+  }
+  // Conservative cross-provider estimate plus framing/schema repair headroom.
+  // Provider usage remains the authoritative token count after a request.
+  return Math.ceil(ascii / 3 + other * 1.5) + 2_048;
+}
+
+/** Account for the actual wire request, never the frozen envelope which also
+ * holds copies used by replay and visibility checks. No private text is logged. */
+export function modelInputBill(request: unknown, budget = modelInputTokenBudget()) {
+  const serialized = typeof request === 'string' ? request : JSON.stringify(request);
+  const root = request && typeof request === 'object' ? request as Record<string, unknown> : {};
+  const measure = (value: unknown) => {
+    const text = JSON.stringify(value) ?? '';
+    return { chars: text.length, estimatedTokens: estimateModelInputTokens(text) - 2_048 };
+  };
+  const messages = Array.isArray(root.messages) ? root.messages : Array.isArray(root.input) ? root.input
+    : [...(root.systemInstruction ? [root.systemInstruction] : []), ...(Array.isArray(root.contents) ? root.contents : [])];
+  const tools = Array.isArray(root.tools) ? root.tools : [];
+  const sectionNames = ['本线程真实对话记录', 'BookWorldState', '当前执行进度', '最近公开会话事件', '对话连续性，仅供导航', '作者消息证据索引', '最新内核校验反馈'];
+  const sectionMeasurements = messages.flatMap((message, messageIndex) => {
+    const content: string = typeof message?.content === 'string' ? message.content
+      : (Array.isArray(message?.parts) ? message.parts : Array.isArray(message?.content) ? message.content : [])
+        .flatMap((part: { text?: unknown }) => typeof part?.text === 'string' ? [part.text] : []).join('\n');
+    if (!content) return [];
+    return sectionNames.flatMap(section => {
+      const marker = `【${section}】\n`;
+      const start = content.indexOf(marker);
+      if (start < 0) return [];
+      const next = content.indexOf('\n【', start + marker.length);
+      return [{ messageIndex, section, ...measure(content.slice(start, next < 0 ? undefined : next)) }];
+    });
+  });
+  return {
+    measurement: 'ESTIMATED' as const,
+    estimator: 'ascii/3+nonAscii*1.5+2048@1',
+    budget, estimatedTokens: estimateModelInputTokens(serialized),
+    chars: serialized.length, framingReserveTokens: 2_048,
+    tools: measure(tools),
+    messages: messages.map((message, index) => ({
+      index, role: message === root.systemInstruction ? 'system' : typeof message?.role === 'string' ? message.role : 'unknown', ...measure(message),
+    })),
+    // Drill-down only: these overlap their parent message and are NOT added
+    // to the wire total. Section labels are a fixed allowlist, never user text.
+    sectionMeasurements,
+    // These are disjoint top-level blocks; JSON framing remains in the total.
+    other: measure(Object.fromEntries(Object.entries(root).filter(([key]) => !['messages', 'input', 'contents', 'systemInstruction', 'tools'].includes(key)))),
+    actualInputTokens: null,
+  };
+}
+
+export function checkModelInputCapacity(request: unknown, capacity: ModelInputCapacity = {}, env = process.env) {
+  const policy = modelInputBudgetPolicy(capacity, env);
+  const bill = modelInputBill(request, policy.tokens);
+  if (bill.estimatedTokens > policy.tokens) {
+    throw Object.assign(new Error('AGENT_INPUT_BUDGET_EXCEEDED'), {
+      code: 'AGENT_INPUT_BUDGET_EXCEEDED', status: 422,
+      details: { inputBudget: bill, policy },
+    });
+  }
+  return { ...bill, policy };
+}

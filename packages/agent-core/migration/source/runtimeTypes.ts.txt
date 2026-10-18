@@ -1,0 +1,298 @@
+import type { z } from 'zod';
+import type { AgentPrincipal } from '@/services/bookAgent/principal';
+import type { AgentResourceScope } from '@/services/bookAgent/scope';
+import type { AgentSurfaceContext } from '@/services/bookAgent/contracts';
+
+export type AgentAccessPurpose = 'MODEL_CONTEXT' | 'USER_REQUEST' | 'VERIFICATION' | 'AUDIT';
+export type AgentSensitivity = 'PUBLIC' | 'PRIVATE' | 'SENSITIVE' | 'RESTRICTED';
+export type AgentTrust = 'AUTHORITATIVE' | 'USER_AUTHORED' | 'DERIVED' | 'UNTRUSTED_EXTERNAL';
+
+export type HardAcceptanceExecutionBinding = {
+  contractHash: string;
+  enforcedTargetVersionId: string;
+  expectedContentHash: string;
+};
+
+export type AgentAccessContext = {
+  principal: AgentPrincipal;
+  threadId: string;
+  turnId: string;
+  /** Real AgentTurn that originated the work. Synthetic correlation ids stay in turnId only. */
+  originTurnId?: string | null;
+  purpose: AgentAccessPurpose;
+  scope: AgentResourceScope;
+  surfaceContext: AgentSurfaceContext;
+  hardAcceptanceBinding?: HardAcceptanceExecutionBinding | null;
+  durableExecution?: {
+    runId: string;
+    workerId: string;
+    fencingToken: number;
+    checkpoint: unknown;
+  };
+  turnExecution?: {
+    workerId: string;
+    fencingToken: number;
+    inputVersion?: number;
+  };
+};
+
+export type ResourceDescriptor = {
+  uri: string;
+  type: string;
+  title: string;
+  summary: string;
+  schemaVersion: number;
+  sourceRevision: string;
+  updatedAt: string | null;
+  ownerScope: 'actor' | 'story' | 'system';
+  sensitivity: AgentSensitivity;
+  trust: AgentTrust;
+  supportedViews: Array<'metadata' | 'author' | 'analysis'>;
+  supportedCapabilities: string[];
+  provenance: Record<string, unknown>;
+  freshness: 'LIVE' | 'INDEXED' | 'SNAPSHOT';
+  paginationHint?: string | null;
+};
+
+export type ResourceEvidence = {
+  uri: string;
+  sourceRevision: string;
+  locator?: string | null;
+  evidenceLevel: 'AUTHORITATIVE_READ' | 'INDEX_MATCH' | 'DERIVED_SUMMARY';
+};
+
+export type ResourceSnapshot = {
+  descriptor: ResourceDescriptor;
+  view: string;
+  data: unknown;
+  evidence: ResourceEvidence[];
+  truncated: boolean;
+  nextCursor: string | null;
+  taint: string[];
+};
+
+export type ResourcePage = {
+  items: ResourceDescriptor[];
+  nextCursor: string | null;
+  truncated: boolean;
+  /** Provider-reported matching and coverage, including when no items match. */
+  search?: {
+    query: string;
+    matching: string;
+    coverage: Array<{ resourceType: string; scope: Record<string, unknown>; fields: string[] }>;
+    limitations: string[];
+  };
+};
+
+export type ResourceListQuery = {
+  type?: string | null;
+  status?: string | null;
+  cursor?: string | null;
+  limit: number;
+};
+
+export type ResourceSearchQuery = ResourceListQuery & {
+  query: string;
+};
+
+export type ResourceOpenRequest = {
+  uri: string;
+  view: 'metadata' | 'author' | 'analysis';
+  cursor?: string | null;
+  limit?: number | null;
+};
+
+export interface ResourceProvider {
+  readonly namespace: string;
+  list(query: ResourceListQuery, context: AgentAccessContext): Promise<ResourcePage>;
+  search(query: ResourceSearchQuery, context: AgentAccessContext): Promise<ResourcePage>;
+  open(request: ResourceOpenRequest, context: AgentAccessContext): Promise<ResourceSnapshot>;
+}
+
+export type CapabilityEffectClass = 'READ' | 'PROPOSE' | 'WRITE' | 'PUBLISH' | 'DELETE' | 'EXTERNAL_EFFECT';
+export type CapabilityRiskClass = 'LOW' | 'MEDIUM' | 'HIGH' | 'CRITICAL';
+export type CapabilityExposure = 'DIRECT' | 'DEFERRED' | 'HIDDEN' | 'INTERNAL_ONLY';
+
+export type CapabilityExecutionProtocol = {
+  cognitiveLoop: ['OBSERVE', 'ORIENT', 'PLAN', 'ACT', 'VERIFY'];
+  observationPolicy: 'DIRECT_OBSERVATION' | 'AUTHORITATIVE_GROUNDING_REQUIRED';
+  completionPolicy: 'OBSERVATION_RECEIPT' | 'READ_AFTER_EFFECT_VERIFICATION';
+  authorConfirmationRequired: boolean;
+  retryPolicy: 'BOUNDED_DIAGNOSTIC_REPLAN';
+};
+
+export type CapabilitySpec = {
+  id: string;
+  version: string;
+  providerId: string;
+  providerVersion: string;
+  artifactDigest: string;
+  title: string;
+  description: string;
+  inputSchema: z.ZodType;
+  outputSchema: z.ZodType;
+  resourceKinds: string[];
+  requiredScopes: string[];
+  riskClass: CapabilityRiskClass;
+  effectClass: CapabilityEffectClass;
+  reversibility: 'REVERSIBLE' | 'COMPENSATABLE' | 'IRREVERSIBLE' | 'NOT_APPLICABLE';
+  approvalPolicy: 'NEVER' | 'AUTHOR_CONFIRMATION' | 'ELEVATED';
+  costPolicy: 'NONE' | 'MODEL_ONLY' | 'ESTIMATE_REQUIRED';
+  /** Explicit kernel dispatch contract. Cost or timeout never imply it. */
+  dispatchPolicy?: 'INLINE' | 'DURABLE_RUN_REQUIRED';
+  timeoutMs: number;
+  exposurePolicy: CapabilityExposure;
+  /** Allows a product surface to launch a capability without exposing it to the agent model. */
+  clientLaunchPolicy?: 'SURFACE_ONLY';
+  tags: string[];
+};
+
+export type CapabilityRequest = {
+  capabilityId: string;
+  capabilityVersion: string;
+  input: unknown;
+  callId: string;
+};
+
+export type CapabilityDiagnostic = {
+  schemaVersion: 1;
+  code: string;
+  category:
+    | 'INPUT'
+    | 'STATE'
+    | 'CONTRACT'
+    | 'DEPENDENCY'
+    | 'PROVIDER'
+    | 'POLICY'
+    | 'BUDGET'
+    | 'CONFLICT'
+    | 'UNKNOWN';
+  phase?: string | null;
+  message: string;
+  retryDisposition:
+    | 'RETRY_SAME_INPUT'
+    | 'REPLAN_REQUIRED'
+    | 'WAIT_EXTERNAL'
+    | 'AUTHOR_INPUT_REQUIRED'
+    | 'NOT_RETRYABLE';
+  effectState: 'NO_EFFECT' | 'CANDIDATE_PRESERVED' | 'EFFECT_VERIFIED' | 'EFFECT_UNKNOWN';
+  authoritativeResourceUris: string[];
+  suggestedCapabilities: string[];
+  resume?: {
+    kind: 'RESOURCE_HANDLE' | 'RUN_HANDLE' | 'SESSION_HANDLE';
+    id: string;
+    resourceUri?: string | null;
+  } | null;
+  details?: Record<string, unknown>;
+};
+
+export type CapabilityObservation = {
+  callId: string;
+  capabilityId: string;
+  capabilityVersion: string;
+  status: 'SUCCEEDED' | 'FAILED' | 'DENIED' | 'CAPABILITY_GAP';
+  summary: string;
+  structuredData: unknown;
+  evidence: ResourceEvidence[];
+  warnings: string[];
+  partials: string[];
+  retryable: boolean;
+  provenance: Record<string, unknown>;
+  diagnostic?: CapabilityDiagnostic;
+  projectionHints?: {
+    contracts: Array<{
+      id: string;
+      version: string;
+      authority: 'CAPABILITY_CONTRACT';
+      scope: string;
+      resourceUri: string;
+      sourceRevision: string;
+      summary: string;
+      constraints: string[];
+      schemas?: Array<{
+        path: string;
+        allowedValues: string[];
+      }>;
+      claimPolicies?: Array<{
+        id: string;
+        kind: 'CAPABILITY_EVIDENCE_REQUIRED';
+        claimType: 'CONCRETE_CONFIGURATION';
+        markers: string[];
+        requiredCapabilities: string[];
+      }>;
+      nextCapabilities?: string[];
+      supersedes?: string[];
+    }>;
+  };
+  modelAuthority?: 'SYSTEM_OBSERVATION' | 'NON_AUTHORITATIVE_CANDIDATE' | 'VERIFIED_WRITE_OBSERVATION';
+};
+
+export interface CapabilityProvider {
+  readonly providerId: string;
+  readonly providerVersion: string;
+  readonly artifactDigest: string;
+  listCapabilities(): CapabilitySpec[];
+  prepareInput?(
+    request: CapabilityRequest,
+    context: AgentAccessContext,
+  ): Promise<unknown>;
+  execute(request: CapabilityRequest, context: AgentAccessContext): Promise<CapabilityObservation>;
+  compensate?(
+    request: CapabilityRequest,
+    executionResult: unknown,
+    context: AgentAccessContext,
+  ): Promise<CapabilityObservation>;
+}
+
+export type WorldStateSection = {
+  id: string;
+  schemaVersion: number;
+  snapshot: unknown;
+  sourceRevision: string;
+  trust: AgentTrust;
+  sensitivity: AgentSensitivity;
+  hash: string;
+  renderDiff: 'FULL' | 'UNCHANGED' | 'CHANGED' | 'REMOVED';
+  invalidationKeys: string[];
+};
+
+export type ProjectionRequest = {
+  message: string;
+  samplingIndex: number;
+  startSeq: bigint;
+  previousSections: WorldStateSection[];
+  /** Resolved fast/open limits for this sampling; budget_and_limits must not lie. */
+  turnLimits?: {
+    profile: 'open' | 'fast';
+    maxToolCalls: number;
+    maxToolCallsPerSampling: number;
+    maxWallClockMs: number;
+    maxResourceOpens: number;
+    maxCapabilitySearches: number;
+    maxRecentItemChars: number;
+    contextCompactionTriggerTokens: number;
+    contextCompactionHotWindowTokens: number;
+    contextCompactionMaxSourceTokens: number;
+    contextCompactionMaxSourceItems: number;
+    maxAutonomousReplans: number;
+    maxSelfResolvableRecoveryDeflections: number;
+    maxContinuationLineageDepth: number;
+    maxToolSchemaChars: number;
+    maxTools: number;
+  } | null;
+};
+
+export interface WorldStateContributor {
+  readonly contributorId: string;
+  readonly sectionIds: string[];
+  project(request: ProjectionRequest, context: AgentAccessContext): Promise<WorldStateSection[]>;
+}
+
+export type PublicCapabilitySpec = Omit<CapabilitySpec, 'inputSchema' | 'outputSchema'> & {
+  inputSchema: unknown;
+  outputSchema: unknown;
+  executionProtocol?: CapabilityExecutionProtocol;
+  /** DECISION = callable schema; STUB = describe-first overflow. */
+  decisionProjection?: 'DECISION' | 'STUB';
+  describeWith?: string;
+};

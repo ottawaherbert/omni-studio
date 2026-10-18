@@ -1,0 +1,23 @@
+/** Authored navigation sample in the same isolated browser database. */
+import Database from 'better-sqlite3';
+import {writeFileSync} from 'node:fs';
+import {createScriptRepository} from '../../apps/api/src/repositories/scriptStore';
+import {createScriptProject,newUnit,newScene} from '../../packages/script/src/project';
+import {createScriptCreationProfile} from '../../packages/script/src/creation';
+const databasePath=process.env.SCRIPT_BROWSER_DB;
+if(!databasePath?.startsWith('/tmp/'))throw new Error('Set an isolated /tmp SCRIPT_BROWSER_DB');
+const db=new Database(databasePath),repo=createScriptRepository(db);repo.ensureSchema();
+const project=createScriptProject('目录验收 · 三层故事',createScriptCreationProfile('tv-series',3,20));
+project.profile.continuity='mixed';
+project.brief.outline='作品整体：常驻调查员走访三座城市，寻找当年缺失的事故记录。';
+project.seasons=[{id:'nav_season',title:'第一季',arc:'第一季：旧信带来调查线索，证人逐渐显露隐瞒，最终公开旧案。'}];
+const first=project.units[0];first.scopeId='nav_story';first.seasonId='nav_season';first.title='第一集 · 旧信';first.summary='第一集：值班员收到女儿旧信，发现值班记录被涂改。';
+const second=newUnit('第二集 · 证人',1200000,'nav_story');second.seasonId='nav_season';second.summary='第二集：调查员找到当年的证人，核对两份证言。';
+const third=newUnit('第三集 · 海港',1200000);third.seasonId='nav_season';third.summary='另一个独立故事：海港工人寻找未登记的货物。';
+project.units.push(second,third);
+project.storyOutlines=[{scopeId:'nav_story',outline:'当前故事：父女从旧信开始追查，在证人证词中找到旧案缺口。'}];
+first.scenes[0].title='值班室的旧信';first.scenes[0].location='值班室';first.scenes[0].timeOfDay='夜';first.scenes[0].purpose='值班员拆开旧信，发现记录上的时间被涂改。';first.scenes[0].entryState='以为旧案已经结束';first.scenes[0].exitState='决定找证人核对';first.scenes[0].blocks[0].text='雨水从值班室窗沿滴下。老周把信放在记录簿旁，看到两个时间。';first.scenes.push({...newScene('去找证人'),purpose:'老周走出值班室，拨通证人的电话。',location:'站台',timeOfDay:'夜'});
+project.characters=[{id:'nav_recurring',name:'老周',scopeId:project.id,desire:'查清记录',need:'承担责任',contradiction:'回避过去',arc:'开始追查',voice:'寡言'},{id:'nav_guest',name:'证人',scopeId:'nav_story',desire:'保守秘密',need:'',contradiction:'',arc:'',voice:''},{id:'nav_other_guest',name:'海港工人',scopeId:third.scopeId,desire:'找货',need:'',contradiction:'',arc:'',voice:''}];
+project.storylines=[{id:'nav_main',scopeId:project.id,lane:'A',title:'旧案调查',premise:'查找记录',resolution:'公开真相'},{id:'nav_private',scopeId:'nav_story',lane:'B',title:'父女关系',premise:'追查旧信',resolution:'相互理解'},{id:'nav_other_line',scopeId:third.scopeId,lane:'C',title:'海港货物',premise:'寻找货物',resolution:'找到登记'}];
+const saved=repo.saveProject(project,0),output={projectId:saved.id,unitId:first.id,sceneId:first.scenes[0].id,secondUnitId:second.id,otherUnitId:third.id};
+writeFileSync('/tmp/script-authoring-series-fixture.json',JSON.stringify(output));console.log(JSON.stringify(output));db.close();

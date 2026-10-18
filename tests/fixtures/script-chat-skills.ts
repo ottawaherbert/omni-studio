@@ -1,0 +1,2 @@
+// Isolated acceptance Skill, never sourced from the user library.
+export const scriptChatSkills=[{id:'acceptance-actions',title:'验收方法·用动作核对衔接',revision:1,source:'manual' as const,createdAt:1,updatedAt:1,content:'先逐字读取本次给出的正文。将动作、人物所知和道具位置分开核对；不要把概要里计划发生的事情当作已经发生的事实。每个建议应说明哪句话构成依据、观众可能误解什么，以及最小修改是什么。允许作者选择日常、开放结尾和留白，不要求反派、牺牲或反转。对没有读取的场景，只能说明需要补充资料，不能声称全篇检查通过。给出改写时保留修改范围外的原文，不更改人物姓名，不替作者决定尚未确认的设定。末尾校验：必要时明确写出“本次没有进行演读计时”；这一句用于验证超过 180 字的 Skill 尾部仍进入实际提示词。'}];

@@ -1,0 +1,452 @@
+@import "tailwindcss";
+
+/* apps/web is the Vite root, while the shared product UI still lives here. */
+@source "./";
+@source "../apps/web/src";
+
+@custom-variant dark (&:where(.dark, .dark *));
+
+@theme {
+  --color-primary: var(--primary);
+  --color-bg-primary: var(--bg-primary);
+  --color-bg-surface: var(--bg-surface);
+  --color-bg-surface-soft: var(--bg-surface-soft);
+  --color-bg-surface-hover: var(--bg-surface-hover);
+  --color-bg-rail: var(--rail-bg);
+  
+  --color-border-primary: var(--border-primary);
+  --color-border-soft: var(--border-soft);
+  --color-border-gold: var(--border-gold);
+  --color-border-gold-soft: var(--border-gold-soft);
+  
+  --color-gold: var(--gold);
+  --color-gold-light: var(--gold-light);
+  --color-gold-dark: var(--gold-dark);
+  
+  --color-text-primary: var(--text-primary);
+  --color-text-secondary: var(--text-secondary);
+  --color-text-muted: var(--text-muted);
+  --color-text-dark: var(--text-dark);
+  
+  --color-accent-red: var(--accent-red);
+  --color-accent-amber: var(--accent-amber);
+  
+  --color-violet-50: var(--bg-surface-soft);
+  --color-violet-100: var(--bg-surface-soft);
+  --color-violet-200: var(--border-soft);
+  --color-violet-300: var(--text-muted);
+  --color-violet-400: var(--text-secondary);
+  --color-violet-500: var(--gold);
+  --color-violet-600: var(--gold);
+  --color-violet-700: var(--gold-dark);
+  --color-violet-800: var(--gold-dark);
+  --color-violet-900: var(--bg-surface-soft);
+  --color-violet-950: var(--bg-surface-soft);
+  
+  --color-indigo-50: var(--bg-surface-soft);
+  --color-indigo-100: var(--bg-surface-soft);
+  --color-indigo-200: var(--border-soft);
+  --color-indigo-300: var(--text-muted);
+  --color-indigo-400: var(--text-secondary);
+  --color-indigo-500: var(--gold);
+  --color-indigo-600: var(--gold);
+  --color-indigo-700: var(--gold-dark);
+  --color-indigo-800: var(--gold-dark);
+  --color-indigo-900: var(--bg-surface-soft);
+  --color-indigo-950: var(--bg-surface-soft);
+
+  --color-purple-50: var(--bg-surface-soft);
+  --color-purple-100: var(--bg-surface-soft);
+  --color-purple-200: var(--border-soft);
+  --color-purple-300: var(--text-muted);
+  --color-purple-400: var(--text-secondary);
+  --color-purple-500: var(--gold);
+  --color-purple-600: var(--gold);
+  --color-purple-700: var(--gold-dark);
+  --color-purple-800: var(--gold-dark);
+  --color-purple-900: var(--bg-surface-soft);
+  --color-purple-950: var(--bg-surface-soft);
+  
+  --font-serif: "Noto Serif SC", "Source Han Serif SC", "Songti SC", "STSong", "SimSun", serif;
+  --font-sans: "CapCut Sans", "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", Arial, -apple-system, BlinkMacSystemFont, sans-serif;
+}
+
+:root,
+html.dark {
+  /* Dark theme custom properties (Default): Jimeng-style cool black UI */
+  --bg-primary: #0f0f12;
+  --bg-surface: #15161a;
+  --bg-surface-soft: rgba(204, 221, 255, 0.04);
+  --bg-surface-hover: rgba(204, 221, 255, 0.07);
+  
+  --rail-bg: var(--bg-primary);
+  --rail-active-bg: rgba(255, 255, 255, 0.07);
+  --rail-active-text: #ffffff;
+  
+  --border-primary: rgba(204, 221, 255, 0.08);
+  --border-soft: rgba(204, 221, 255, 0.06);
+  --border-gold: rgba(0, 202, 224, 0.42);
+  --border-gold-soft: rgba(0, 202, 224, 0.18);
+  
+  --gold: #00cae0;
+  --gold-light: #3de7f5;
+  --gold-dark: #0098ad;
+  --primary: #00cae0;
+  
+  --text-primary: #f5fbff;
+  --text-secondary: rgba(224, 245, 255, 0.72);
+  --text-muted: rgba(224, 245, 255, 0.48);
+  --text-dark: rgba(224, 245, 255, 0.28);
+  
+  --accent-red: #ff6b7a;
+  --accent-amber: #ffa21e;
+  
+  --active-accent: var(--gold);
+  --btn-secondary-bg: var(--bg-surface-soft);
+  --btn-secondary-text: var(--text-primary);
+  --btn-secondary-border: var(--border-soft);
+
+  /* Type scale: Jimeng-style compact product UI. */
+  --text-display: 26px;
+  --text-page-title: 22px;
+  --text-section-title: 16px;
+  --text-card-title: 15px;
+  --text-body: 13px;
+  --text-meta: 11px;
+  --text-micro: 10px;
+
+  color-scheme: dark;
+  font-family: var(--font-sans);
+  background-color: var(--color-bg-primary);
+  color: var(--color-text-primary);
+}
+
+html.light {
+  /* Light mode is retained for the toggle, but tuned toward Jimeng's cool neutrals. */
+  --bg-primary: #f5f7fb;
+  --bg-surface: #ffffff;
+  --bg-surface-soft: #f0f2f6;
+  --bg-surface-hover: #fafbfc;
+  
+  --rail-bg: var(--bg-primary);
+  --rail-active-bg: rgba(0, 0, 0, 0.04);
+  --rail-active-text: var(--gold);
+  
+  --border-primary: rgba(15, 23, 42, 0.08);
+  --border-soft: rgba(15, 23, 42, 0.05);
+  --border-gold: rgba(0, 174, 202, 0.3);
+  --border-gold-soft: rgba(0, 174, 202, 0.12);
+  
+  --gold: #00aeca;
+  --gold-light: #22c8e4;
+  --gold-dark: #007c93;
+  --primary: #008fa3;
+  
+  --text-primary: #111820;
+  --text-secondary: rgba(17, 24, 32, 0.72);
+  --text-muted: rgba(17, 24, 32, 0.52);
+  --text-dark: rgba(17, 24, 32, 0.58);
+  
+  --accent-red: #c23b3b;
+  --accent-amber: #b87b1c;
+  
+  --active-accent: #111820;
+  --btn-secondary-bg: var(--bg-surface-soft);
+  --btn-secondary-text: var(--text-primary);
+  --btn-secondary-border: transparent;
+
+  color-scheme: light;
+}
+
+body {
+  margin: 0;
+  padding: 0;
+  overflow-x: hidden;
+  background: var(--color-bg-primary);
+  color: var(--color-text-primary);
+  font-size: var(--text-body);
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+html {
+  scroll-behavior: smooth;
+}
+
+button,
+aria,
+input,
+textarea,
+select {
+  font: inherit;
+}
+
+button,
+a {
+  transition-timing-function: cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+button:active,
+a:active {
+  transform: translateY(1px);
+}
+
+/* Scrollbar styling - thin and elegant, fits dark-gold theme */
+::-webkit-scrollbar {
+  width: 5px;
+  height: 5px;
+}
+
+::-webkit-scrollbar-track {
+  background: var(--color-bg-primary);
+}
+
+::-webkit-scrollbar-thumb {
+  background: var(--color-border-primary);
+  border-radius: 4px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: var(--color-gold);
+}
+
+/* Custom classes for transitions and focus */
+.focus-gold:focus-visible {
+  outline: 2px solid var(--color-gold);
+  outline-offset: 2px;
+}
+
+/* Literary serif class for editor and previews */
+.literary-serif {
+  font-family: var(--font-serif);
+}
+
+.text-display {
+  font-size: var(--text-display);
+  line-height: 1.24;
+  font-weight: 600;
+}
+
+.text-page-title {
+  font-size: var(--text-page-title);
+  line-height: 1.28;
+  font-weight: 600;
+}
+
+.text-section-title {
+  font-size: var(--text-section-title);
+  line-height: 1.35;
+  font-weight: 600;
+}
+
+.text-card-title {
+  font-size: var(--text-card-title);
+  line-height: 1.4;
+  font-weight: 600;
+}
+
+.text-body {
+  font-size: var(--text-body);
+  line-height: 1.65;
+}
+
+.text-meta {
+  font-size: var(--text-meta);
+  line-height: 1.45;
+}
+
+.text-micro {
+  font-size: var(--text-micro);
+  line-height: 1.35;
+}
+
+.shadow-glow {
+  box-shadow: 0 8px 32px -12px rgba(0, 202, 224, 0.24);
+}
+
+html.light .shadow-glow {
+  box-shadow: 0 18px 46px -32px rgba(28, 46, 78, 0.34);
+}
+
+.animate-fade-in {
+  animation: fade-in-up 520ms cubic-bezier(0.16, 1, 0.3, 1) both;
+}
+
+@keyframes fade-in-up {
+  from {
+    opacity: 0;
+    transform: translateY(10px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+.btn-primary {
+  background-color: #ffffff;
+  color: #000000;
+  transition: all 250ms cubic-bezier(0.16, 1, 0.3, 1);
+}
+.btn-primary:hover {
+  background-color: #f0f2f6;
+  color: #000000;
+}
+
+html.light .btn-primary {
+  background-color: #111820;
+  color: #ffffff;
+}
+html.light .btn-primary:hover {
+  background-color: #2c313a;
+  color: #ffffff;
+}
+
+.card-selected {
+  background-color: var(--bg-surface-hover);
+  border-color: var(--text-primary);
+}
+
+html.light .card-selected {
+  background-color: var(--bg-surface-soft);
+  border-color: #111820;
+}
+
+.jimeng-toolbar-button {
+  display: inline-flex;
+  height: 36px;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  border: 0.5px solid var(--border-soft);
+  border-radius: 8px;
+  background: transparent;
+  padding: 0 12px;
+  color: var(--text-secondary);
+  font-size: 12px;
+  font-weight: 450;
+  line-height: 1;
+  transition:
+    background-color 220ms cubic-bezier(0.16, 1, 0.3, 1),
+    border-color 220ms cubic-bezier(0.16, 1, 0.3, 1),
+    color 220ms cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+.jimeng-toolbar-button:hover,
+.jimeng-toolbar-button.is-active {
+  border-color: var(--border-primary);
+  background: rgba(204, 221, 255, 0.08);
+  color: var(--text-primary);
+}
+
+.jimeng-toolbar-button.is-accent {
+  color: var(--gold);
+}
+
+.jimeng-popover {
+  border: 0.5px solid rgba(204, 221, 255, 0.08);
+  border-radius: 12px;
+  background: #1c1e22;
+  box-shadow: 0 8px 56px rgba(0, 0, 0, 0.24);
+}
+
+.jimeng-search {
+  display: flex;
+  height: 36px;
+  align-items: center;
+  gap: 8px;
+  border-radius: 8px;
+  background: rgba(204, 221, 255, 0.06);
+  padding: 0 12px;
+  color: rgba(229, 233, 250, 0.4);
+}
+
+.jimeng-option {
+  min-height: 36px;
+  border-radius: 8px;
+  padding: 6px 12px;
+  cursor: pointer;
+}
+
+.jimeng-option:hover,
+.jimeng-option.is-active {
+  background: rgba(204, 221, 255, 0.08);
+}
+
+.jimeng-filter-tab {
+  display: inline-flex;
+  height: 36px;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  border-radius: 8px;
+  padding: 0 14px;
+  color: var(--text-muted);
+  font-size: 13px;
+  font-weight: 500;
+  transition:
+    background-color 220ms cubic-bezier(0.16, 1, 0.3, 1),
+    color 220ms cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+.jimeng-filter-tab:hover,
+.jimeng-filter-tab.is-active {
+  background: rgba(204, 221, 255, 0.08);
+  color: var(--text-primary);
+}
+
+.jimeng-filter-tab.is-active {
+  font-weight: 700;
+}
+
+html.light .jimeng-toolbar-button:hover,
+html.light .jimeng-toolbar-button.is-active,
+html.light .jimeng-filter-tab:hover,
+html.light .jimeng-filter-tab.is-active,
+html.light .jimeng-option:hover,
+html.light .jimeng-option.is-active {
+  background: rgba(17, 24, 32, 0.06);
+}
+
+html.light .jimeng-popover {
+  border-color: rgba(37, 52, 72, 0.1);
+  background: #ffffff;
+  box-shadow: 0 18px 48px -28px rgba(28, 46, 78, 0.34);
+}
+
+html.light .jimeng-search {
+  background: #f2f6fb;
+  color: rgba(17, 24, 32, 0.36);
+}
+
+/* React Flow controls theme adjustments */
+.react-flow__controls {
+  background: transparent !important;
+  border: none !important;
+  box-shadow: none !important;
+}
+
+.react-flow__controls-button {
+  background: var(--bg-surface) !important;
+  border: 1px solid var(--border-soft) !important;
+  border-radius: 8px !important;
+  color: var(--text-primary) !important;
+  fill: var(--text-primary) !important;
+  transition: all 200ms ease;
+  width: 32px !important;
+  height: 32px !important;
+  display: flex !important;
+  align-items: center !important;
+  justify-content: center !important;
+}
+
+.react-flow__controls-button:hover {
+  background: var(--bg-surface-hover) !important;
+  border-color: var(--border-primary) !important;
+}
+
+.react-flow__controls-button svg {
+  fill: currentColor !important;
+  width: 14px !important;
+  height: 14px !important;
+}

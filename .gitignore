@@ -1,0 +1,23 @@
+node_modules
+build/
+dist/
+coverage/
+.DS_Store
+*.log
+.env*
+!.env.example
+/src/config/auth.json
+OMNI_Brains/
+OMNI_Workspace/
+Movies_Data_State/
+Game-Studios-main/
+data/*.db
+data/*.db-*
+.local-tts/
+
+# Generated development output; permanent test inputs live in tests/fixtures.
+/artifacts/
+/exports/
+/logs/
+/.tmp-*
+/h3-*-qa.json

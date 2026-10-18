@@ -1,0 +1,14 @@
+{
+  "model": "gpt-6-sol",
+  "simulation": true,
+  "producer": "GPT-6 Sol 子 Agent 模拟生成",
+  "agentPath": "/root/model_fixtures",
+  "requestEvidencePath": "/Users/yang/Desktop/code/movie/a-22/artifacts/agent-foundation-study-2026-09-26/sol-chat-first-request.json",
+  "externalRequestId": "external_bfe90e80-4ea3-4760-906e-ead199e31106",
+  "inputHash": "c9b2e0c87fb85a9348dd87cbb9b888d5220edb0980768f071832a37d3a14d6d1",
+  "scope": "首页作者对话的两个日常动作方向；只讨论，不创建或修改作品。",
+  "limitations": [
+    "未调用外部模型 provider 或提交回填 API。",
+    "这是模拟返回，不构成真实模型结果或作品艺术质量验收。"
+  ]
+}

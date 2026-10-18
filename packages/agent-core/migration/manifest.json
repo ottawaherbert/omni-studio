@@ -1,0 +1,35 @@
+{
+  "schemaVersion": 1,
+  "sourceRoot": "/Users/yang/Desktop/code/duilang",
+  "sourceHead": "befbe06dfe2521f68faf35df4de4b43eb2e9b1cd",
+  "basis": "User-designated current working tree, including uncommitted changes; snapshots are evidence, not executable imports.",
+  "files": [
+    {
+      "source": "neon-narrator/src/services/bookAgent/idempotency.ts",
+      "sha256": "3399c4af24d915766273c3b49ef5ad6f7e5aef9550b5f58f2c5f01ff668039a6",
+      "snapshot": "source/idempotency.ts.txt"
+    },
+    {
+      "source": "neon-narrator/src/services/bookAgent/turnExecutionGuard.ts",
+      "sha256": "acd0b3e17da87ccdd4fc182dc2680982f2c07edb17c01363e79423a1f417ec76",
+      "snapshot": "source/turnExecutionGuard.ts.txt"
+    },
+    {
+      "source": "neon-narrator/src/services/bookAgent/runtimeTypes.ts",
+      "sha256": "41d44f0fa8988a74481a480d4c3ed4e27c0152cdf94c4ba82c02ba542a93bfff",
+      "snapshot": "source/runtimeTypes.ts.txt"
+    },
+    {
+      "source": "neon-narrator/src/services/bookAgent/registry.ts",
+      "sha256": "5e79166d19f800e0e7f173b9df0d38cee7adf0945e12ec8c3314f61803283957",
+      "snapshot": "source/registry.ts.txt"
+    }
+  ],
+  "adaptations": {
+    "identity.ts": "Strict JSON identity, preserve __proto__ and reject cycles/non-JSON objects; SHA256 uses existing js-sha256 dependency.",
+    "leaseGuard.ts": "Domain-free error; actual persisted renewal deadline instead of estimating from response time.",
+    "protocol.ts": "Domain-neutral resources and execution context; injected runtime schema instead of copying Zod/Prisma/book scope.",
+    "registry.ts": "Prepare/parse/pin/attest/execute/output validation; host authorization and fencing required. Local effect transactions will be provided by agent-sqlite; registry alone does not claim exactly-once.",
+    "resources.ts": "Resource registry with exact version refs and empty-result collection revisions; no book-specific URI canonicalization."
+  }
+}

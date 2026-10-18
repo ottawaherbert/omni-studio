@@ -1,0 +1,47 @@
+import { stableAgentHash } from '@/services/bookAgent/security';
+
+export type FrozenAgentSamplingPrompt = {
+  promptHash: string;
+  promptSnapshot: string | null;
+};
+
+/** Evidence checks on replay must inspect what that sampling actually saw. */
+export function recentItemsFromFrozenPrompt(prompt: string): unknown[] {
+  const section = /(?:^|\n)【最近公开会话事件】\n([^\n]*)/u.exec(prompt);
+  if (section) {
+    try {
+      const value: unknown = JSON.parse(section[1]);
+      if (Array.isArray(value)) return value;
+    } catch {
+      // Report a frozen-input mismatch below; do not substitute newer evidence.
+    }
+  }
+  throw Object.assign(new Error('Frozen sampling recent-event evidence is unavailable'), {
+    code: 'AGENT_SAMPLING_REPLAY_INPUT_MISMATCH',
+  });
+}
+
+export function resolveAgentSamplingPrompt(
+  candidatePrompt: string,
+  frozen: FrozenAgentSamplingPrompt | null,
+) {
+  if (!frozen) {
+    return {
+      prompt: candidatePrompt,
+      promptHash: stableAgentHash(candidatePrompt),
+      replaying: false as const,
+    };
+  }
+
+  const prompt = frozen.promptSnapshot ?? candidatePrompt;
+  if (stableAgentHash(prompt) !== frozen.promptHash) {
+    const error = new Error('AgentSampling 的冻结 Prompt 与其哈希不一致，禁止用变化后的输入恢复模型调用');
+    Object.assign(error, { code: 'AGENT_SAMPLING_REPLAY_INPUT_MISMATCH' });
+    throw error;
+  }
+  return {
+    prompt,
+    promptHash: frozen.promptHash,
+    replaying: true as const,
+  };
+}

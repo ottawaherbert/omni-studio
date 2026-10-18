@@ -1,0 +1,37 @@
+{
+  "schemaVersion": 1,
+  "files": [
+    {
+      "source": "/Users/yang/Desktop/code/duilang/neon-narrator/src/services/bookAgent/turnLease.ts",
+      "sha256": "1752df3be700fadeff543edb6b0be866de48b68800e90845e3b30e1111d97107",
+      "snapshot": "source/turnLease.ts.txt"
+    },
+    {
+      "source": "/Users/yang/Desktop/code/duilang/neon-narrator/src/services/bookAgent/turnToolReceipts.ts",
+      "sha256": "de15f147f8ccec41ebfa2b174534b757773be72e601d0bd4af8d6d433a8145cf",
+      "snapshot": "source/turnToolReceipts.ts.txt"
+    },
+    {
+      "source": "/Users/yang/Desktop/code/duilang/neon-narrator/src/services/ai/modelInvocation.ts",
+      "sha256": "7e3b3534e72c7c04c6ba08623a3997022e86c220104a0ce81516f459ab2adec1",
+      "snapshot": "source/modelInvocation.ts.txt"
+    },
+    {
+      "source": "/Users/yang/Desktop/code/duilang/neon-narrator/src/services/ai/modelInvocationOwnerContract.ts",
+      "sha256": "700db58e51c97cc522b1d44e05e352cd9d4f9b9e26682ea2d554168b8aeb32ce",
+      "snapshot": "source/modelInvocationOwnerContract.ts.txt"
+    },
+    {
+      "source": "/Users/yang/Desktop/code/duilang/neon-narrator/src/services/bookAgent/samplingReplay.ts",
+      "sha256": "3b48d24db65b0d45ddbb970974e4b2b5fdebf2fa6f2eeca3fb35696f1eca90db",
+      "snapshot": "source/samplingReplay.ts.txt"
+    },
+    {
+      "source": "/Users/yang/Desktop/code/duilang/neon-narrator/src/services/bookAgent/durableRuns.ts",
+      "sha256": "7bde7d9ea9c9c78fb2c0859890f608569bab8cba55093e1bed5f3418d310fbab",
+      "snapshot": "source/durableRuns.ts.txt"
+    }
+  ],
+  "adaptation": "Preserve lease/fencing, receipt replay and atomic event contracts; implement synchronous SQLite BEGIN IMMEDIATE/CAS instead of Prisma/PostgreSQL. Domain effects join the same DB transaction. General command persistence also follows protocol.ts documented in research report 01. Invocation ownership, exact replay before budget, SENT/UNKNOWN and attempts follow the model invocation source. The target uses owner step/run + frozen input revision and local SQLite evidence; no source Prisma billing, owner-kind catalog, encrypted TTL replay or SDK transport is copied. Durable handoff freezes ownership, releases coordinator lease and uses independent child step lease plus parent control/input fences. Domain commit/receipt precedes an explicit scheduler acknowledgement; a crash in that gap replays the receipt, never the effect. Complete+parent wake+event share one SQLite transaction.",
+  "limitations": "Durable child leases and exact child model wait/reconciliation are implemented. Complete Goal/Turn orchestration, external prompt supersession and production transport remain future stages. Context guards are integrated in the isolated script host; production composition root is not yet switched."
+}

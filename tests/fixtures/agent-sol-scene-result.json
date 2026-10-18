@@ -1,0 +1,21 @@
+{
+  "summary": "雨夜的失物招领处，夏宁来找自己的旧伞，值班的阿照以为她要借公用伞。两人聊清楚后，她凭伞柄上褪色的贴纸认回伞，带着一句轻松的玩笑离开。",
+  "blocks": [
+    { "localKey": "rain_01", "type": "action", "text": "雨点在失物招领处的玻璃门上排成细线。夏宁推门进来，收起湿透的帽子。柜台后，阿照正把几把公用伞晾开。", "speakerId": null, "speakerName": null },
+    { "localKey": "rain_02", "type": "dialogue", "text": "你好，我来拿一把伞。", "speakerId": null, "speakerName": "夏宁" },
+    { "localKey": "rain_03", "type": "dialogue", "text": "门边那些都能借。蓝的轻一点，黑的结实。", "speakerId": null, "speakerName": "阿照" },
+    { "localKey": "rain_04", "type": "dialogue", "text": "我找的是我自己的。昨天落在候车椅上了。", "speakerId": null, "speakerName": "夏宁" },
+    { "localKey": "rain_05", "type": "action", "text": "阿照放下手里的蓝伞，指向柜台另一头的失物架。", "speakerId": null, "speakerName": null },
+    { "localKey": "rain_06", "type": "dialogue", "text": "哦，拿回去的拿。我听成借一把了。什么样的？", "speakerId": null, "speakerName": "阿照" },
+    { "localKey": "rain_07", "type": "dialogue", "text": "深绿色，伞柄上有张快掉光的星星贴纸。", "speakerId": null, "speakerName": "夏宁" },
+    { "localKey": "rain_08", "type": "action", "text": "阿照在架上翻找，抽出一把深绿的长伞。伞柄上只剩半颗金色星星。夏宁伸手，却先停住。", "speakerId": null, "speakerName": null },
+    { "localKey": "rain_09", "type": "dialogue", "text": "就是它。贴纸比昨天还少了一角。", "speakerId": null, "speakerName": "夏宁" },
+    { "localKey": "rain_10", "type": "dialogue", "text": "先对一下登记。你昨天留的电话尾号？", "speakerId": null, "speakerName": "阿照" },
+    { "localKey": "rain_11", "type": "dialogue", "text": "四六二八。", "speakerId": null, "speakerName": "夏宁" },
+    { "localKey": "rain_12", "type": "action", "text": "阿照核对登记本，把伞递给她。夏宁握住伞柄，用拇指轻轻按平翘起的贴纸。", "speakerId": null, "speakerName": null },
+    { "localKey": "rain_13", "type": "dialogue", "text": "谢谢。差点以为它开始自己找新主人了。", "speakerId": null, "speakerName": "夏宁" },
+    { "localKey": "rain_14", "type": "dialogue", "text": "没有，它在这儿等得挺老实。倒是我急着给你介绍别的。", "speakerId": null, "speakerName": "阿照" },
+    { "localKey": "rain_15", "type": "dialogue", "text": "那替我跟蓝伞说声抱歉。", "speakerId": null, "speakerName": "夏宁" },
+    { "localKey": "rain_16", "type": "action", "text": "阿照笑着朝晾开的蓝伞点点头。夏宁推门撑开深绿的伞，半颗星星跟着她走进雨里。", "speakerId": null, "speakerName": null }
+  ]
+}

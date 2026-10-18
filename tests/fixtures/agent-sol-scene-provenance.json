@@ -1,0 +1,11 @@
+{
+  "model": "gpt-6-sol",
+  "simulation": true,
+  "producer": "Codex subagent /root/model_fixtures",
+  "source": "subagent-generated model simulation, not a provider response or human artistic acceptance",
+  "requestEvidence": "artifacts/agent-foundation-study-2026-09-26/sol-scene-request.json",
+  "externalRequestId": "external_87c5c575-d73d-46a1-bc41-2ea6aab6a884",
+  "inputHash": "7455777d0a9c31f21158a75600af0f26bb8aff7bc523433a8cdd191700870a7e",
+  "scope": "Single selected scene_body for the first scene of the isolated 雨夜失物招领处 workspace; no source facts, author project adoption, review, runtime evidence or duration claim.",
+  "limitations": "Creative simulation for exercising the frozen model-request and candidate workflow. It does not establish full-script completeness or artistic acceptance."
+}

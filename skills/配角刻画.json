@@ -1,0 +1,29 @@
+{
+  "id": "skill-supporting-character",
+  "name": "配角刻画 (Supporting Character Design)",
+  "sourceType": "custom",
+  "category": "character",
+  "description": "【配角立体化引擎】\n拒绝工具人，每一个配角都必须有血有肉。他们不应该是主角的附庸，而是拥有自己独立生命、欲望和弱点的活人。\n\n【1. 核心动机法则】\n配角绝不只为了给主角送装备或挡刀而存在。他们有自己的生活轨迹，是因为与主角的利益或情感产生了交叉才卷入剧情。给配角一个非主角相关的私人动机（例如：家里生病的妹妹、一个未能实现的初恋约定）。\n\n【2. 弧光微缩法则】\n即使出场只有几分钟，配角也必须有微缩的人物弧光或反转。第一印象和真实面貌必须有落差（如：看似懦弱的小混混在最后关头选择不退缩；表面刻薄的房东其实默默免了房租）。\n\n【3. 独特的身份标识】\n必须给配角设计强烈的“记忆锚点”：\n- 物理锚点：一个独特的动作习惯、口音、随身道具（如周星驰电影里剔牙的包租婆、随时带着棒棒糖的杀手）。\n- 语言锚点：一句经典的口头禅，或者极具个人特色的说话逻辑。\n\n【4. 真实的灰度侧写】\n配角不要非黑即白。好人要有局限性和自私的瞬间，坏人要有难以捉摸的温情或坚守的底线。死亡或离场时，要让人记住他们的名字，而不是“那个谁”。",
+  "narrative": {
+    "themeFocus": ["配角立体感", "独立动机", "记忆锚点"],
+    "characterArchetypes": "具有反差感和独立人格的角色，拒绝脸谱化的工具人。",
+    "dialogueStyle": "带有个性强烈的口音、特定的词汇偏好或特定的说话结构。不同配角之间的对话必须能听出截然不同的背景。",
+    "pacingAndStructure": "配角的戏份中必须留有一次展示其私人动机（非主线）的专属小节拍。"
+  },
+  "directing": {
+    "colorPalette": "",
+    "cameraMovement": "",
+    "shotSizePreference": "在配角高光时刻，必须赋予他们等同于主角的特写（CU）待遇，尊重他们的情感流露。",
+    "lightingStyle": ""
+  },
+  "audioEditorial": {
+    "soundscape": "",
+    "editingRhythm": ""
+  },
+  "promptModifiers": {
+    "scriptInstruction": "【配角塑造强制指令】：在此剧本中，不允许出现毫无个性的“龙套A”或“工具人”。每一位配角出场时，必须有一两句描写交代其强烈的个人特征（如长相、习惯、微动作）。他们的台词必须具有独特的调性，他们的行动必须出于自己的人性，而非纯粹为了推动主角前行。",
+    "imageAppendedTags": "unique character design, expressive secondary character, memorable visually",
+    "videoAppendedTags": "",
+    "audioAppendedTags": ""
+  }
+}

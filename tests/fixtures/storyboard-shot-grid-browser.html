@@ -1,0 +1,55 @@
+<!doctype html>
+<html lang="zh-CN">
+<meta charset="utf-8">
+<title>Storyboard Grid Regression</title>
+<style>
+body { margin: 20px; background: #fff; color: #202020; font: 14px system-ui; }
+img { display: block; width: 800px; max-width: 100%; margin: 12px 0; }
+pre { white-space: pre-wrap; max-height: 110px; overflow: auto; }
+</style>
+<h1>Storyboard Grid Regression</h1>
+<pre id="result">Running</pre>
+<main id="images"></main>
+<script type="module">
+import { renderStoryboardShotGrid } from "/src/services/production/productionBoardImageOverlay.ts";
+const result = document.querySelector("#result");
+const checks = [];
+try {
+  for (const [width, height, layout] of [[320, 180, "2x1"], [180, 320, "1x2"]]) {
+    const source = document.createElement("canvas");
+    source.width = width;
+    source.height = height;
+    const ctx = source.getContext("2d");
+    ctx.fillStyle = "#0000ff"; ctx.fillRect(0, 0, width, height);
+    ctx.fillStyle = "#ff0000"; ctx.fillRect(0, 0, width / 5, height);
+    ctx.fillStyle = "#00ff00"; ctx.fillRect(width * 4 / 5, 0, width / 5, height);
+    ctx.fillStyle = "#ffff00"; ctx.fillRect(0, 0, width, height / 5);
+    ctx.fillStyle = "#ff00ff"; ctx.fillRect(0, height * 4 / 5, width, height / 5);
+    const url = await renderStoryboardShotGrid({
+      cells: [{ imageUrl: source.toDataURL(), order: 1 }, { imageUrl: source.toDataURL(), order: 2 }],
+      layout, width: 800, height: 450,
+    });
+    const img = new Image();
+    img.alt = `${width}x${height} source in ${layout} grid`;
+    img.src = url;
+    await img.decode();
+    document.querySelector("#images").append(img);
+    const canvas = document.createElement("canvas");
+    canvas.width = 800; canvas.height = 450;
+    const grid = canvas.getContext("2d"); grid.drawImage(img, 0, 0);
+    const cellWidth = layout === "2x1" ? 400 : 800;
+    const cellHeight = layout === "2x1" ? 450 : 225;
+    const scale = Math.min(cellWidth / width, cellHeight / height);
+    const x = (cellWidth - width * scale) / 2;
+    const y = (cellHeight - height * scale) / 2;
+    const samples = [[0.1, 0.5, [255, 0, 0]], [0.9, 0.5, [0, 255, 0]], [0.5, 0.1, [255, 255, 0]], [0.5, 0.9, [255, 0, 255]]];
+    const edges = samples.map(([sx, sy, expected]) => {
+      const actual = [...grid.getImageData(Math.round(x + sx * width * scale), Math.round(y + sy * height * scale), 1, 1).data].slice(0, 3);
+      return { expected, actual, passed: actual.every((value, i) => Math.abs(value - expected[i]) < 4) };
+    });
+    checks.push({ source: `${width}x${height}`, layout, edges, passed: edges.every((edge) => edge.passed) });
+  }
+  result.textContent = JSON.stringify({ passed: checks.every((check) => check.passed), checks }, null, 2);
+} catch (error) { result.textContent = JSON.stringify({ passed: false, error: String(error) }); }
+</script>
+</html>

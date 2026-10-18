@@ -1,0 +1,11 @@
+import React from 'react';
+import { createRoot } from 'react-dom/client';
+import { BrowserRouter, Routes, Route } from 'react-router-dom';
+import { Toaster } from 'react-hot-toast';
+import Layout from '../../src/components/Layout';
+import SkillLibrary from '../../src/pages/SkillLibrary';
+import ManualAIRequestHost from '../../src/components/ManualAIRequestHost';
+import '../../src/index.css';
+import '../../src/i18n';
+document.documentElement.classList.add('dark');
+createRoot(document.getElementById('root')!).render(<BrowserRouter><Routes><Route element={<Layout />}><Route path="/skills" element={<SkillLibrary />} /></Route></Routes><ManualAIRequestHost /><Toaster /></BrowserRouter>);

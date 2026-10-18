@@ -1,0 +1,36 @@
+{
+  "schemaVersion": 1,
+  "sourceRoot": "/Users/yang/Desktop/code/duilang",
+  "sourceHead": "befbe06dfe2521f68faf35df4de4b43eb2e9b1cd",
+  "basis": "User-designated current working tree including uncommitted changes; read-only snapshots, not executable imports.",
+  "files": [
+    {
+      "source": "neon-narrator/src/services/bookAgent/memoryContracts.ts",
+      "sha256": "d9ceab9104b86ab997d307b5e36748c22e008a57dc667ca9a65d91cd1ef56b2e",
+      "snapshot": "source/memoryContracts.ts.txt"
+    },
+    {
+      "source": "neon-narrator/src/services/bookAgent/memories.ts",
+      "sha256": "069b246f0b5f6c12ed7e29c5ff0e112b21e8440724fcaf98b95ad2687c2a0a5d",
+      "snapshot": "source/memories.ts.txt"
+    },
+    {
+      "source": "neon-narrator/src/services/bookAgent/inputBudget.ts",
+      "sha256": "9029268cfeaa9aae3521b7407a303457b6039d5e6d81a915aa4612591c88e8ea",
+      "snapshot": "source/inputBudget.ts.txt"
+    },
+    {
+      "source": "neon-narrator/src/services/ai/skills/skillCompiler.ts",
+      "sha256": "1c6a8958176a28e043e8ccf5a1b7fa30e73bcf71fa47aaef3cbdbdfd3b7e7f9c",
+      "snapshot": "source/skillCompiler.ts.txt"
+    }
+  ],
+  "adaptations": {
+    "types.ts/memory.ts": "Replace novel/Prisma scope with owner/scope/branch and injected resource refs; separate model-derived origin from human review; memory remains advisory.",
+    "skills.ts/context.ts": "Pin full rule content, version, variables and configuration; retain all supplied sections and applicable skills without application token estimates or input caps.",
+    "agent-sqlite/contextStore.ts": "SQLite persistence, source revalidation, query result dependencies, tombstones/generation fencing, immutable historical evidence, source invalidation and rebuild queue. Automatic model extraction/rebuild scheduling is not implemented by this package."
+  },
+  "retiredAdaptations": {
+    "budget.ts": "Removed 2026-10-17 at user request. inputBudget.ts.txt remains an immutable historical provenance snapshot, never an executable import."
+  }
+}

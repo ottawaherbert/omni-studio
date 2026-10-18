@@ -1,0 +1,451 @@
+import { prisma } from '@/services/db';
+import { routeError } from '@/services/routeErrors';
+import { stableAgentHash } from '@/services/bookAgent/security';
+import { assertAgentTurnExecution } from '@/services/bookAgent/turnLease';
+import { canonicalizeBookResourceUri } from '@/services/bookAgent/bookResourceUri';
+import {
+  capabilityCatalogHash,
+  publicCapabilitySpec,
+} from '@/services/bookAgent/publicCapabilitySpec';
+import type {
+  AgentAccessContext,
+  CapabilityObservation,
+  CapabilityProvider,
+  CapabilityRequest,
+  CapabilitySpec,
+  ResourceListQuery,
+  ResourceOpenRequest,
+  ResourcePage,
+  ResourceProvider,
+  ResourceSearchQuery,
+  ResourceSnapshot,
+  WorldStateContributor,
+} from '@/services/bookAgent/runtimeTypes';
+
+export { capabilityCatalogHash, publicCapabilitySpec } from '@/services/bookAgent/publicCapabilitySpec';
+
+export class ResourceCatalog {
+  private readonly providers = new Map<string, ResourceProvider>();
+
+  register(provider: ResourceProvider) {
+    const namespace = normalizeNamespace(provider.namespace);
+    if (this.providers.has(namespace)) {
+      throw new Error(`BOOK_AGENT_RESOURCE_PROVIDER_CONFLICT:${namespace}`);
+    }
+    this.providers.set(namespace, provider);
+    return this;
+  }
+
+  namespaces() {
+    return [...this.providers.keys()].sort();
+  }
+
+  async list(namespace: string, query: ResourceListQuery, context: AgentAccessContext): Promise<ResourcePage> {
+    return this.require(namespace).list(boundedListQuery(query), context);
+  }
+
+  async search(namespace: string, query: ResourceSearchQuery, context: AgentAccessContext): Promise<ResourcePage> {
+    const normalized = query.query.trim();
+    if (!normalized) throw routeError('AGENT_SCHEMA_INVALID', '资源检索词不能为空', 400);
+    return this.require(namespace).search({ ...boundedListQuery(query), query: normalized.slice(0, 2_000) }, context);
+  }
+
+  async open(request: ResourceOpenRequest, context: AgentAccessContext): Promise<ResourceSnapshot> {
+    const uri = canonicalizeBookResourceUri(request.uri);
+    const namespace = resourceNamespace(uri);
+    return this.require(namespace).open({
+      ...request,
+      uri,
+      cursor: request.cursor?.slice(0, 256) || null,
+      // An omitted open limit is resource-specific. Collection providers use an
+      // item count, while chapter providers use a character window. Replacing
+      // null with the collection default here made a normal chapter read only
+      // 500 characters and forced the agent through avoidable pagination.
+      limit: request.limit == null
+        ? null
+        : Math.max(1, Math.min(24_000, Math.floor(request.limit))),
+    }, context);
+  }
+
+  private require(namespace: string) {
+    const provider = this.providers.get(normalizeNamespace(namespace));
+    if (!provider) throw routeError('AGENT_RESOURCE_NAMESPACE_NOT_FOUND', '资源类型不存在或当前不可用', 404);
+    return provider;
+  }
+}
+
+export class CapabilityRegistry {
+  private readonly providers = new Map<string, CapabilityProvider>();
+  private readonly specs = new Map<string, CapabilitySpec>();
+
+  register(provider: CapabilityProvider) {
+    if (this.providers.has(provider.providerId)) {
+      throw new Error(`BOOK_AGENT_CAPABILITY_PROVIDER_CONFLICT:${provider.providerId}`);
+    }
+    if (!/^[a-f0-9]{64}$/i.test(provider.artifactDigest)) {
+      throw new Error(`BOOK_AGENT_PROVIDER_DIGEST_INVALID:${provider.providerId}`);
+    }
+    for (const spec of provider.listCapabilities()) {
+      assertCapabilitySpec(provider, spec);
+      const key = capabilityKey(spec.id, spec.version);
+      if (this.specs.has(key)) throw new Error(`BOOK_AGENT_CAPABILITY_CONFLICT:${key}`);
+      this.specs.set(key, spec);
+    }
+    this.providers.set(provider.providerId, provider);
+    return this;
+  }
+
+  list() {
+    return [...this.specs.values()].sort((a, b) => a.id.localeCompare(b.id) || a.version.localeCompare(b.version));
+  }
+
+  find(id: string, version?: string | null) {
+    if (version) return this.specs.get(capabilityKey(id, version)) || null;
+    return this.list().filter(spec => spec.id === id).at(-1) || null;
+  }
+
+  pin(id: string, version: string) {
+    const spec = this.find(id, version);
+    if (!spec) throw routeError('AGENT_CAPABILITY_NOT_FOUND', '助手能力不存在或版本不可用', 404);
+    const provider = this.providers.get(spec.providerId);
+    if (!provider || provider.providerVersion !== spec.providerVersion || provider.artifactDigest !== spec.artifactDigest) {
+      throw routeError('AGENT_PROVIDER_ATTESTATION_FAILED', '能力提供方校验失败', 503);
+    }
+    return { spec, provider };
+  }
+
+  publicSpecs() {
+    return this.list().map(spec => publicCapabilitySpec(spec, { face: 'describe' }));
+  }
+
+  async prepare(request: CapabilityRequest, context: AgentAccessContext) {
+    const spec = this.find(request.capabilityId, request.capabilityVersion);
+    if (!spec) throw routeError('AGENT_CAPABILITY_NOT_FOUND', '助手能力不存在或版本不可用', 404);
+    assertDirectExecutionAllowed(spec);
+    const parsedInput = parseCapabilityInput(spec, request.input);
+    const { provider } = this.pin(spec.id, spec.version);
+    const preparedInput = provider.prepareInput
+      ? await provider.prepareInput({ ...request, input: parsedInput }, context)
+      : parsedInput;
+    const canonicalInput = parseCapabilityInput(spec, preparedInput, 'AGENT_PREPARED_INPUT_INVALID');
+    return {
+      request: { ...request, input: canonicalInput },
+      inputDigest: stableAgentHash(canonicalInput),
+      providerId: provider.providerId,
+      providerVersion: provider.providerVersion,
+      artifactDigest: provider.artifactDigest,
+    };
+  }
+
+  async prepareChangeSetInput(request: CapabilityRequest, context: AgentAccessContext) {
+    const spec = this.find(request.capabilityId, request.capabilityVersion);
+    if (!spec) throw routeError('AGENT_CAPABILITY_NOT_FOUND', '助手能力不存在或版本不可用', 404);
+    if (!['WRITE', 'PUBLISH', 'DELETE', 'EXTERNAL_EFFECT'].includes(spec.effectClass)) {
+      throw routeError('AGENT_CHANGESET_EFFECT_INVALID', 'ChangeSet 只能包含需要正式授权的领域操作', 400);
+    }
+    const parsedInput = parseCapabilityInput(spec, request.input);
+    const { provider } = this.pin(spec.id, spec.version);
+    const preparedInput = provider.prepareInput
+      ? await provider.prepareInput({ ...request, input: parsedInput }, context)
+      : parsedInput;
+    return parseCapabilityInput(spec, preparedInput, 'AGENT_PREPARED_INPUT_INVALID');
+  }
+
+  async executePrepared(
+    prepared: Awaited<ReturnType<CapabilityRegistry['prepare']>>,
+    context: AgentAccessContext,
+  ): Promise<CapabilityObservation> {
+    const turnLease = context.turnExecution ? {
+      turnId: context.turnId,
+      tenantId: context.principal.tenantId,
+      actorId: context.principal.actorId,
+      workerId: context.turnExecution.workerId,
+      fencingToken: context.turnExecution.fencingToken,
+    } : null;
+    if (turnLease) await assertAgentTurnExecution(prisma, turnLease);
+    if (context.durableExecution) await assertDurableRunExecution(context.durableExecution);
+    const spec = this.find(prepared.request.capabilityId, prepared.request.capabilityVersion);
+    if (!spec) return capabilityGapObservation(prepared.request, '能力未注册或版本不可用');
+    assertDirectExecutionAllowed(spec);
+    if (spec.dispatchPolicy === 'DURABLE_RUN_REQUIRED' && !context.durableExecution) {
+      throw routeError(
+        'AGENT_DURABLE_CAPABILITY_RUN_REQUIRED',
+        '该能力必须由统一耐久任务 Worker 执行',
+        409,
+      );
+    }
+    const { provider } = this.pin(spec.id, spec.version);
+    if (
+      provider.providerId !== prepared.providerId
+      || provider.providerVersion !== prepared.providerVersion
+      || provider.artifactDigest !== prepared.artifactDigest
+      || stableAgentHash(prepared.request.input) !== prepared.inputDigest
+    ) {
+      throw routeError('AGENT_PREPARED_INPUT_ATTESTATION_FAILED', '能力准备结果校验失败', 409);
+    }
+    const canonicalInput = parseCapabilityInput(spec, prepared.request.input, 'AGENT_PREPARED_INPUT_INVALID');
+    const observation = await provider.execute({ ...prepared.request, input: canonicalInput }, context);
+    if (turnLease) await assertAgentTurnExecution(prisma, turnLease);
+    if (context.durableExecution) await assertDurableRunExecution(context.durableExecution);
+    return validateCapabilityProjectionHints(
+      spec,
+      validateCapabilityOutput(spec, observation),
+      capabilityId => this.find(capabilityId),
+    );
+  }
+
+  async execute(request: CapabilityRequest, context: AgentAccessContext): Promise<CapabilityObservation> {
+    const spec = this.find(request.capabilityId, request.capabilityVersion);
+    if (!spec) {
+      return capabilityGapObservation(request, '能力未注册或版本不可用');
+    }
+    const prepared = await this.prepare(request, context);
+    return this.executePrepared(prepared, context);
+  }
+}
+
+async function assertDurableRunExecution(execution: NonNullable<AgentAccessContext['durableExecution']>) {
+  const active = await prisma.agentRun.findFirst({
+    where: {
+      id: execution.runId,
+      status: 'RUNNING',
+      leaseOwner: execution.workerId,
+      fencingToken: execution.fencingToken,
+      leaseUntil: { gte: new Date() },
+    },
+    select: { id: true },
+  });
+  if (!active) throw routeError('AGENT_RUN_FENCED', '能力执行已失去耐久租约', 409);
+}
+
+function assertDirectExecutionAllowed(spec: CapabilitySpec) {
+  if (spec.effectClass !== 'READ' && spec.effectClass !== 'PROPOSE') {
+    throw routeError('BOOK_AGENT_APPROVAL_REQUIRED', '正式写入只能由 ChangeSet 执行器在有效授权下调用', 409);
+  }
+}
+
+function parseCapabilityInput(spec: CapabilitySpec, input: unknown, code = 'AGENT_TOOL_INPUT_INVALID') {
+  const parsed = spec.inputSchema.safeParse(input);
+  if (parsed.success) return parsed.data;
+  const detail = parsed.error.issues.slice(0, 6).map(issue => {
+    const path = issue.path.length > 0 ? issue.path.map(String).join('.') : 'arguments';
+    return `${path}: ${issue.message}`;
+  }).join('；').slice(0, 1_200);
+  throw routeError(
+    code,
+    '这次操作未能通过系统校验，尚未产生修改。请调整要求后重试。',
+    400,
+    { diagnosticMessage: `助手能力参数不符合 ${spec.id} 契约：${detail}` },
+  );
+}
+
+function validateCapabilityOutput(spec: CapabilitySpec, observation: CapabilityObservation) {
+  if (observation.status !== 'SUCCEEDED') return observation;
+  const output = spec.outputSchema.safeParse(observation.structuredData);
+  if (!output.success) throw routeError('AGENT_TOOL_OUTPUT_INVALID', '助手能力返回不符合契约', 502);
+  return {
+    ...observation,
+    structuredData: output.data,
+    modelAuthority: spec.effectClass === 'PROPOSE'
+      ? 'NON_AUTHORITATIVE_CANDIDATE' as const
+      : spec.effectClass === 'WRITE'
+        ? 'VERIFIED_WRITE_OBSERVATION' as const
+        : 'SYSTEM_OBSERVATION' as const,
+  };
+}
+
+function validateCapabilityProjectionHints(
+  spec: CapabilitySpec,
+  observation: CapabilityObservation,
+  findCapability: (id: string) => CapabilitySpec | null,
+): CapabilityObservation {
+  if (!observation.projectionHints) return observation;
+  if (observation.status !== 'SUCCEEDED' || spec.effectClass !== 'READ') {
+    throw routeError('AGENT_TOOL_PROJECTION_HINT_INVALID', '只有成功的只读能力可以发布模型投影合同', 502);
+  }
+  const contracts = observation.projectionHints.contracts;
+  if (!Array.isArray(contracts) || contracts.length < 1 || contracts.length > 8) {
+    throw routeError('AGENT_TOOL_PROJECTION_HINT_INVALID', '模型投影合同数量不符合运行时限制', 502);
+  }
+  const normalized = contracts.map(contract => {
+    if (
+      contract.authority !== 'CAPABILITY_CONTRACT'
+      || !/^[a-z0-9][a-z0-9._-]{1,159}$/i.test(contract.id)
+      || !/^[a-z0-9][a-z0-9._-]{0,79}$/i.test(contract.version)
+      || !contract.scope?.trim()
+      || contract.scope.length > 320
+      || !/^(?:book|system):\/\//.test(contract.resourceUri || '')
+      || contract.resourceUri.length > 600
+      || !contract.sourceRevision?.trim()
+      || contract.sourceRevision.length > 256
+      || !contract.summary?.trim()
+      || contract.summary.length > 800
+      || !Array.isArray(contract.constraints)
+      || contract.constraints.length > 12
+      || contract.constraints.some(item => typeof item !== 'string' || !item.trim() || item.length > 600)
+      || (contract.supersedes || []).length > 12
+      || (contract.supersedes || []).some(item => typeof item !== 'string' || !item.trim() || item.length > 320)
+    ) {
+      throw routeError('AGENT_TOOL_PROJECTION_HINT_INVALID', '模型投影合同格式不符合运行时限制', 502);
+    }
+    const schemas = contract.schemas || [];
+    if (
+      schemas.length > 8
+      || schemas.some(schema => (
+        !schema.path?.trim()
+        || schema.path.length > 240
+        || !Array.isArray(schema.allowedValues)
+        || schema.allowedValues.length < 1
+        || schema.allowedValues.length > 32
+        || schema.allowedValues.some(value => typeof value !== 'string' || !value.trim() || value.length > 120)
+      ))
+    ) {
+      throw routeError('AGENT_TOOL_PROJECTION_HINT_INVALID', '模型投影合同的结构化约束无效', 502);
+    }
+    const nextCapabilities = contract.nextCapabilities || [];
+    if (nextCapabilities.length > 12 || nextCapabilities.some(capabilityId => {
+      const target = findCapability(capabilityId);
+      return !target || target.exposurePolicy !== 'DIRECT' || !['READ', 'PROPOSE'].includes(target.effectClass);
+    })) {
+      throw routeError('AGENT_TOOL_PROJECTION_HINT_INVALID', '模型投影合同引用了不可调用的恢复能力', 502);
+    }
+    const claimPolicies = contract.claimPolicies || [];
+    if (
+      claimPolicies.length > 8
+      || claimPolicies.some(policy => (
+        !/^[a-z0-9][a-z0-9._-]{1,159}$/i.test(policy.id)
+        || policy.kind !== 'CAPABILITY_EVIDENCE_REQUIRED'
+        || policy.claimType !== 'CONCRETE_CONFIGURATION'
+        || !Array.isArray(policy.markers)
+        || policy.markers.length < 1
+        || policy.markers.length > 64
+        || policy.markers.some(marker => typeof marker !== 'string' || !marker.trim() || marker.length > 160)
+        || !Array.isArray(policy.requiredCapabilities)
+        || policy.requiredCapabilities.length < 1
+        || policy.requiredCapabilities.length > 4
+        || policy.requiredCapabilities.some(capabilityId => {
+          const target = findCapability(capabilityId);
+          return !target || target.exposurePolicy !== 'DIRECT' || !['READ', 'PROPOSE'].includes(target.effectClass);
+        })
+      ))
+    ) {
+      throw routeError('AGENT_TOOL_PROJECTION_HINT_INVALID', '模型投影合同的声明证据策略无效', 502);
+    }
+    return {
+      ...contract,
+      scope: contract.scope.trim(),
+      resourceUri: contract.resourceUri.trim(),
+      sourceRevision: contract.sourceRevision.trim(),
+      summary: contract.summary.trim(),
+      constraints: contract.constraints.map(item => item.trim()),
+      schemas: schemas.map(schema => ({
+        path: schema.path.trim(),
+        allowedValues: [...new Set(schema.allowedValues.map(value => value.trim()))],
+      })),
+      claimPolicies: claimPolicies.map(policy => ({
+        ...policy,
+        markers: [...new Set(policy.markers.map(marker => marker.trim()))],
+        requiredCapabilities: [...new Set(policy.requiredCapabilities)],
+      })),
+      nextCapabilities: [...new Set(nextCapabilities)],
+      supersedes: [...new Set(contract.supersedes || [])].slice(0, 12),
+    };
+  });
+  const contractKeys = normalized.map(contract => `${contract.id}::${contract.scope}`);
+  if (new Set(contractKeys).size !== contractKeys.length) {
+    throw routeError('AGENT_TOOL_PROJECTION_HINT_INVALID', '同一观察不能发布重复作用域的模型投影合同', 502);
+  }
+  return { ...observation, projectionHints: { contracts: normalized } };
+}
+
+export class WorldStateRegistry {
+  private readonly contributors = new Map<string, WorldStateContributor>();
+  private readonly sectionOwners = new Map<string, string>();
+
+  register(contributor: WorldStateContributor) {
+    if (this.contributors.has(contributor.contributorId)) {
+      throw new Error(`BOOK_AGENT_WORLD_STATE_CONTRIBUTOR_CONFLICT:${contributor.contributorId}`);
+    }
+    for (const sectionId of contributor.sectionIds) {
+      const existing = this.sectionOwners.get(sectionId);
+      if (existing) throw new Error(`BOOK_AGENT_WORLD_STATE_SECTION_CONFLICT:${sectionId}:${existing}`);
+      this.sectionOwners.set(sectionId, contributor.contributorId);
+    }
+    this.contributors.set(contributor.contributorId, contributor);
+    return this;
+  }
+
+  list() {
+    return [...this.contributors.values()].sort((a, b) => a.contributorId.localeCompare(b.contributorId));
+  }
+}
+
+export function resourceNamespace(uri: string) {
+  let parsed: URL;
+  try {
+    parsed = new URL(uri);
+  } catch {
+    throw routeError('AGENT_RESOURCE_URI_INVALID', '资源地址格式不正确', 400);
+  }
+  if (parsed.protocol !== 'book:' && parsed.protocol !== 'system:') {
+    throw routeError('AGENT_RESOURCE_URI_INVALID', '资源地址协议不受支持', 400);
+  }
+  return normalizeNamespace(parsed.hostname);
+}
+
+function normalizeNamespace(value: string) {
+  const normalized = value.trim().toLowerCase();
+  if (!/^[a-z][a-z0-9_-]{0,63}$/.test(normalized)) {
+    throw routeError('AGENT_RESOURCE_NAMESPACE_INVALID', '资源命名空间格式不正确', 400);
+  }
+  return normalized;
+}
+
+function boundedListQuery<T extends ResourceListQuery>(query: T): T {
+  return {
+    ...query,
+    cursor: query.cursor?.slice(0, 256) || null,
+    limit: Math.max(1, Math.min(100, Math.floor(query.limit || 20))),
+  };
+}
+
+function capabilityKey(id: string, version: string) {
+  return `${id}@${version}`;
+}
+
+function assertCapabilitySpec(provider: CapabilityProvider, spec: CapabilitySpec) {
+  if (!/^[a-z][a-z0-9_]*(?:\.[a-z][a-z0-9_]*)+$/.test(spec.id)) {
+    throw new Error(`BOOK_AGENT_CAPABILITY_ID_INVALID:${spec.id}`);
+  }
+  if (spec.providerId !== provider.providerId || spec.providerVersion !== provider.providerVersion || spec.artifactDigest !== provider.artifactDigest) {
+    throw new Error(`BOOK_AGENT_CAPABILITY_ATTESTATION_MISMATCH:${spec.id}`);
+  }
+  if (spec.dispatchPolicy && !['INLINE', 'DURABLE_RUN_REQUIRED'].includes(spec.dispatchPolicy)) {
+    throw new Error(`BOOK_AGENT_CAPABILITY_DISPATCH_POLICY_INVALID:${spec.id}`);
+  }
+  if (
+    spec.dispatchPolicy === 'DURABLE_RUN_REQUIRED'
+    && (
+      (spec.exposurePolicy !== 'DIRECT' && spec.clientLaunchPolicy !== 'SURFACE_ONLY')
+      || !['READ', 'PROPOSE'].includes(spec.effectClass)
+    )
+  ) {
+    throw new Error(`BOOK_AGENT_CAPABILITY_DURABLE_DISPATCH_UNSAFE:${spec.id}`);
+  }
+}
+
+function capabilityGapObservation(request: CapabilityRequest, summary: string): CapabilityObservation {
+  return {
+    callId: request.callId,
+    capabilityId: request.capabilityId,
+    capabilityVersion: request.capabilityVersion,
+    status: 'CAPABILITY_GAP',
+    summary,
+    structuredData: { capabilityId: request.capabilityId, requestedVersion: request.capabilityVersion },
+    evidence: [],
+    warnings: [],
+    partials: [],
+    retryable: false,
+    provenance: { source: 'capability_registry' },
+  };
+}

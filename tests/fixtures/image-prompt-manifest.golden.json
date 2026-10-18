@@ -1,0 +1,28 @@
+{
+  "version": "image-generation-request/v1",
+  "referenceOrder": [
+    "character_identity",
+    "wardrobe_state",
+    "location_design",
+    "prop_design"
+  ],
+  "requiredSections": [
+    "【生成任务】",
+    "【多参考图映射】",
+    "Image 1（参考图 1）",
+    "【多参考图组合关系】",
+    "必须保留：",
+    "允许改变：",
+    "禁止复制或引入：",
+    "【输出约束】"
+  ],
+  "forbiddenTokens": [
+    "--ar",
+    "MBTI",
+    "心理档案",
+    "数据库",
+    "hash",
+    "16:9",
+    "9:16"
+  ]
+}

@@ -1,0 +1,253 @@
+import crypto from 'crypto';
+import { Prisma } from '@prisma/client';
+import { prisma } from '@/services/db';
+import { routeError } from '@/services/routeErrors';
+import type { AgentPrincipal } from '@/services/bookAgent/principal';
+
+const DEFAULT_TURN_LEASE_MS = 3 * 60_000;
+
+export type AgentTurnExecutionLease = {
+  turnId: string;
+  tenantId: string;
+  actorId: string;
+  workerId: string;
+  fencingToken: number;
+  /** Accepted author input generation; absent on legacy non-dialogue leases. */
+  inputVersion?: number;
+};
+
+type TurnLeaseDb = Prisma.TransactionClient | typeof prisma;
+
+export function agentTurnLeaseMs() {
+  const parsed = Number.parseInt(String(process.env.BOOK_AGENT_TURN_LEASE_MS || ''), 10);
+  if (!Number.isFinite(parsed)) return DEFAULT_TURN_LEASE_MS;
+  return Math.min(30 * 60_000, Math.max(60_000, parsed));
+}
+
+export function agentTurnHeartbeatMs() {
+  return Math.max(10_000, Math.min(60_000, Math.floor(agentTurnLeaseMs() / 4)));
+}
+
+export async function claimAgentTurnExecution(
+  principal: AgentPrincipal,
+  turnId: string,
+  workerId = `book-agent-turn:${process.pid}:${crypto.randomUUID()}`,
+) {
+  const now = new Date();
+  const leaseUntil = new Date(now.getTime() + agentTurnLeaseMs());
+  return prisma.$transaction(async tx => {
+    const turn = await tx.agentTurn.findFirst({
+      where: {
+        id: turnId,
+        tenantId: principal.tenantId,
+        actorId: principal.actorId,
+      },
+      select: {
+        id: true,
+        threadId: true,
+        firstSeq: true,
+        status: true,
+        trigger: true,
+        leaseOwner: true,
+        leaseUntil: true,
+        fencingToken: true,
+        inputVersion: true,
+        executionStartedAt: true,
+        createdAt: true,
+      },
+    });
+    if (!turn) throw routeError('AGENT_TURN_NOT_FOUND', '助手回合不存在', 404);
+    if (!['ACCEPTED', 'RUNNING'].includes(turn.status)) {
+      return { claimed: false as const, status: turn.status, lease: null };
+    }
+    if (
+      turn.status === 'RUNNING'
+      && turn.leaseOwner
+      && turn.leaseUntil
+      && turn.leaseUntil > now
+    ) {
+      return { claimed: false as const, status: turn.status, lease: null };
+    }
+
+    // The worker may run multiple turns concurrently, but a thread is a
+    // single ordered conversation.  Claim only the earliest pending
+    // USER_MESSAGE on that thread.  A pending predecessor always blocks a
+    // later turn.  A later durable handoff or a live RUNNING lease blocks an
+    // earlier turn too, while an expired later RUNNING lease is recoverable
+    // by its own turn and must not create a two-way deadlock.
+    const blockedBy = await tx.agentTurn.findFirst({
+      where: {
+        threadId: turn.threadId,
+        tenantId: principal.tenantId,
+        actorId: principal.actorId,
+        trigger: 'USER_MESSAGE',
+        id: { not: turn.id },
+        status: { in: ['ACCEPTED', 'RUNNING', 'WAITING_FOR_RUN'] },
+        OR: [
+          { firstSeq: { lt: turn.firstSeq } },
+          { firstSeq: { gte: turn.firstSeq }, status: 'WAITING_FOR_RUN' },
+          {
+            firstSeq: { gte: turn.firstSeq },
+            status: 'RUNNING',
+            leaseUntil: { gt: now },
+          },
+        ],
+      },
+      orderBy: [{ firstSeq: 'asc' }, { id: 'asc' }],
+      select: { status: true },
+    });
+    if (blockedBy) {
+      return { claimed: false as const, status: turn.status, lease: null };
+    }
+
+    const fencingToken = turn.fencingToken + 1;
+    // The fallback only covers pre-migration/replayed legacy records. Fresh
+    // queued turns begin their clock when first claimed, not when accepted.
+    const executionStartedAt = turn.executionStartedAt
+      ?? (turn.fencingToken > 0 ? turn.createdAt : now);
+    const claimed = await tx.agentTurn.updateMany({
+      where: {
+        id: turn.id,
+        status: turn.status,
+        fencingToken: turn.fencingToken,
+      },
+      data: {
+        status: 'RUNNING',
+        leaseOwner: workerId,
+        leaseUntil,
+        fencingToken,
+        executionStartedAt,
+        completedAt: null,
+      },
+    });
+    if (claimed.count !== 1) {
+      return { claimed: false as const, status: 'RUNNING', lease: null };
+    }
+    return {
+      claimed: true as const,
+      status: 'RUNNING',
+      executionStartedAt,
+      leaseUntil,
+      lease: {
+        turnId,
+        tenantId: principal.tenantId,
+        actorId: principal.actorId,
+        workerId,
+        fencingToken,
+        inputVersion: turn.inputVersion,
+      } satisfies AgentTurnExecutionLease,
+    };
+  }, { isolationLevel: Prisma.TransactionIsolationLevel.Serializable });
+}
+
+export async function renewAgentTurnExecution(lease: AgentTurnExecutionLease) {
+  const now = new Date();
+  const renewed = await prisma.agentTurn.updateMany({
+    where: {
+      id: lease.turnId,
+      tenantId: lease.tenantId,
+      actorId: lease.actorId,
+      status: 'RUNNING',
+      leaseOwner: lease.workerId,
+      fencingToken: lease.fencingToken,
+      leaseUntil: { gte: now },
+    },
+    data: { leaseUntil: new Date(now.getTime() + agentTurnLeaseMs()) },
+  });
+  return renewed.count === 1;
+}
+
+export async function releaseAgentTurnExecutionForReplay(lease: AgentTurnExecutionLease) {
+  const released = await prisma.agentTurn.updateMany({
+    where: {
+      id: lease.turnId,
+      tenantId: lease.tenantId,
+      actorId: lease.actorId,
+      status: 'RUNNING',
+      leaseOwner: lease.workerId,
+      fencingToken: lease.fencingToken,
+      leaseUntil: { gte: new Date() },
+    },
+    data: {
+      status: 'ACCEPTED',
+      leaseOwner: null,
+      leaseUntil: null,
+      completedAt: null,
+    },
+  });
+  return released.count === 1;
+}
+
+export async function deferAgentTurnExecutionForReplay(
+  lease: AgentTurnExecutionLease,
+  retryAfterMs: number,
+) {
+  const now = new Date();
+  const boundedDelayMs = Math.min(10 * 60_000, Math.max(1_000, Math.ceil(retryAfterMs)));
+  const released = await prisma.agentTurn.updateMany({
+    where: {
+      id: lease.turnId,
+      tenantId: lease.tenantId,
+      actorId: lease.actorId,
+      status: 'RUNNING',
+      leaseOwner: lease.workerId,
+      fencingToken: lease.fencingToken,
+      leaseUntil: { gte: now },
+    },
+    data: {
+      status: 'RUNNING',
+      leaseOwner: `book-agent-turn:deferred:${lease.turnId}`,
+      leaseUntil: new Date(now.getTime() + boundedDelayMs),
+      completedAt: null,
+    },
+  });
+  return released.count === 1;
+}
+
+export async function assertAgentTurnExecution(
+  db: TurnLeaseDb,
+  lease: AgentTurnExecutionLease,
+) {
+  const active = await db.agentTurn.findFirst({
+    where: {
+      id: lease.turnId,
+      tenantId: lease.tenantId,
+      actorId: lease.actorId,
+      status: 'RUNNING',
+      leaseOwner: lease.workerId,
+      fencingToken: lease.fencingToken,
+      leaseUntil: { gte: new Date() },
+    },
+    select: { id: true },
+  });
+  if (!active) {
+    throw routeError(
+      'AGENT_TURN_LEASE_LOST',
+      '这一回合已由其他执行器接管，旧执行器不能继续写入',
+      409,
+    );
+  }
+}
+
+export function isAgentTurnLeaseLost(error: unknown) {
+  return Boolean(
+    error
+    && typeof error === 'object'
+    && 'code' in error
+    && (error as { code?: unknown }).code === 'AGENT_TURN_LEASE_LOST',
+  );
+}
+
+/** Checked between atomic operations, never abort a completed effect or lose its receipt. */
+export async function assertAgentTurnInputCurrent(lease: AgentTurnExecutionLease) {
+  const current = await prisma.agentTurn.findFirst({
+    where: { id: lease.turnId, tenantId: lease.tenantId, actorId: lease.actorId },
+    select: { inputVersion: true },
+  });
+  if (current && current.inputVersion !== (lease.inputVersion ?? 0)) {
+    throw routeError('AGENT_TURN_STEERED', '当前任务收到新的作者补充', 409);
+  }
+}
+export function isAgentTurnSteered(error: unknown) {
+  return Boolean(error && typeof error === 'object' && 'code' in error && error.code === 'AGENT_TURN_STEERED');
+}

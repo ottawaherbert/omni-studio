@@ -1,0 +1,2905 @@
+import { AsyncLocalStorage } from 'node:async_hooks';
+import { checkModelInputCapacity, modelInputBill, modelInputBudgetPolicy, type ModelInputCapacity } from '../bookAgent/inputBudget';
+import crypto from 'node:crypto';
+import { BusinessLine, Prisma } from '@prisma/client';
+import { prisma } from '@/services/db';
+import {
+  EconomyService,
+  type LockedWalletBuckets,
+  type SettleOptions,
+} from '@/services/ai/economy';
+import {
+  assertModelInvocationReplayProtectionConfigured,
+  ModelInvocationReplayError,
+  protectModelInvocationReplay,
+  restoreModelInvocationReplay,
+} from '@/services/ai/modelInvocationReplay';
+import {
+  assertModelInvocationOwner,
+  createAgentTurnModelInvocationWithBudget,
+  MODEL_INVOCATION_OWNER_KINDS,
+  ModelInvocationOwnerValidationError,
+  type ModelInvocationOwnerKind,
+} from '@/services/ai/modelInvocationOwners';
+import {
+  evaluateProviderAttemptOutcome,
+  ProviderResponseContractError,
+  type ProviderAttemptOutcome,
+} from '@/services/ai/providerOutcomeContract';
+import {
+  recordAuthorAiDebugLog,
+  type AuthorAiDebugCapture,
+} from '@/services/ai/authorAiDebugLog';
+import { readCompletionEvidence } from '@/services/ai/completionEvidence';
+import { recordOperationalMetric } from '@/services/operationalMetrics';
+import { validateModelInvocationOwnerSnapshot } from './modelInvocationOwnerContract';
+import { BLUEPRINT_FALLBACK_POLICY, BLUEPRINT_FALLBACK_RESOLVED, isBlueprintTransportFailure, type BlueprintFallbackRoute } from './genesisBlueprintFallbackPolicy';
+import { BLUEPRINT_RETRY_ROUTE, BLUEPRINT_RECOVERY_LIMIT, blueprintRecoveryAttempts, blueprintRecoveryDeadline } from '../story/genesisBlueprintRecovery';
+import { readGenesisSemanticStageMachine, type GenesisSemanticStageMachine } from '../story/genesisSemanticSampling';
+import { assertAgentTurnExecution, type AgentTurnExecutionLease } from '../bookAgent/turnLease';
+import { AGENT_REASONING_RECOVERY_POLICY, AGENT_REASONING_RECOVERY_RESOLVED, AGENT_REASONING_RECOVERY_SCHEDULED,
+  AGENT_REASONING_RECOVERY_LIMIT, AGENT_REASONING_RECOVERY_DEADLINE_MS, eligibleAgentReasoningRecovery } from './agentReasoningRecoveryPolicy';
+
+export type { ProviderAttemptOutcome } from '@/services/ai/providerOutcomeContract';
+
+const INVOCATION_LEASE_MS = 10 * 60 * 1_000;
+const HASH_PATTERN = /^[a-f0-9]{32,128}$/i;
+/** Pre-provider abort after graceful process exit; reclaim is immediately safe. */
+export const MODEL_INVOCATION_STATUS_ABORTED_RETRYABLE = 'ABORTED_RETRYABLE';
+const PROCESS_SHUTDOWN_ERROR_CLASS = 'PROCESS_SHUTDOWN';
+
+type JsonRecord = Record<string, unknown>;
+
+type OwnedInvocationHandle = {
+  id: string;
+  actorId: string;
+  leaseOwner: string;
+  fencingToken: number;
+};
+
+/**
+ * In-process registry of ModelInvocations this runtime currently holds.
+ * Used only for graceful SIGINT/SIGTERM lease release so a replacement
+ * instance is not blocked for the full 10-minute lease window.
+ */
+const ownedInvocationsById = new Map<string, OwnedInvocationHandle>();
+
+function trackOwnedInvocation(invocation: ClaimedModelInvocation) {
+  ownedInvocationsById.set(invocation.id, {
+    id: invocation.id,
+    actorId: invocation.actorId,
+    leaseOwner: invocation.leaseOwner,
+    fencingToken: invocation.fencingToken,
+  });
+}
+
+function untrackOwnedInvocation(invocationId: string) {
+  ownedInvocationsById.delete(invocationId);
+}
+
+export type ProcessShutdownInvocationReleaseResult = {
+  examined: number;
+  abortedRetryable: number;
+  leaseReleasedForReconciliation: number;
+  leaseReleasedForReplay: number;
+  alreadyReleased: number;
+  failed: number;
+};
+
+export type ModelInvocationDescriptor = {
+  tenantId?: string;
+  ownerKind: ModelInvocationOwnerKind;
+  ownerId: string;
+  // Execution authority is checked at claim and again before Provider egress.
+  // It is intentionally not part of logical idempotency so a newer fenced
+  // Worker can resume the same invocation without creating a second sampling.
+  ownerLeaseOwner: string;
+  ownerFencingToken: number;
+  stableOperation: string;
+  idempotencyKey: string;
+  payloadHash: string;
+  role: string;
+  routeVersion: string;
+  promptHash: string;
+  contextBaselineId?: string | null;
+  contextHash: string;
+  toolsetHash: string;
+  outputSchemaHash: string;
+  samplingId?: string | null;
+  threadId?: string | null;
+  turnId?: string | null;
+  /** @deprecated Correlation only. ownerKind/ownerId identify the durable owner. */
+  runId?: string | null;
+  metadata?: Record<string, unknown>;
+};
+
+export type ClaimedModelInvocation = {
+  id: string;
+  tenantId: string;
+  actorId: string;
+  owner: {
+    kind: ModelInvocationOwnerKind;
+    id: string;
+    expectedLeaseOwner: string;
+    expectedFencingToken: number;
+  };
+  leaseOwner: string;
+  fencingToken: number;
+  reservedBudget: number;
+  reservationStatus: string;
+  recoveringProviderResult: boolean;
+  providerReplayRestored: boolean;
+};
+
+type ModelInvocationRuntimeContext = ClaimedModelInvocation;
+
+export type ProviderAttemptDescriptor = {
+  /** Sizes/source labels only, from the final provider request. Never body text. */
+  requestAccounting?: Record<string, unknown>;
+  provider: string;
+  channelId?: string | null;
+  modelId?: string | null;
+  providerModel?: string | null;
+  requestHash: string;
+  promptHash: string;
+  /** Optional beta debug capture; written only when author enables AI debug logging. */
+  debugInput?: AuthorAiDebugCapture | null;
+};
+
+export type ProviderReplayCodec<T> = {
+  serialize: (value: T) => unknown;
+  restore: (value: unknown) => T;
+};
+
+export type ProviderOutputPolicy = {
+  maxAttempts: number;
+  accepts: (outcome: ProviderAttemptOutcome) => boolean;
+  canRetry: (outcome: ProviderAttemptOutcome) => boolean;
+  rejectionError: (outcome: ProviderAttemptOutcome | null) => Error;
+};
+
+export class ModelInvocationError extends Error {
+  readonly code: string;
+  readonly httpStatus: number;
+  readonly retryAfterMs: number | null;
+
+  constructor(
+    code: string,
+    message: string,
+    httpStatus = 409,
+    options?: ErrorOptions & { retryAfterMs?: number },
+  ) {
+    super(`${code}: ${message}`, options);
+    this.name = 'ModelInvocationError';
+    this.code = code;
+    this.httpStatus = httpStatus;
+    this.retryAfterMs = Number.isFinite(options?.retryAfterMs)
+      ? Math.max(0, Math.ceil(options!.retryAfterMs!))
+      : null;
+  }
+}
+
+export function isModelInvocationReplayReadyError(error: unknown) {
+  return error instanceof ModelInvocationError
+    && error.code === 'MODEL_INVOCATION_REPLAY_READY';
+}
+
+export function isModelInvocationReconciliationRequiredError(error: unknown) {
+  return error instanceof ModelInvocationError
+    && error.code === 'MODEL_INVOCATION_RECONCILIATION_REQUIRED';
+}
+
+const invocationContext = new AsyncLocalStorage<ModelInvocationRuntimeContext>();
+
+export function modelInvocationContextActive() {
+  return Boolean(invocationContext.getStore());
+}
+
+export function currentModelInvocationId() {
+  return invocationContext.getStore()?.id || null;
+}
+
+export function currentModelInvocationActorId() {
+  return invocationContext.getStore()?.actorId || null;
+}
+
+export function currentModelInvocationOwnerKind() {
+  return invocationContext.getStore()?.owner.kind || null;
+}
+
+export async function withModelInvocationContext<T>(
+  invocation: ClaimedModelInvocation,
+  callback: () => Promise<T>,
+) {
+  trackOwnedInvocation(invocation);
+  return invocationContext.run(invocation, callback);
+}
+
+export function stableModelHash(value: unknown) {
+  return crypto.createHash('sha256').update(stableStringify(value)).digest('hex');
+}
+
+/**
+ * Graceful process exit helper.
+ *
+ * Releases leases held by this process so a new instance is not blocked for
+ * `INVOCATION_LEASE_MS` (10 minutes). Safety rules:
+ * - PREPARING / RESERVED / IN_FLIGHT with no SENT|UNKNOWN attempts →
+ *   `ABORTED_RETRYABLE` (immediate safe reclaim / retry).
+ * - Any SENT|UNKNOWN provider attempt → clear lease only; reclaim path enters
+ *   reconciliation (never silent retry / double-send).
+ * - Provider success / REPLAY_READY → clear lease so domain replay can proceed.
+ */
+export async function releaseOwnedModelInvocationsOnProcessShutdown(
+  reason = PROCESS_SHUTDOWN_ERROR_CLASS,
+): Promise<ProcessShutdownInvocationReleaseResult> {
+  const owned = [...ownedInvocationsById.values()];
+  const result: ProcessShutdownInvocationReleaseResult = {
+    examined: owned.length,
+    abortedRetryable: 0,
+    leaseReleasedForReconciliation: 0,
+    leaseReleasedForReplay: 0,
+    alreadyReleased: 0,
+    failed: 0,
+  };
+
+  for (const handle of owned) {
+    try {
+      const disposition = await releaseOneOwnedInvocationOnShutdown(handle, reason);
+      if (disposition === 'already_released') result.alreadyReleased += 1;
+      else if (disposition === 'aborted_retryable') result.abortedRetryable += 1;
+      else if (disposition === 'reconciliation') result.leaseReleasedForReconciliation += 1;
+      else if (disposition === 'replay') result.leaseReleasedForReplay += 1;
+    } catch (error) {
+      result.failed += 1;
+      console.error('[ModelInvocation] Failed to release owned lease on process shutdown:', {
+        invocationId: handle.id,
+        error: errorMessage(error),
+      });
+    } finally {
+      untrackOwnedInvocation(handle.id);
+    }
+  }
+
+  if (result.examined > 0) {
+    console.log('[ModelInvocation] Process-shutdown lease release:', result);
+  }
+  return result;
+}
+
+async function releaseOneOwnedInvocationOnShutdown(
+  handle: OwnedInvocationHandle,
+  reason: string,
+): Promise<'already_released' | 'aborted_retryable' | 'reconciliation' | 'replay'> {
+  const current = await prisma.modelInvocation.findFirst({
+    where: {
+      id: handle.id,
+      actorId: handle.actorId,
+      leaseOwner: handle.leaseOwner,
+      fencingToken: handle.fencingToken,
+      completedAt: null,
+    },
+    select: {
+      id: true,
+      status: true,
+      reconciliationState: true,
+    },
+  });
+  if (!current) return 'already_released';
+
+  const attempts = await prisma.modelInvocationAttempt.findMany({
+    where: { invocationId: current.id },
+    select: { status: true },
+  });
+  const hasUncertainAttempt = attempts.some(attempt => ['SENT', 'UNKNOWN'].includes(attempt.status));
+  const hasSucceededAttempt = attempts.some(attempt => attempt.status === 'SUCCEEDED');
+
+  const ownershipWhere = {
+    id: current.id,
+    actorId: handle.actorId,
+    leaseOwner: handle.leaseOwner,
+    fencingToken: handle.fencingToken,
+    completedAt: null,
+  } as const;
+
+  // Protected provider result: free the lease so REPLAY_READY reclaim is immediate.
+  if (
+    hasSucceededAttempt
+    || ['PROVIDER_SUCCEEDED', 'SETTLING'].includes(current.status)
+    || current.reconciliationState === 'REPLAY_READY'
+  ) {
+    const updated = await prisma.modelInvocation.updateMany({
+      where: ownershipWhere,
+      data: {
+        leaseOwner: null,
+        leaseUntil: null,
+        errorClass: reason,
+        errorMessage: '进程优雅关闭：Provider 结果已保留，租约已释放以便领域重放',
+      },
+    });
+    return updated.count === 1 ? 'replay' : 'already_released';
+  }
+
+  // Uncertain provider outcome: never ABORTED_RETRYABLE — only clear the lease so
+  // the next claim immediately enters reconciliation instead of waiting 10 minutes.
+  if (hasUncertainAttempt) {
+    const updated = await prisma.modelInvocation.updateMany({
+      where: ownershipWhere,
+      data: {
+        leaseOwner: null,
+        leaseUntil: null,
+        errorClass: `${reason}_DURING_PROVIDER`,
+        errorMessage: '进程优雅关闭：Provider 结果不确定，已释放租约并等待对账',
+      },
+    });
+    return updated.count === 1 ? 'reconciliation' : 'already_released';
+  }
+
+  // Pre-provider or clean abort: mark ABORTED_RETRYABLE so reclaim can retry now.
+  if (
+    ['PREPARING', 'RESERVED', 'IN_FLIGHT', MODEL_INVOCATION_STATUS_ABORTED_RETRYABLE].includes(current.status)
+  ) {
+    const updated = await prisma.modelInvocation.updateMany({
+      where: {
+        ...ownershipWhere,
+        status: {
+          in: ['PREPARING', 'RESERVED', 'IN_FLIGHT', MODEL_INVOCATION_STATUS_ABORTED_RETRYABLE],
+        },
+      },
+      data: {
+        status: MODEL_INVOCATION_STATUS_ABORTED_RETRYABLE,
+        leaseOwner: null,
+        leaseUntil: null,
+        errorClass: reason,
+        errorMessage: '进程优雅关闭：调用在 Provider 完成前中止，可安全认领并重试',
+      },
+    });
+    return updated.count === 1 ? 'aborted_retryable' : 'already_released';
+  }
+
+  const updated = await prisma.modelInvocation.updateMany({
+    where: ownershipWhere,
+    data: {
+      leaseOwner: null,
+      leaseUntil: null,
+      errorClass: reason,
+      errorMessage: '进程优雅关闭：已释放本实例持有的模型调用租约',
+    },
+  });
+  return updated.count === 1 ? 'reconciliation' : 'already_released';
+}
+
+export async function claimModelInvocation(params: {
+  actorId: string;
+  descriptor: ModelInvocationDescriptor;
+  leaseOwner: string;
+}): Promise<ClaimedModelInvocation> {
+  const descriptor = normalizeDescriptor(params.descriptor);
+  const tenantId = descriptor.tenantId || 'platform';
+  const leaseUntil = new Date(Date.now() + INVOCATION_LEASE_MS);
+
+  try {
+    await assertModelInvocationOwner({
+      owner: descriptorOwner(descriptor),
+      tenantId,
+      actorId: params.actorId,
+    });
+  } catch (error) {
+    if (!(error instanceof ModelInvocationOwnerValidationError)) throw error;
+    throw new ModelInvocationError(error.code, error.message, 409, { cause: error });
+  }
+
+  const createData = (requestMetadata: Record<string, unknown>) => ({
+    tenantId,
+    actorId: params.actorId,
+    ownerKind: descriptor.ownerKind,
+    ownerId: descriptor.ownerId,
+    stableOperation: descriptor.stableOperation,
+    idempotencyKey: descriptor.idempotencyKey,
+    payloadHash: descriptor.payloadHash,
+    samplingId: descriptor.samplingId,
+    threadId: descriptor.threadId,
+    turnId: descriptor.turnId,
+    runId: descriptor.runId,
+    role: descriptor.role,
+    routeVersion: descriptor.routeVersion,
+    promptHash: descriptor.promptHash,
+    contextBaselineId: descriptor.contextBaselineId,
+    contextHash: descriptor.contextHash,
+    toolsetHash: descriptor.toolsetHash,
+    outputSchemaHash: descriptor.outputSchemaHash,
+    requestMetadata: toInputJson(requestMetadata),
+    status: 'PREPARING',
+    leaseOwner: params.leaseOwner,
+    leaseUntil,
+    fencingToken: 1,
+  });
+
+  try {
+    if (descriptor.ownerKind === 'AGENT_TURN') {
+      const result = await createAgentTurnModelInvocationWithBudget({
+        tenantId,
+        actorId: params.actorId,
+        turnId: descriptor.ownerId,
+        stableOperation: descriptor.stableOperation,
+        idempotencyKey: descriptor.idempotencyKey,
+        metadata: descriptor.metadata,
+        create: (tx, requestMetadata) => tx.modelInvocation.create({
+          data: createData(requestMetadata),
+          select: invocationClaimSelect,
+        }),
+      });
+      if (result.created) {
+        const claimed = asClaimedInvocation(result.value, false, descriptorOwner(descriptor), tenantId);
+        trackOwnedInvocation(claimed);
+        return claimed;
+      }
+    } else {
+      const created = await prisma.modelInvocation.create({
+        data: createData(descriptor.metadata || {}),
+        select: invocationClaimSelect,
+      });
+      const claimed = asClaimedInvocation(created, false, descriptorOwner(descriptor), tenantId);
+      trackOwnedInvocation(claimed);
+      return claimed;
+    }
+  } catch (error) {
+    if (error && typeof error === 'object' && (error as { code?: unknown }).code === 'MODEL_INVOCATION_OWNER_NOT_FOUND') {
+      throw new ModelInvocationError(
+        'MODEL_INVOCATION_OWNER_NOT_FOUND',
+        '模型调用对应的 AGENT_TURN 在原子认领期间不可见',
+        409,
+        { cause: error },
+      );
+    }
+    if (!isUniqueConstraintError(error)) throw error;
+  }
+
+  const existing = await prisma.modelInvocation.findUnique({
+    where: {
+      tenantId_actorId_stableOperation_idempotencyKey: {
+        tenantId,
+        actorId: params.actorId,
+        stableOperation: descriptor.stableOperation,
+        idempotencyKey: descriptor.idempotencyKey,
+      },
+    },
+  });
+  if (!existing) throw new ModelInvocationError('MODEL_INVOCATION_CLAIM_LOST', '模型调用幂等记录创建后不可见');
+  assertSameInvocationPayload(existing, descriptor);
+
+  if (['SETTLED', 'FAILED_BILLED'].includes(existing.status)) {
+    throw new ModelInvocationError(
+      'MODEL_INVOCATION_ALREADY_SETTLED',
+      `逻辑调用 ${existing.id} 已完成计费；调用方必须从领域 checkpoint 恢复结果，不得重新采样`,
+    );
+  }
+
+  const now = new Date();
+  if (existing.leaseUntil && existing.leaseUntil > now) {
+    throw new ModelInvocationError(
+      'MODEL_INVOCATION_IN_PROGRESS',
+      `逻辑调用 ${existing.id} 正在执行`,
+      409,
+      { retryAfterMs: existing.leaseUntil.getTime() - now.getTime() },
+    );
+  }
+
+  const attempts = await prisma.modelInvocationAttempt.findMany({
+    where: { invocationId: existing.id },
+    orderBy: { attempt: 'desc' },
+    select: {
+      status: true,
+      replayEnvelope: true,
+      replaySchemaVersion: true,
+      replayByteLength: true,
+      replayDigest: true,
+      replayExpiresAt: true,
+      replayConsumedAt: true,
+    },
+  });
+  const hasUncertainAttempt = attempts.some(attempt => ['SENT', 'UNKNOWN'].includes(attempt.status));
+  if (hasUncertainAttempt) {
+    await requireReconciliation(existing.id, 'EXPIRED_AFTER_PROVIDER_SEND');
+    throw reconciliationRequired(existing.id);
+  }
+  const hasSucceededAttempt = attempts.some(attempt => attempt.status === 'SUCCEEDED');
+  const replayableAttempt = attempts.find(attempt => (
+    attempt.status === 'SUCCEEDED'
+    && Boolean(attempt.replayEnvelope)
+    && attempt.replaySchemaVersion === 1
+    && Number(attempt.replayByteLength) >= 0
+    && Boolean(attempt.replayDigest)
+    && Boolean(attempt.replayExpiresAt && attempt.replayExpiresAt > now)
+    && !attempt.replayConsumedAt
+  ));
+  if (hasSucceededAttempt && !replayableAttempt) {
+    const expired = attempts.some(attempt => (
+      attempt.status === 'SUCCEEDED'
+      && attempt.replayExpiresAt !== null
+      && attempt.replayExpiresAt <= now
+    ));
+    await requireReconciliation(
+      existing.id,
+      expired ? 'PROVIDER_REPLAY_EXPIRED' : 'PROVIDER_RESULT_NOT_REPLAYABLE',
+    );
+    throw reconciliationRequired(existing.id);
+  }
+
+  const recoveringProviderResult = Boolean(replayableAttempt);
+  if (
+    existing.reconciliationState === 'REQUIRED'
+    && !recoveringProviderResult
+  ) {
+    throw reconciliationRequired(existing.id);
+  }
+
+  const resetsReleasedReservation = existing.status === 'FAILED_SAFE'
+    && existing.reservationStatus === 'RELEASED';
+
+  const reclaimed = await prisma.modelInvocation.updateMany({
+    where: {
+      id: existing.id,
+      fencingToken: existing.fencingToken,
+      OR: [{ leaseUntil: null }, { leaseUntil: { lte: now } }],
+      ...(recoveringProviderResult
+        ? { status: { in: ['PROVIDER_SUCCEEDED', 'SETTLING', 'RECONCILIATION_REQUIRED'] } }
+        : {
+            reconciliationState: { not: 'REQUIRED' },
+            status: {
+              in: ['PREPARING', 'RESERVED', 'FAILED_SAFE', MODEL_INVOCATION_STATUS_ABORTED_RETRYABLE],
+            },
+          }),
+    },
+    data: {
+      status: recoveringProviderResult
+        ? 'PROVIDER_SUCCEEDED'
+        : existing.reservationStatus === 'LOCKED' ? 'RESERVED' : 'PREPARING',
+      reconciliationState: recoveringProviderResult ? 'REPLAY_READY' : 'NONE',
+      errorClass: null,
+      errorMessage: null,
+      leaseOwner: params.leaseOwner,
+      leaseUntil,
+      fencingToken: { increment: 1 },
+      completedAt: null,
+      ...(resetsReleasedReservation ? {
+        reservedBudget: 0,
+        reservationStatus: 'NONE',
+        reservationBuckets: Prisma.DbNull,
+      } : {}),
+    },
+  });
+  if (reclaimed.count !== 1) {
+    throw new ModelInvocationError(
+      'MODEL_INVOCATION_IN_PROGRESS',
+      `逻辑调用 ${existing.id} 已由其他 Worker 接管`,
+      409,
+      { retryAfterMs: 5_000 },
+    );
+  }
+  const claimed = await prisma.modelInvocation.findUniqueOrThrow({
+    where: { id: existing.id },
+    select: invocationClaimSelect,
+  });
+  const reclaimedInvocation = asClaimedInvocation(
+    claimed,
+    recoveringProviderResult,
+    descriptorOwner(descriptor),
+    tenantId,
+  );
+  trackOwnedInvocation(reclaimedInvocation);
+  return reclaimedInvocation;
+}
+
+export async function reserveModelInvocationBudget(params: {
+  invocation: ClaimedModelInvocation;
+  amount: number;
+  businessLine: BusinessLine;
+  billingIntent: Record<string, unknown>;
+}) {
+  const amount = Math.max(1, Math.ceil(params.amount));
+  return prisma.$transaction(async tx => {
+    const current = await tx.modelInvocation.findFirst({
+      where: invocationFence(params.invocation),
+    });
+    if (!current) throw invocationFenced(params.invocation.id);
+    if (current.reconciliationState === 'REQUIRED') throw reconciliationRequired(current.id);
+    if (current.reservationStatus === 'LOCKED') {
+      if (current.reservedBudget < 1 || current.reservedBudget > amount) {
+        throw new ModelInvocationError('MODEL_INVOCATION_BUDGET_CONFLICT', '同一逻辑调用的预算 reservation 不一致');
+      }
+      const replayIntent = { ...params.billingIntent, reservedBudget: current.reservedBudget };
+      if (current.billingIntentHash && current.billingIntentHash !== stableModelHash(replayIntent)) {
+        throw new ModelInvocationError('MODEL_INVOCATION_BILLING_INTENT_CONFLICT', '同一逻辑调用的计费意图不一致');
+      }
+      return current;
+    }
+    if (current.reservationStatus !== 'NONE') {
+      throw new ModelInvocationError('MODEL_INVOCATION_RESERVATION_CONFLICT', '模型预算 reservation 状态不可重入');
+    }
+
+    const buckets = await EconomyService.lockTokens(
+      current.actorId,
+      amount,
+      params.businessLine,
+      { tx },
+    );
+    const reservedBudget = Math.max(1, buckets.total);
+    const settledIntent = { ...params.billingIntent, reservedBudget };
+    const updated = await tx.modelInvocation.updateMany({
+      where: {
+        ...invocationFence(params.invocation),
+        reservationStatus: 'NONE',
+      },
+      data: {
+        status: 'RESERVED',
+        reservedBudget,
+        reservationStatus: 'LOCKED',
+        reservationBuckets: toInputJson(buckets),
+        billingIntent: toInputJson(settledIntent),
+        billingIntentHash: stableModelHash(settledIntent),
+      },
+    });
+    if (updated.count !== 1) throw invocationFenced(params.invocation.id);
+    return tx.modelInvocation.findUniqueOrThrow({ where: { id: current.id } });
+  }, { isolationLevel: Prisma.TransactionIsolationLevel.Serializable });
+}
+
+/**
+ * Persists the same egress fence as a wallet reservation without locking NC.
+ * This is only valid for an author-funded provider route; it must never be
+ * used as a generic zero-cost bypass for platform models.
+ */
+export async function reserveAuthorKeyModelInvocation(params: {
+  invocation: ClaimedModelInvocation;
+  businessLine: BusinessLine;
+  billingIntent: Record<string, unknown> & {
+    billingSource: 'AUTHOR_KEY';
+    connectionId: string;
+    entitlementSourceId: string;
+  };
+}) {
+  const billingIntentHash = stableModelHash(params.billingIntent);
+  return prisma.$transaction(async tx => {
+    const current = await tx.modelInvocation.findFirst({ where: invocationFence(params.invocation) });
+    if (!current) throw invocationFenced(params.invocation.id);
+    if (current.reconciliationState === 'REQUIRED') throw reconciliationRequired(current.id);
+    if (current.reservationStatus === 'LOCKED') {
+      if (current.reservedBudget !== 0) {
+        throw new ModelInvocationError('MODEL_INVOCATION_BUDGET_CONFLICT', '作者自带模型调用不应持有故事令预算');
+      }
+      if (current.billingIntentHash && current.billingIntentHash !== billingIntentHash) {
+        throw new ModelInvocationError('MODEL_INVOCATION_BILLING_INTENT_CONFLICT', '同一逻辑调用的作者模型计费意图不一致');
+      }
+      return current;
+    }
+    if (current.reservationStatus !== 'NONE') {
+      throw new ModelInvocationError('MODEL_INVOCATION_RESERVATION_CONFLICT', '模型 reservation 状态不可重入');
+    }
+    const updated = await tx.modelInvocation.updateMany({
+      where: { ...invocationFence(params.invocation), reservationStatus: 'NONE' },
+      data: {
+        status: 'RESERVED',
+        reservedBudget: 0,
+        reservationStatus: 'LOCKED',
+        reservationBuckets: Prisma.DbNull,
+        billingIntent: toInputJson({ ...params.billingIntent, businessLine: params.businessLine }),
+        billingIntentHash,
+      },
+    });
+    if (updated.count !== 1) throw invocationFenced(params.invocation.id);
+    return tx.modelInvocation.findUniqueOrThrow({ where: { id: current.id } });
+  }, { isolationLevel: Prisma.TransactionIsolationLevel.Serializable });
+}
+
+export function resolvePreparedAttemptDescriptor(params: {
+  descriptor: ProviderAttemptDescriptor;
+  rejectedCount: number;
+  prepareAttempt?: (ctx: {
+    rejectedCount: number;
+    descriptor: ProviderAttemptDescriptor;
+  }) => ProviderAttemptDescriptor;
+}): ProviderAttemptDescriptor {
+  return params.prepareAttempt
+    ? params.prepareAttempt({
+        rejectedCount: params.rejectedCount,
+        descriptor: params.descriptor,
+      })
+    : params.descriptor;
+}
+
+export async function executeTrackedProviderAttempt<T>(params: {
+  descriptor: ProviderAttemptDescriptor;
+  invoke: (recordWireRequest: (body: unknown, capacity?: ModelInputCapacity) => Promise<void>) => Promise<T>;
+  outcome: (value: T) => ProviderAttemptOutcome;
+  replay: ProviderReplayCodec<T>;
+  outputPolicy?: ProviderOutputPolicy;
+  /**
+   * Side-effect-free descriptor for replay restore. Must not mutate the first
+   * attempt's live request body. Defaults to `prepareAttempt` when omitted.
+   */
+  previewAttempt?: (ctx: {
+    rejectedCount: number;
+    descriptor: ProviderAttemptDescriptor;
+  }) => ProviderAttemptDescriptor;
+  /**
+   * Called before each physical send. Use persisted `rejectedCount`, not process
+   * memory, so a worker restart still adapts the next request body and hash.
+   */
+  prepareAttempt?: (ctx: {
+    rejectedCount: number;
+    descriptor: ProviderAttemptDescriptor;
+  }) => ProviderAttemptDescriptor;
+}): Promise<T> {
+  const runtime = invocationContext.getStore();
+  if (!runtime) {
+    throw new ModelInvocationError(
+      'MODEL_INVOCATION_CONTEXT_REQUIRED',
+      'Provider 外发必须由持久化 ModelInvocation、预算 reservation 和领域任务共同持有',
+      500,
+    );
+  }
+
+  try {
+    assertModelInvocationReplayProtectionConfigured();
+  } catch (error) {
+    throw new ModelInvocationError(
+      'MODEL_INVOCATION_REPLAY_PROTECTION_UNAVAILABLE',
+      'Provider 外发前无法建立可重放结果保护，已拒绝发送请求',
+      503,
+      { cause: error },
+    );
+  }
+
+  await assertClaimedInvocationOwner(runtime);
+
+  const outputPolicy = params.outputPolicy
+    ? { ...params.outputPolicy, maxAttempts: Math.max(1, Math.min(2, Math.floor(params.outputPolicy.maxAttempts))) }
+    : null;
+
+  const replayRejectedCount = outputPolicy
+    ? await countRejectedOutputAttempts(runtime.id)
+    : 0;
+  const replayDescriptor = resolvePreparedAttemptDescriptor({
+    descriptor: params.descriptor,
+    rejectedCount: replayRejectedCount,
+    prepareAttempt: params.previewAttempt ?? params.prepareAttempt,
+  });
+
+  const recovered = await restoreTrackedProviderAttempt(
+    runtime,
+    replayDescriptor,
+    params.replay.restore,
+  );
+  if (recovered.found) return recovered.value;
+
+  while (true) {
+    if (outputPolicy) {
+      // On process resume, never re-send when a prior REJECTED_OUTPUT already
+      // proves the attempt is non-retryable (e.g. length). Reconstruct the
+      // original classification from stored finishReason/errorClass.
+      const latestRejected = await latestRejectedOutputAttempt(runtime.id);
+      if (latestRejected) {
+        const reconstructed = outcomeFromRejectedAttempt(latestRejected);
+        if (!outputPolicy.canRetry(reconstructed)) {
+          throw rejectionErrorFromRejectedAttempt(latestRejected, outputPolicy);
+        }
+        const rejectedCount = await countRejectedOutputAttempts(runtime.id);
+        if (rejectedCount >= outputPolicy.maxAttempts) {
+          throw rejectionErrorFromRejectedAttempt(latestRejected, outputPolicy);
+        }
+      }
+    }
+
+    const rejectedCount = outputPolicy
+      ? await countRejectedOutputAttempts(runtime.id)
+      : 0;
+    const descriptor = resolvePreparedAttemptDescriptor({
+      descriptor: params.descriptor,
+      rejectedCount,
+      prepareAttempt: params.prepareAttempt ?? params.previewAttempt,
+    });
+    const attempt = await beginProviderAttempt(runtime, descriptor);
+    let value: T;
+    let wirePreparationError: unknown;
+    let wireRequestRecorded = false;
+    try {
+      value = await params.invoke(async (body, capacity = {}) => {
+        try {
+          // SDK-backed transports finish serialization inside invoke. Persist
+          // its final sizes before fetch, while keeping the old replay identity.
+          if (wireRequestRecorded) throw new Error('PROVIDER_ATTEMPT_MULTIPLE_SENDS');
+          wireRequestRecorded = true;
+          const policy = modelInputBudgetPolicy(capacity);
+          const accounting = { ...modelInputBill(body, policy.tokens), policy, wireRequestHash: stableModelHash(body) };
+          await prisma.$transaction(async tx => {
+            if (!await tx.modelInvocation.findFirst({ where: invocationFence(runtime), select: { id: true } })) throw invocationFenced(runtime.id);
+            const updated = await tx.modelInvocationAttempt.updateMany({
+              where: { id: attempt.id, invocationId: runtime.id, status: 'SENT' },
+              data: { usage: toInputJson({ inputBudget: accounting }) },
+            });
+            if (updated.count !== 1) throw invocationFenced(runtime.id);
+          }, { isolationLevel: Prisma.TransactionIsolationLevel.Serializable });
+          descriptor.requestAccounting = accounting;
+          checkModelInputCapacity(body, capacity);
+        } catch (error) {
+          // The SDK may wrap local pre-send errors as network failures. Keep
+          // the original classification: an over-budget request was not sent.
+          wirePreparationError = error;
+          throw error;
+        }
+      });
+    } catch (error) {
+      if (wirePreparationError) error = wirePreparationError;
+      if (error instanceof ModelInvocationError) {
+        void scheduleAuthorAiDebugLog(runtime, descriptor, attempt.id, {
+          status: 'FAILED',
+          error,
+        });
+        throw error;
+      }
+      const safeRejection = providerDefinitelyRejected(error);
+      await failProviderAttempt(runtime, attempt.id, error, safeRejection);
+      void scheduleAuthorAiDebugLog(runtime, descriptor, attempt.id, {
+        status: safeRejection ? 'PROVIDER_REJECTED' : 'RECONCILIATION_REQUIRED',
+        error,
+      });
+      if (!safeRejection) {
+        throw new ModelInvocationError(
+          'MODEL_INVOCATION_RECONCILIATION_REQUIRED',
+          'Provider 结果不确定，已停止自动重试并等待 reconciliation',
+          503,
+          { cause: error },
+        );
+      }
+      throw error;
+    }
+
+    const evaluatedOutcome = evaluateProviderAttemptOutcome(value, params.outcome);
+    if (!evaluatedOutcome.accepted) {
+      try {
+        const rejectedCount = await rejectProviderOutputAttempt(
+          runtime,
+          attempt.id,
+          evaluatedOutcome.outcome,
+          evaluatedOutcome.error,
+        );
+        void scheduleAuthorAiDebugLog(runtime, descriptor, attempt.id, {
+          status: 'REJECTED_OUTPUT',
+          outcome: evaluatedOutcome.outcome,
+          error: evaluatedOutcome.error,
+        });
+        if (
+          outputPolicy
+          && outputPolicy.canRetry(evaluatedOutcome.outcome)
+          && rejectedCount < outputPolicy.maxAttempts
+        ) continue;
+      } catch (error) {
+        await requireReconciliation(runtime.id, 'PROVIDER_RESULT_PERSISTENCE_FAILED', runtime).catch(() => undefined);
+        throw new ModelInvocationError(
+          'MODEL_INVOCATION_RECONCILIATION_REQUIRED',
+          'Provider 已返回，但不可用结果回执未能可靠持久化；禁止自动重试',
+          503,
+          { cause: error },
+        );
+      }
+      throw evaluatedOutcome.error;
+    }
+    const outcome = evaluatedOutcome.outcome;
+    if (outputPolicy && !outputPolicy.accepts(outcome)) {
+      const rejection = outputPolicy.rejectionError(outcome);
+      try {
+        const rejectedCount = await rejectProviderOutputAttempt(runtime, attempt.id, outcome, rejection);
+        void scheduleAuthorAiDebugLog(runtime, descriptor, attempt.id, {
+          status: 'REJECTED_OUTPUT',
+          outcome,
+          error: rejection,
+        });
+        if (outputPolicy.canRetry(outcome) && rejectedCount < outputPolicy.maxAttempts) continue;
+      } catch (error) {
+        await requireReconciliation(runtime.id, 'PROVIDER_RESULT_PERSISTENCE_FAILED', runtime).catch(() => undefined);
+        throw new ModelInvocationError(
+          'MODEL_INVOCATION_RECONCILIATION_REQUIRED',
+          'Provider 已返回，但空结果回执未能可靠持久化；禁止自动重试',
+          503,
+          { cause: error },
+        );
+      }
+      throw rejection;
+    }
+
+    // A usable Provider result now exists. Failure to persist its protected
+    // replay is uncertain and must never fall through to another Key or model.
+    try {
+      const replayValue = params.replay.serialize(value);
+      await completeProviderAttempt(runtime, attempt.id, outcome, replayValue);
+      void scheduleAuthorAiDebugLog(runtime, descriptor, attempt.id, {
+        status: 'SUCCEEDED',
+        outcome,
+      });
+    } catch (error) {
+      await requireReconciliation(
+        runtime.id,
+        error instanceof ModelInvocationReplayError ? error.code : 'PROVIDER_RESULT_PERSISTENCE_FAILED',
+        runtime,
+      ).catch(() => undefined);
+      throw new ModelInvocationError(
+        'MODEL_INVOCATION_RECONCILIATION_REQUIRED',
+        'Provider 已返回，但响应回执未能可靠持久化；禁止自动重试',
+        503,
+        { cause: error },
+      );
+    }
+    return value;
+  }
+}
+
+function scheduleAuthorAiDebugLog(
+  runtime: ModelInvocationRuntimeContext,
+  descriptor: ProviderAttemptDescriptor,
+  attemptId: string,
+  params: {
+    status: string;
+    outcome?: ProviderAttemptOutcome;
+    error?: unknown;
+  },
+) {
+  void (async () => {
+    const invocation = await prisma.modelInvocation.findUnique({
+      where: { id: runtime.id },
+      select: {
+        role: true,
+        ownerKind: true,
+        ownerId: true,
+        stableOperation: true,
+        requestMetadata: true,
+      },
+    }).catch(() => null);
+    const metadata = invocation?.requestMetadata && typeof invocation.requestMetadata === 'object'
+      ? invocation.requestMetadata as Record<string, unknown>
+      : {};
+    const usage = params.outcome?.usage && typeof params.outcome.usage === 'object'
+      ? params.outcome.usage as Record<string, unknown>
+      : {};
+    const promptTokens = Number(usage.prompt_tokens || usage.input_tokens || 0) || 0;
+    const completionTokens = Number(usage.completion_tokens || usage.output_tokens || 0) || 0;
+    const err = params.error;
+    const errorCode = err && typeof err === 'object' && 'code' in err
+      ? String((err as { code?: unknown }).code || '')
+      : '';
+    await recordAuthorAiDebugLog({
+      userId: runtime.actorId,
+      invocationId: runtime.id,
+      attemptId,
+      ownerKind: invocation?.ownerKind || runtime.owner.kind,
+      ownerId: invocation?.ownerId || runtime.owner.id,
+      stableOperation: invocation?.stableOperation || null,
+      role: invocation?.role || null,
+      provider: descriptor.provider,
+      channelId: descriptor.channelId || null,
+      modelId: descriptor.modelId || null,
+      providerModel: descriptor.providerModel || null,
+      status: params.status,
+      finishReason: params.outcome?.finishReason || null,
+      input: descriptor.debugInput || null,
+      outputText: params.outcome?.debugOutput === undefined
+        ? params.outcome?.outputText || null
+        : JSON.stringify(params.outcome.debugOutput),
+      inputUsage: promptTokens,
+      outputUsage: completionTokens,
+      totalUsage: promptTokens + completionTokens,
+      errorClass: errorCode || (err instanceof Error ? err.name : null),
+      errorMessage: err instanceof Error ? err.message : (err ? String(err) : null),
+      storyId: typeof metadata.storyId === 'string' ? metadata.storyId : null,
+      chapterId: typeof metadata.chapterId === 'string' ? metadata.chapterId : null,
+      metadata: {
+        ownerKind: invocation?.ownerKind || runtime.owner.kind,
+      },
+    });
+  })().catch(() => undefined);
+}
+
+export async function settleModelInvocation<T>(params: {
+  invocation: ClaimedModelInvocation;
+  result: T;
+  text: string;
+  usage?: unknown;
+  modelId?: string | null;
+  storyId?: string | null;
+  businessLine: BusinessLine;
+  agentRole: string;
+  metadata: Record<string, unknown>;
+  settlement?: Pick<SettleOptions, 'fixedCost' | 'fixedModelCostRMB' | 'fixedIncomeRMB' | 'pricingVersionId' | 'pricingSnapshotOverride' | 'usageLines'>;
+  onSettled?: (
+    tx: Prisma.TransactionClient,
+    result: T,
+    billing: Awaited<ReturnType<typeof EconomyService.settleTokens>>,
+  ) => Promise<void>;
+}) {
+  try {
+    return await settleInvocationInternal({
+      ...params,
+      terminalStatus: 'SETTLED',
+    });
+  } catch (error) {
+    if (
+      error instanceof ModelInvocationError
+      && error.code === 'MODEL_INVOCATION_RECONCILIATION_REQUIRED'
+    ) throw error;
+    // Determined unusable output: do not release here. The orchestrator billing
+    // catch owns settleFailed → failAndRelease exactly once. Releasing here and
+    // rethrowing would double-enter failAndRelease and can overwrite the
+    // original error with MODEL_INVOCATION_FENCED.
+    if (
+      error instanceof ModelInvocationError
+      && error.code === 'MODEL_INVOCATION_OUTPUT_REJECTED'
+    ) {
+      throw error;
+    }
+    if (await agentTurnOwnerWasCanceled(params.invocation)) {
+      try {
+        return await settleInvocationInternal({
+          ...params,
+          metadata: {
+            ...params.metadata,
+            ownerCanceledAfterProviderEgress: true,
+            domainCheckpointSkipped: true,
+          },
+          terminalStatus: 'SETTLED',
+          onSettled: undefined,
+        });
+      } catch (canceledSettlementError) {
+        error = canceledSettlementError;
+      }
+    }
+    const replayReady = await markReplayReadyOrRequireReconciliation(
+      params.invocation,
+      'DOMAIN_CHECKPOINT_OR_SETTLEMENT_FAILED',
+    );
+    throw new ModelInvocationError(
+      replayReady
+        ? 'MODEL_INVOCATION_REPLAY_READY'
+        : 'MODEL_INVOCATION_DOMAIN_CHECKPOINT_FAILED',
+      replayReady
+        ? 'Provider 结果已受保护保存；领域 checkpoint 可重试恢复，禁止重新采样或重复计费'
+        : 'Provider 已返回，但没有可用的受保护结果；reservation 保持锁定并进入明确 reconciliation',
+      503,
+      { cause: error },
+    );
+  }
+}
+
+export async function settleFailedModelInvocation(params: {
+  invocation: ClaimedModelInvocation;
+  error: unknown;
+  storyId?: string | null;
+  businessLine: BusinessLine;
+  agentRole: string;
+  modelId?: string | null;
+  metadata: Record<string, unknown>;
+  settlement?: Pick<SettleOptions, 'fixedCost' | 'fixedModelCostRMB' | 'fixedIncomeRMB' | 'pricingVersionId' | 'pricingSnapshotOverride' | 'usageLines'>;
+  onSettled?: (
+    tx: Prisma.TransactionClient,
+    error: unknown,
+    billing: Awaited<ReturnType<typeof EconomyService.settleTokens>>,
+  ) => Promise<void>;
+}) {
+  const summary = await getInvocationAttemptSummary(params.invocation.id);
+  if (summary.hasUnknown) {
+    await requireReconciliation(params.invocation.id, 'PROVIDER_OUTCOME_UNKNOWN', params.invocation);
+    throw reconciliationRequired(params.invocation.id);
+  }
+  // Only REJECTED_OUTPUT (no SUCCEEDED): determined unusable provider result.
+  // Do not bill as success-path FAILED_BILLED; let caller failAndRelease → FAILED_SAFE
+  // with rejectedOutputUsage preserved. Never escalate to PROVIDER_ATTEMPT_MISSING.
+  if (!summary.hasSucceeded) return null;
+  try {
+    return await settleInvocationInternal({
+      invocation: params.invocation,
+      result: null,
+      text: '',
+      usage: summary.usage,
+      modelId: params.modelId,
+      storyId: params.storyId,
+      businessLine: params.businessLine,
+      agentRole: params.agentRole,
+      metadata: params.metadata,
+      settlement: params.settlement,
+      terminalStatus: 'FAILED_BILLED',
+      terminalError: params.error,
+      ...(params.onSettled ? {
+        onSettled: async (tx, _result, billing) => params.onSettled!(tx, params.error, billing),
+      } : {}),
+    });
+  } catch (error) {
+    if (
+      error instanceof ModelInvocationError
+      && error.code === 'MODEL_INVOCATION_RECONCILIATION_REQUIRED'
+    ) throw error;
+    if (await agentTurnOwnerWasCanceled(params.invocation)) {
+      try {
+        return await settleInvocationInternal({
+          invocation: params.invocation,
+          result: null,
+          text: '',
+          usage: summary.usage,
+          modelId: params.modelId,
+          storyId: params.storyId,
+          businessLine: params.businessLine,
+          agentRole: params.agentRole,
+          metadata: {
+            ...params.metadata,
+            ownerCanceledAfterProviderEgress: true,
+            domainCheckpointSkipped: true,
+          },
+          settlement: params.settlement,
+          terminalStatus: 'FAILED_BILLED',
+          terminalError: params.error,
+        });
+      } catch (canceledSettlementError) {
+        error = canceledSettlementError;
+      }
+    }
+    const replayReady = await markReplayReadyOrRequireReconciliation(
+      params.invocation,
+      'FAILED_RESULT_CHECKPOINT_OR_SETTLEMENT_FAILED',
+    );
+    throw new ModelInvocationError(
+      replayReady
+        ? 'MODEL_INVOCATION_REPLAY_READY'
+        : 'MODEL_INVOCATION_DOMAIN_CHECKPOINT_FAILED',
+      replayReady
+        ? 'Provider 结果已保存；失败领域回执可从同一结果恢复，禁止重新采样或重复计费'
+        : 'Provider 已返回但没有可用的受保护结果；reservation 保持锁定并进入明确 reconciliation',
+      503,
+      { cause: error },
+    );
+  }
+}
+
+async function agentTurnOwnerWasCanceled(invocation: ClaimedModelInvocation) {
+  if (invocation.owner.kind !== 'AGENT_TURN') return false;
+  const owner = await prisma.agentTurn.findFirst({
+    where: {
+      id: invocation.owner.id,
+      tenantId: invocation.tenantId,
+      actorId: invocation.actorId,
+      status: 'CANCELED',
+    },
+    select: { id: true },
+  });
+  return Boolean(owner);
+}
+
+export async function failAndReleaseModelInvocation(
+  invocation: ClaimedModelInvocation,
+  error: unknown,
+  onReleased?: (
+    tx: Prisma.TransactionClient,
+    error: unknown,
+    billing: Awaited<ReturnType<typeof EconomyService.settleTokens>>,
+  ) => Promise<void>,
+) {
+  const summary = await getInvocationAttemptSummary(invocation.id);
+  if (summary.hasUnknown || summary.hasSucceeded) {
+    if (!summary.hasUnknown && summary.hasSucceeded) {
+      const replayReady = await markReplayReadyOrRequireReconciliation(
+        invocation,
+        'UNSETTLED_PROVIDER_RESULT',
+      );
+      if (replayReady) {
+        throw new ModelInvocationError(
+          'MODEL_INVOCATION_REPLAY_READY',
+          'Provider 结果已保存并等待原领域 checkpoint 恢复，禁止释放 reservation 或重新采样',
+          503,
+        );
+      }
+    } else {
+      await requireReconciliation(invocation.id, 'PROVIDER_OUTCOME_UNKNOWN', invocation);
+    }
+    throw reconciliationRequired(invocation.id);
+  }
+
+  await prisma.$transaction(async tx => {
+    const current = await tx.modelInvocation.findFirst({ where: invocationFence(invocation) });
+    if (!current) throw invocationFenced(invocation.id);
+    const noChargeBilling = {
+      actualCost: 0,
+      platformCut: 0,
+      pricingVersionId: null,
+      incomeRMB: 0,
+      modelCostRMB: 0,
+      chargedNC: 0,
+      failureCostAbsorbed: true,
+      invocationTerminal: 'FAILED_SAFE',
+    };
+    if (current.reservationStatus === 'LOCKED' && current.reservedBudget > 0) {
+      await EconomyService.releaseLock(current.actorId, current.reservedBudget, {
+        tx,
+        lockedBuckets: parseModelInvocationLockedBuckets(current.reservationBuckets),
+        metadata: {
+          modelInvocationId: current.id,
+          reason: 'MODEL_RESULT_UNUSABLE_NO_CHARGE',
+        },
+      });
+    }
+    if (onReleased) {
+      await onReleased(
+        tx,
+        error,
+        noChargeBilling as Awaited<ReturnType<typeof EconomyService.settleTokens>>,
+      );
+    }
+    const updated = await tx.modelInvocation.updateMany({
+      where: invocationFence(invocation),
+      data: {
+        status: 'FAILED_SAFE',
+        reservationStatus: current.reservationStatus === 'LOCKED' ? 'RELEASED' : current.reservationStatus,
+        errorClass: errorClass(error),
+        errorMessage: errorMessage(error),
+        billing: toInputJson({
+          ...noChargeBilling,
+          chargedNC: 0,
+          failureCostAbsorbed: true,
+          rejectedOutputUsage: summary.rejectedOutputUsage,
+        }),
+        actualCost: 0,
+        leaseOwner: null,
+        leaseUntil: null,
+        completedAt: new Date(),
+      },
+    });
+    if (updated.count !== 1) throw invocationFenced(invocation.id);
+  }, { isolationLevel: Prisma.TransactionIsolationLevel.Serializable });
+  untrackOwnedInvocation(invocation.id);
+}
+
+/**
+ * Lets an author explicitly abandon an indeterminate Provider attempt and start
+ * a fresh domain job. The old attempt remains auditable, but its author wallet
+ * hold is released and any eventual upstream cost becomes platform liability.
+ */
+export async function releaseUnknownModelInvocationsForAuthorRetry(params: {
+  tx: Prisma.TransactionClient;
+  actorId: string;
+  ownerKind: ModelInvocationOwnerKind;
+  ownerId: string;
+  recoveryKey: string;
+}) {
+  const invocations = await params.tx.modelInvocation.findMany({
+    where: {
+      actorId: params.actorId,
+      ownerKind: params.ownerKind,
+      ownerId: params.ownerId,
+      reservationStatus: 'LOCKED',
+      completedAt: null,
+      OR: [
+        { reconciliationState: 'REQUIRED' },
+        { status: { in: ['UNKNOWN', 'RECONCILIATION_REQUIRED'] } },
+      ],
+    },
+    include: {
+      attempts: {
+        select: { status: true },
+      },
+    },
+    orderBy: { createdAt: 'asc' },
+  });
+
+  for (const invocation of invocations) {
+    const hasUnknownProviderOutcome = invocation.attempts.some(attempt => (
+      attempt.status === 'SENT' || attempt.status === 'UNKNOWN'
+    ));
+    if (!hasUnknownProviderOutcome) {
+      throw new ModelInvocationError(
+        'MODEL_INVOCATION_AUTHOR_RETRY_NOT_ALLOWED',
+        '只有无法确认供应商结果的调用才能由作者放弃后重新发起',
+        409,
+      );
+    }
+
+    await releaseUnknownInvocationForRecovery({
+      ...params,
+      invocation,
+      action: 'MODEL_INVOCATION_AUTHOR_RETRY_RELEASE',
+      reconciliationState: 'RESOLVED_AUTHOR_RETRY',
+      errorClass: 'PROVIDER_OUTCOME_UNKNOWN_AUTHOR_RETRIED',
+      errorMessage: '作者已放弃本次不确定结果并重新发起，作者额度已释放，潜在供应商成本由平台承担',
+    });
+  }
+
+  return invocations.map(invocation => invocation.id);
+}
+
+async function releaseUnknownInvocationForRecovery(params: {
+  tx: Prisma.TransactionClient;
+  actorId: string;
+  invocation: Prisma.ModelInvocationGetPayload<Record<string, never>>;
+  recoveryKey: string;
+  action: string;
+  reconciliationState: string;
+  errorClass: string;
+  errorMessage: string;
+  recoveryMetadata?: JsonRecord;
+  requestMetadata?: JsonRecord;
+}) {
+  const { invocation } = params;
+  const recoveryReceiptId = `${params.recoveryKey}:${invocation.id}`;
+  if (invocation.reservedBudget > 0) {
+    await EconomyService.releaseLockedBucketsStrict({
+      tx: params.tx,
+      userId: invocation.actorId,
+      amount: invocation.reservedBudget,
+      lockedBuckets: parseModelInvocationLockedBuckets(invocation.reservationBuckets),
+      reconciliationId: recoveryReceiptId,
+      metadata: {
+        action: params.action,
+        modelInvocationId: invocation.id,
+        ownerKind: invocation.ownerKind,
+        ownerId: invocation.ownerId,
+        platformLiability: true,
+      },
+    });
+  }
+
+  const completedAt = new Date();
+  const updated = await params.tx.modelInvocation.updateMany({
+    where: {
+      id: invocation.id,
+      updatedAt: invocation.updatedAt,
+      reservationStatus: 'LOCKED',
+      completedAt: null,
+    },
+    data: {
+      ...(params.requestMetadata ? { requestMetadata: toInputJson(params.requestMetadata) } : {}),
+      status: 'FAILED_SAFE',
+      reconciliationState: params.reconciliationState,
+      reservationStatus: 'RELEASED',
+      actualCost: 0,
+      billing: toInputJson({
+        actualCost: 0,
+        chargedNC: 0,
+        failureCostAbsorbed: true,
+        platformLiability: true,
+        providerOutcomeUnknown: true,
+        recoveryReceiptId,
+        ...params.recoveryMetadata,
+      }),
+      errorClass: params.errorClass,
+      errorMessage: params.errorMessage,
+      leaseOwner: null,
+      leaseUntil: null,
+      completedAt,
+    },
+  });
+  if (updated.count !== 1) throw invocationFenced(invocation.id);
+
+  await params.tx.auditLog.create({
+    data: {
+      userId: params.actorId,
+      action: params.action,
+      entityId: invocation.id,
+      details: toInputJson({
+        ownerKind: invocation.ownerKind,
+        ownerId: invocation.ownerId,
+        recoveryKey: params.recoveryKey,
+        recoveryReceiptId,
+        ...params.recoveryMetadata,
+        reservedBudget: invocation.reservedBudget,
+        providerOutcomeUnknown: true,
+        platformLiability: true,
+        completedAt: completedAt.toISOString(),
+      }),
+    },
+  });
+}
+
+/** Keep the author task alive while recording uncertain upstream cost separately.
+ * Only a model decision can be compensated here. Domain writes retain their own
+ * effect reconciliation; BYOK never spends another customer-owned request.
+ */
+export async function prepareAgentReasoningRecovery(lease: AgentTurnExecutionLease) {
+  if (process.env.BOOK_AGENT_REASONING_RECOVERY_ENABLED !== 'true') return null;
+  return prisma.$transaction(async tx => {
+    await assertAgentTurnExecution(tx, lease);
+    const turn = await tx.agentTurn.findUniqueOrThrow({ where: { id: lease.turnId } });
+    const used = await tx.modelInvocation.count({ where: {
+      tenantId: lease.tenantId, actorId: lease.actorId, ownerKind: 'AGENT_TURN', ownerId: lease.turnId,
+      reconciliationState: AGENT_REASONING_RECOVERY_RESOLVED,
+    } });
+    const retryAfterMs = 2000 * (used + 1);
+    if (used >= AGENT_REASONING_RECOVERY_LIMIT
+      || Date.now() + retryAfterMs >= (turn.executionStartedAt ?? turn.createdAt).getTime() + AGENT_REASONING_RECOVERY_DEADLINE_MS) return null;
+    // Inspect the newest invocation, not an older unknown result from a tool.
+    const source = await tx.modelInvocation.findFirst({ where: {
+      tenantId: lease.tenantId, actorId: lease.actorId, ownerKind: 'AGENT_TURN', ownerId: lease.turnId,
+    }, orderBy: { createdAt: 'desc' }, include: { attempts: { orderBy: { attempt: 'desc' } } } });
+    if (!source || !source.samplingId
+      || !eligibleAgentReasoningRecovery(source, jsonRecord(source.billingIntent)?.billingSource)) return null;
+    await releaseUnknownInvocationForRecovery({
+      tx, actorId: lease.actorId, invocation: source,
+      recoveryKey: `${lease.turnId}:${AGENT_REASONING_RECOVERY_POLICY}:${used + 1}`,
+      action: 'MODEL_INVOCATION_AGENT_REASONING_RECOVERY',
+      reconciliationState: AGENT_REASONING_RECOVERY_RESOLVED,
+      errorClass: AGENT_REASONING_RECOVERY_SCHEDULED,
+      errorMessage: '主决策连接中断，旧额度已释放；潜在供应商成本由平台承担，原任务有界继续',
+      recoveryMetadata: { policy: AGENT_REASONING_RECOVERY_POLICY, recoveryAttempt: used + 1 },
+    });
+    const sampling = await tx.agentSampling.updateMany({ where: {
+      id: source.samplingId, turnId: lease.turnId, status: { in: ['STARTED', 'FAILED'] },
+    }, data: { status: 'FAILED', errorCode: AGENT_REASONING_RECOVERY_SCHEDULED, completedAt: new Date() } });
+    if (sampling.count !== 1) throw invocationFenced(source.id);
+    const { appendAgentItemInTransaction } = await import('../bookAgent/protocol');
+    await appendAgentItemInTransaction(tx, { tenantId: lease.tenantId as 'platform', actorId: lease.actorId }, {
+      threadId: turn.threadId, turnId: turn.id, kind: 'progress', executionLease: lease,
+      payload: { status: 'RUNNING', code: AGENT_REASONING_RECOVERY_SCHEDULED,
+        recoveryAttempt: used + 1, message: '模型连接中断，已保留进度，正在自动恢复。' },
+      provenance: { source: AGENT_REASONING_RECOVERY_POLICY },
+    });
+    const deferred = await tx.agentTurn.updateMany({ where: {
+      id: lease.turnId, tenantId: lease.tenantId, actorId: lease.actorId,
+      status: 'RUNNING', leaseOwner: lease.workerId, fencingToken: lease.fencingToken,
+      leaseUntil: { gte: new Date() },
+    }, data: { leaseOwner: `book-agent-turn:deferred:${lease.turnId}`,
+      leaseUntil: new Date(Date.now() + retryAfterMs), completedAt: null } });
+    if (deferred.count !== 1) throw invocationFenced(source.id);
+    return { sourceInvocationId: source.id, recoveryAttempt: used + 1, retryAfterMs };
+  }, { isolationLevel: Prisma.TransactionIsolationLevel.Serializable });
+}
+
+export type GenesisBlueprintFallbackReceipt = BlueprintFallbackRoute & {
+  policy: typeof BLUEPRINT_FALLBACK_POLICY;
+  sourceInvocationId: string;
+  runtimeConfigHash: string;
+};
+
+/**
+ * A narrowly scoped, platform-funded compensation, not a safe Provider retry.
+ * The UNKNOWN attempt survives. Releasing its hold also durably consumes this
+ * Run's single fallback budget, before any DeepSeek egress can occur.
+ */
+export async function prepareGenesisBlueprintFallback(params: {
+  actorId: string;
+  descriptor: ModelInvocationDescriptor;
+  route: BlueprintFallbackRoute | null;
+  runtimeConfigHash: string;
+}): Promise<GenesisBlueprintFallbackReceipt | null> {
+  const descriptor = normalizeDescriptor(params.descriptor);
+  if (descriptor.ownerKind !== 'AGENT_RUN' || !descriptor.stableOperation.startsWith('genesis.blueprint.')
+    || !['genesis-blueprint-semantic-stage@1', BLUEPRINT_RETRY_ROUTE].includes(descriptor.routeVersion)) return null;
+  const tenantId = descriptor.tenantId || 'platform';
+  return prisma.$transaction(async tx => {
+    const source = await tx.modelInvocation.findFirst({ where: {
+      tenantId, actorId: params.actorId, ownerKind: 'AGENT_RUN', ownerId: descriptor.ownerId,
+      stableOperation: descriptor.stableOperation, idempotencyKey: descriptor.idempotencyKey,
+    }, include: { attempts: { orderBy: { attempt: 'desc' } } } });
+    if (!source) return null;
+    assertSameInvocationPayload(source, descriptor);
+    const metadata = (jsonRecord(source.requestMetadata) || {});
+    const stored = (jsonRecord(metadata.blueprintFallback) || {});
+    if (source.reconciliationState === BLUEPRINT_FALLBACK_RESOLVED) {
+      if (stored.policy !== BLUEPRINT_FALLBACK_POLICY || stored.sourceInvocationId !== source.id
+        || stored.runtimeConfigHash !== params.runtimeConfigHash
+        || !params.route || stored.modelId !== params.route.modelId || stored.channelId !== params.route.channelId
+        || stored.sourceModelId !== params.route.sourceModelId || stored.sourceChannelId !== params.route.sourceChannelId) {
+        throw new ModelInvocationError('GENESIS_BLUEPRINT_FALLBACK_STALE', '蓝图补偿路由配置已经变化，已停止外发', 409);
+      }
+      return stored as GenesisBlueprintFallbackReceipt;
+    }
+    const route = params.route;
+    const lastAttempt = source.attempts[0];
+    if (!route || source.reconciliationState !== 'REQUIRED' || source.completedAt
+      || source.reservationStatus !== 'LOCKED' || jsonRecord(source.billingIntent)?.billingSource !== 'STORY_TOKEN'
+      || lastAttempt?.status !== 'UNKNOWN' || !lastAttempt.completedAt
+      || lastAttempt.modelId !== route.sourceModelId || lastAttempt.channelId !== route.sourceChannelId
+      || source.attempts.some(attempt => attempt.status === 'SUCCEEDED' || attempt.status === 'SENT')
+      || !isBlueprintTransportFailure({ name: lastAttempt.errorClass, message: lastAttempt.errorMessage })) return null;
+
+    const run = await tx.agentRun.findFirst({ where: { id: descriptor.ownerId, tenantId, actorId: params.actorId } });
+    validateModelInvocationOwnerSnapshot({
+      owner: descriptorOwner(descriptor), tenantId, actorId: params.actorId, snapshot: run,
+    });
+    const runInput = jsonRecord(run?.input);
+    const preparedRequest = jsonRecord(jsonRecord(runInput?.prepared)?.request);
+    const capabilityId = preparedRequest?.capabilityId || jsonRecord(runInput?.capability)?.id;
+    if (run?.jobKind !== 'DIRECT_CAPABILITY' || capabilityId !== 'genesis.build_blueprint') return null;
+    const used = await tx.modelInvocation.count({ where: {
+      tenantId, actorId: params.actorId, ownerKind: 'AGENT_RUN', ownerId: descriptor.ownerId,
+      reconciliationState: BLUEPRINT_FALLBACK_RESOLVED,
+    } });
+    if (used > 0 || blueprintRecoveryAttempts(run?.checkpoint) >= BLUEPRINT_RECOVERY_LIMIT
+      || Date.now() >= blueprintRecoveryDeadline(run?.checkpoint as unknown as GenesisSemanticStageMachine)) return null;
+    const receipt: GenesisBlueprintFallbackReceipt = {
+      ...route, policy: BLUEPRINT_FALLBACK_POLICY, sourceInvocationId: source.id,
+      runtimeConfigHash: params.runtimeConfigHash,
+    };
+    await releaseUnknownInvocationForRecovery({
+      tx, actorId: params.actorId, invocation: source,
+      recoveryKey: `${descriptor.ownerId}:blueprint-deepseek-fallback`,
+      action: 'MODEL_INVOCATION_BLUEPRINT_FALLBACK_RELEASE',
+      reconciliationState: BLUEPRINT_FALLBACK_RESOLVED,
+      errorClass: 'PROVIDER_OUTCOME_UNKNOWN_BLUEPRINT_FALLBACK',
+      errorMessage: '蓝图 KIE 网络失败，已记录一次 DeepSeek 补偿；原作者额度已释放，潜在供应商成本由平台承担',
+      recoveryMetadata: { blueprintFallback: receipt },
+      requestMetadata: { ...metadata, blueprintFallback: receipt },
+    });
+    return receipt;
+  }, { isolationLevel: Prisma.TransactionIsolationLevel.Serializable });
+}
+
+export async function getInvocationAttemptSummary(invocationId: string) {
+  const attempts = await prisma.modelInvocationAttempt.findMany({
+    where: { invocationId },
+    orderBy: { attempt: 'asc' },
+    select: { status: true, usage: true, inputUsage: true, outputUsage: true, totalUsage: true },
+  });
+  const accepted = attempts.filter(attempt => attempt.status === 'SUCCEEDED');
+  const rejectedOutput = attempts.filter(attempt => attempt.status === 'REJECTED_OUTPUT');
+  const input = accepted.reduce((sum, attempt) => sum + attempt.inputUsage, 0);
+  const output = accepted.reduce((sum, attempt) => sum + attempt.outputUsage, 0);
+  const total = accepted.reduce((sum, attempt) => sum + attempt.totalUsage, 0);
+  const rejectedInput = rejectedOutput.reduce((sum, attempt) => sum + attempt.inputUsage, 0);
+  const rejectedOutputTokens = rejectedOutput.reduce((sum, attempt) => sum + attempt.outputUsage, 0);
+  const rejectedTotal = rejectedOutput.reduce((sum, attempt) => sum + attempt.totalUsage, 0);
+  return {
+    hasUnknown: attempts.some(attempt => ['SENT', 'UNKNOWN'].includes(attempt.status)),
+    hasSucceeded: accepted.length > 0,
+    /** Determined unusable provider results (empty/truncated/contract). Not unknown. */
+    hasRejectedOutput: rejectedOutput.length > 0,
+    usage: {
+      prompt_tokens: input,
+      completion_tokens: output,
+      total_tokens: Math.max(total, input + output),
+      attempts: attempts.map((attempt, index) => ({ index: index + 1, status: attempt.status, usage: attempt.usage })),
+    },
+    rejectedOutputUsage: {
+      prompt_tokens: rejectedInput,
+      completion_tokens: rejectedOutputTokens,
+      total_tokens: Math.max(rejectedTotal, rejectedInput + rejectedOutputTokens),
+      attemptCount: rejectedOutput.length,
+    },
+  };
+}
+
+export async function scanModelInvocationReconciliation(
+  options: { limit?: number; now?: Date } = {},
+) {
+  const now = options.now || new Date();
+  const limit = Math.max(1, Math.min(500, options.limit || 100));
+  const candidates = await prisma.modelInvocation.findMany({
+    where: {
+      completedAt: null,
+      NOT: {
+        status: 'RECONCILIATION_REQUIRED',
+        reconciliationState: 'REQUIRED',
+      },
+      OR: [
+        { status: { in: ['PROVIDER_SUCCEEDED', 'SETTLING', 'RECONCILIATION_REQUIRED', 'UNKNOWN'] } },
+        { reconciliationState: { in: ['REPLAY_READY', 'REQUIRED'] } },
+      ],
+      AND: [{ OR: [{ leaseUntil: null }, { leaseUntil: { lte: now } }] }],
+    },
+    orderBy: { updatedAt: 'asc' },
+    take: limit,
+    select: { id: true, fencingToken: true },
+  });
+  const result = {
+    scanned: candidates.length,
+    replayReady: 0,
+    canceledOwnerSettled: 0,
+    reconciliationRequired: 0,
+    expired: 0,
+    protectionUnavailable: 0,
+  };
+
+  for (const candidate of candidates) {
+    const attempts = await prisma.modelInvocationAttempt.findMany({
+      where: { invocationId: candidate.id },
+      orderBy: { attempt: 'desc' },
+    });
+    if (attempts.some(attempt => ['SENT', 'UNKNOWN'].includes(attempt.status))) {
+      const marked = await markUnleasedInvocationReconciliation(
+        candidate,
+        now,
+        'PROVIDER_OUTCOME_UNKNOWN',
+      );
+      result.reconciliationRequired += marked;
+      continue;
+    }
+    const succeeded = attempts.find(attempt => attempt.status === 'SUCCEEDED');
+    if (!succeeded) {
+      const marked = await markUnleasedInvocationReconciliation(
+        candidate,
+        now,
+        'PROVIDER_ATTEMPT_MISSING',
+      );
+      result.reconciliationRequired += marked;
+      continue;
+    }
+    if (
+      !succeeded.replayEnvelope
+      || succeeded.replaySchemaVersion !== 1
+      || succeeded.replayByteLength === null
+      || !succeeded.replayDigest
+      || !succeeded.replayExpiresAt
+      || succeeded.replayConsumedAt
+    ) {
+      const marked = await markUnleasedInvocationReconciliation(
+        candidate,
+        now,
+        'PROVIDER_RESULT_NOT_REPLAYABLE',
+      );
+      result.reconciliationRequired += marked;
+      continue;
+    }
+    if (succeeded.replayExpiresAt <= now) {
+      const expired = await prisma.$transaction(async tx => {
+        const cleared = await tx.modelInvocationAttempt.updateMany({
+          where: {
+            id: succeeded.id,
+            invocationId: candidate.id,
+            status: 'SUCCEEDED',
+            replayEnvelope: succeeded.replayEnvelope,
+            replayConsumedAt: null,
+            replayExpiresAt: { lte: now },
+          },
+          data: {
+            replayEnvelope: null,
+            replayExpiresAt: null,
+            replayConsumedAt: now,
+          },
+        });
+        if (cleared.count !== 1) return 0;
+        return markUnleasedInvocationReconciliation(
+          candidate,
+          now,
+          'PROVIDER_REPLAY_EXPIRED',
+          tx,
+        );
+      });
+      result.expired += expired;
+      result.reconciliationRequired += expired;
+      continue;
+    }
+
+    try {
+      restoreModelInvocationReplay({
+        envelope: succeeded.replayEnvelope,
+        schemaVersion: succeeded.replaySchemaVersion,
+        byteLength: succeeded.replayByteLength,
+        digest: succeeded.replayDigest,
+        expiresAt: succeeded.replayExpiresAt,
+      }, providerAttemptReplayContext(succeeded), { now });
+    } catch (error) {
+      if (
+        error instanceof ModelInvocationReplayError
+        && error.code === 'MODEL_INVOCATION_REPLAY_SECRET_MISSING'
+      ) {
+        result.protectionUnavailable += 1;
+        continue;
+      }
+      const marked = await markUnleasedInvocationReconciliation(
+        candidate,
+        now,
+        error instanceof ModelInvocationReplayError
+          ? error.code
+          : 'MODEL_INVOCATION_REPLAY_CORRUPT',
+      );
+      result.reconciliationRequired += marked;
+      continue;
+    }
+
+    if (await settleCanceledAgentTurnReplay(candidate.id, now)) {
+      result.canceledOwnerSettled += 1;
+      continue;
+    }
+
+    const ready = await prisma.modelInvocation.updateMany({
+      where: {
+        id: candidate.id,
+        fencingToken: candidate.fencingToken,
+        completedAt: null,
+        OR: [{ leaseUntil: null }, { leaseUntil: { lte: now } }],
+      },
+      data: {
+        status: 'PROVIDER_SUCCEEDED',
+        reconciliationState: 'REPLAY_READY',
+        errorClass: 'DOMAIN_CHECKPOINT_RETRY_READY',
+        leaseOwner: null,
+        leaseUntil: null,
+      },
+    });
+    result.replayReady += ready.count;
+  }
+  return result;
+}
+
+async function settleCanceledAgentTurnReplay(invocationId: string, now: Date) {
+  const current = await prisma.modelInvocation.findUnique({ where: { id: invocationId } });
+  if (
+    !current
+    || current.ownerKind !== 'AGENT_TURN'
+    || current.completedAt
+    || current.reservationStatus !== 'LOCKED'
+    || current.reservedBudget <= 0
+    || !['PROVIDER_SUCCEEDED', 'SETTLING'].includes(current.status)
+    || current.reconciliationState !== 'REPLAY_READY'
+    || (current.leaseUntil && current.leaseUntil > now)
+  ) return false;
+  const canceledOwner = await prisma.agentTurn.findFirst({
+    where: {
+      id: current.ownerId,
+      tenantId: current.tenantId,
+      actorId: current.actorId,
+      status: 'CANCELED',
+    },
+    select: { id: true },
+  });
+  if (!canceledOwner) return false;
+  const billingIntent = jsonRecord(current.billingIntent);
+  if (!billingIntent || !current.billingIntentHash || stableModelHash(billingIntent) !== current.billingIntentHash) {
+    return false;
+  }
+  const businessLine = String(billingIntent.businessLine || '');
+  if (!(Object.values(BusinessLine) as string[]).includes(businessLine)) return false;
+
+  const leaseOwner = `canceled-agent-turn-settlement:${current.id}`;
+  const claimed = await prisma.modelInvocation.updateMany({
+    where: {
+      id: current.id,
+      fencingToken: current.fencingToken,
+      completedAt: null,
+      ownerKind: 'AGENT_TURN',
+      ownerId: current.ownerId,
+      status: { in: ['PROVIDER_SUCCEEDED', 'SETTLING'] },
+      reconciliationState: 'REPLAY_READY',
+      reservationStatus: 'LOCKED',
+      OR: [{ leaseUntil: null }, { leaseUntil: { lte: now } }],
+    },
+    data: {
+      leaseOwner,
+      leaseUntil: new Date(now.getTime() + INVOCATION_LEASE_MS),
+      fencingToken: { increment: 1 },
+    },
+  });
+  if (claimed.count !== 1) return false;
+  const row = await prisma.modelInvocation.findUniqueOrThrow({
+    where: { id: current.id },
+    select: invocationClaimSelect,
+  });
+  const runtime = asClaimedInvocation(row, true, {
+    kind: 'AGENT_TURN',
+    id: current.ownerId,
+    expectedLeaseOwner: leaseOwner,
+    expectedFencingToken: row.fencingToken,
+  }, current.tenantId);
+  const metadata = {
+    ...(jsonRecord(current.requestMetadata) || {}),
+    ownerCanceledAfterProviderEgress: true,
+    domainCheckpointSkipped: true,
+    settlementSource: 'canceled_agent_turn_replay_reconciler',
+  };
+  try {
+    await settleInvocationInternal({
+      invocation: runtime,
+      result: null,
+      text: '',
+      usage: current.usage || undefined,
+      modelId: current.modelId || stringOrUndefined(billingIntent.modelId),
+      storyId: stringOrUndefined(billingIntent.storyId) || null,
+      businessLine: businessLine as BusinessLine,
+      agentRole: stringOrUndefined(billingIntent.agentRole) || current.role,
+      metadata,
+      settlement: settlementFromBillingIntent(billingIntent),
+      terminalStatus: 'SETTLED',
+    });
+    return true;
+  } catch (error) {
+    await prisma.modelInvocation.updateMany({
+      where: invocationFence(runtime),
+      data: {
+        status: 'PROVIDER_SUCCEEDED',
+        reconciliationState: 'REPLAY_READY',
+        errorClass: 'CANCELED_OWNER_SETTLEMENT_RETRY_REQUIRED',
+        errorMessage: errorMessage(error),
+        leaseOwner: null,
+        leaseUntil: null,
+      },
+    });
+    return false;
+  }
+}
+
+function settlementFromBillingIntent(
+  intent: Record<string, unknown>,
+): Pick<SettleOptions, 'fixedCost' | 'fixedModelCostRMB' | 'fixedIncomeRMB' | 'pricingVersionId' | 'pricingSnapshotOverride'> {
+  const fixedCost = finiteNumber(intent.fixedCost);
+  const fixedModelCostRMB = finiteNumber(intent.fixedModelCostRMB);
+  const fixedIncomeRMB = finiteNumber(intent.fixedIncomeRMB);
+  const pricingVersionId = stringOrUndefined(intent.pricingVersionId);
+  const pricingSnapshotOverride = jsonRecord(intent.pricingSnapshotOverride);
+  return {
+    ...(fixedCost === undefined ? {} : { fixedCost }),
+    ...(fixedModelCostRMB === undefined ? {} : { fixedModelCostRMB }),
+    ...(fixedIncomeRMB === undefined ? {} : { fixedIncomeRMB }),
+    ...(pricingVersionId ? { pricingVersionId } : {}),
+    ...(pricingSnapshotOverride ? { pricingSnapshotOverride } : {}),
+  };
+}
+
+function jsonRecord(value: unknown): Record<string, unknown> | null {
+  return value && typeof value === 'object' && !Array.isArray(value)
+    ? value as Record<string, unknown>
+    : null;
+}
+
+function stringOrUndefined(value: unknown) {
+  return typeof value === 'string' && value.trim() ? value.trim() : undefined;
+}
+
+function finiteNumber(value: unknown) {
+  return typeof value === 'number' && Number.isFinite(value) ? value : undefined;
+}
+
+async function markUnleasedInvocationReconciliation(
+  invocation: { id: string; fencingToken: number },
+  now: Date,
+  reason: string,
+  db: Prisma.TransactionClient | typeof prisma = prisma,
+) {
+  const marked = await db.modelInvocation.updateMany({
+    where: {
+      id: invocation.id,
+      fencingToken: invocation.fencingToken,
+      completedAt: null,
+      NOT: {
+        status: 'RECONCILIATION_REQUIRED',
+        reconciliationState: 'REQUIRED',
+        errorClass: reason,
+      },
+      OR: [{ leaseUntil: null }, { leaseUntil: { lte: now } }],
+    },
+    data: {
+      status: 'RECONCILIATION_REQUIRED',
+      reconciliationState: 'REQUIRED',
+      errorClass: reason,
+      leaseOwner: null,
+      leaseUntil: null,
+    },
+  });
+  return marked.count;
+}
+
+async function restoreTrackedProviderAttempt<T>(
+  runtime: ModelInvocationRuntimeContext,
+  descriptor: ProviderAttemptDescriptor,
+  restore: (value: unknown) => T,
+): Promise<{ found: false } | { found: true; value: T }> {
+  const now = new Date();
+  const disposition = await prisma.$transaction(async tx => {
+    const invocation = await tx.modelInvocation.findFirst({ where: invocationFence(runtime) });
+    if (!invocation) throw invocationFenced(runtime.id);
+    const succeeded = await tx.modelInvocationAttempt.findMany({
+      where: { invocationId: runtime.id, status: 'SUCCEEDED' },
+      orderBy: { attempt: 'desc' },
+    });
+    if (succeeded.length === 0) {
+      return ['PROVIDER_SUCCEEDED', 'SETTLING', 'RECONCILIATION_REQUIRED'].includes(invocation.status)
+        || invocation.reconciliationState === 'REPLAY_READY'
+        ? { kind: 'UNAVAILABLE' as const }
+        : { kind: 'NONE' as const };
+    }
+
+    const requestHash = requireHash(descriptor.requestHash, 'requestHash');
+    const promptHash = requireHash(descriptor.promptHash, 'attempt.promptHash');
+    const attempt = succeeded.find(candidate => (
+      candidate.requestHash === requestHash
+      && candidate.promptHash === promptHash
+      && candidate.provider === bounded(descriptor.provider, 120)
+      && (candidate.channelId || null) === optionalBounded(descriptor.channelId, 160)
+      && (candidate.modelId || null) === optionalBounded(descriptor.modelId, 160)
+      && (candidate.providerModel || null) === optionalBounded(descriptor.providerModel, 200)
+    ));
+    if (!attempt) return { kind: 'MISMATCH' as const };
+    if (
+      !attempt.replayEnvelope
+      || attempt.replaySchemaVersion !== 1
+      || attempt.replayByteLength === null
+      || !attempt.replayDigest
+      || !attempt.replayExpiresAt
+      || attempt.replayConsumedAt
+    ) return { kind: 'UNAVAILABLE' as const };
+    if (attempt.replayExpiresAt <= now) return { kind: 'EXPIRED' as const };
+
+    let replayValue: unknown;
+    try {
+      replayValue = restoreModelInvocationReplay({
+        envelope: attempt.replayEnvelope,
+        schemaVersion: attempt.replaySchemaVersion,
+        byteLength: attempt.replayByteLength,
+        digest: attempt.replayDigest,
+        expiresAt: attempt.replayExpiresAt,
+      }, providerAttemptReplayContext(attempt));
+    } catch (error) {
+      return {
+        kind: 'CORRUPT' as const,
+        reason: error instanceof ModelInvocationReplayError
+          ? error.code
+          : 'MODEL_INVOCATION_REPLAY_CORRUPT',
+      };
+    }
+
+    const restored = await tx.modelInvocationAttempt.updateMany({
+      where: {
+        id: attempt.id,
+        invocationId: runtime.id,
+        status: 'SUCCEEDED',
+        replayEnvelope: attempt.replayEnvelope,
+        replayConsumedAt: null,
+        replayExpiresAt: { gt: now },
+      },
+      data: {
+        replayLastRestoredAt: now,
+        replayRestoreCount: { increment: 1 },
+      },
+    });
+    if (restored.count !== 1) throw invocationFenced(runtime.id);
+    const refreshed = await tx.modelInvocation.updateMany({
+      where: invocationFence(runtime),
+      data: {
+        status: 'PROVIDER_SUCCEEDED',
+        reconciliationState: 'REPLAY_READY',
+        errorClass: null,
+        errorMessage: null,
+      },
+    });
+    if (refreshed.count !== 1) throw invocationFenced(runtime.id);
+    return { kind: 'RESTORED' as const, replayValue };
+  }, { isolationLevel: Prisma.TransactionIsolationLevel.Serializable });
+
+  if (disposition.kind === 'NONE') return { found: false };
+  if (disposition.kind !== 'RESTORED') {
+    const reason = disposition.kind === 'CORRUPT'
+      ? disposition.reason
+      : `PROVIDER_REPLAY_${disposition.kind}`;
+    await requireReconciliation(runtime.id, reason, runtime);
+    throw reconciliationRequired(runtime.id);
+  }
+  try {
+    const value = restore(disposition.replayValue);
+    runtime.providerReplayRestored = true;
+    return { found: true, value };
+  } catch (error) {
+    await requireReconciliation(runtime.id, 'PROVIDER_REPLAY_CODEC_FAILED', runtime);
+    throw new ModelInvocationError(
+      'MODEL_INVOCATION_RECONCILIATION_REQUIRED',
+      'Provider 可重放结果无法恢复为调用方合同，禁止重新采样',
+      503,
+      { cause: error },
+    );
+  }
+}
+
+async function beginProviderAttempt(
+  runtime: ModelInvocationRuntimeContext,
+  descriptor: ProviderAttemptDescriptor,
+) {
+  return prisma.$transaction(async tx => {
+    const invocation = await tx.modelInvocation.findFirst({ where: invocationFence(runtime) });
+    if (!invocation) throw invocationFenced(runtime.id);
+    if (invocation.reconciliationState === 'REQUIRED' || ['UNKNOWN', 'RECONCILIATION_REQUIRED'].includes(invocation.status)) {
+      throw reconciliationRequired(invocation.id);
+    }
+    if (
+      invocation.reconciliationState === 'REPLAY_READY'
+      || ['PROVIDER_SUCCEEDED', 'SETTLING'].includes(invocation.status)
+    ) {
+      throw new ModelInvocationError(
+        'MODEL_INVOCATION_RECONCILIATION_REQUIRED',
+        'Provider 已成功但可重放结果未被当前调用合同恢复，禁止创建新 Attempt',
+        503,
+      );
+    }
+    if (invocation.reservationStatus !== 'LOCKED') {
+      throw new ModelInvocationError('MODEL_INVOCATION_BUDGET_NOT_RESERVED', 'Provider 外发前必须先持久化预算 reservation');
+    }
+    if (invocation.routeVersion === 'genesis-blueprint-deepseek-fallback@1' && invocation.currentAttempt >= 1) {
+      throw new ModelInvocationError('GENESIS_BLUEPRINT_FALLBACK_EXHAUSTED', '本次蓝图的 DeepSeek 补偿已外发一次，禁止继续重试', 503);
+    }
+    if (invocation.routeVersion === BLUEPRINT_RETRY_ROUTE && invocation.currentAttempt >= 1) {
+      throw new ModelInvocationError('GENESIS_BLUEPRINT_RETRY_SEND_EXHAUSTED', '本次蓝图恢复尝试已外发，禁止额外轮换密钥或重复发送', 503);
+    }
+    if (invocation.routeVersion === BLUEPRINT_RETRY_ROUTE) {
+      const run = await tx.agentRun.findFirst({ where: {
+        id: invocation.ownerId, tenantId: invocation.tenantId, actorId: invocation.actorId,
+      } });
+      // Evaluate before physical send, after protected-result replay. A saved success
+      // must still be recoverable when the retry window expires during a restart.
+      const raw = jsonRecord(run?.checkpoint);
+      const machine = readGenesisSemanticStageMachine({ value: raw, workflow: 'BLUEPRINT', inputHash: String(raw?.inputHash || '') });
+      const samplingKey = String(jsonRecord(invocation.requestMetadata)?.samplingKey || '');
+      const stage = machine.stages[samplingKey];
+      if (!run || run.jobKind !== 'DIRECT_CAPABILITY' || stage?.status !== 'RETRY_WAIT' || !stage.retry
+        || invocation.idempotencyKey !== `${run.id}:${samplingKey}:provider-retry:${stage.retry.attempt}`
+        || Date.now() < Date.parse(stage.retry.retryAt)) {
+        throw new ModelInvocationError('GENESIS_BLUEPRINT_RECOVERY_INVALID', '蓝图恢复外发与已持久化计划不一致', 409);
+      }
+      if (Date.now() >= blueprintRecoveryDeadline(machine)) {
+        throw new ModelInvocationError('GENESIS_BLUEPRINT_RECOVERY_EXHAUSTED', '服务持续波动，自动恢复已结束；已完成内容已保存，可稍后继续。', 503);
+      }
+    }
+    const nextAttempt = invocation.currentAttempt + 1;
+    const attempt = await tx.modelInvocationAttempt.create({
+      data: {
+        invocationId: invocation.id,
+        attempt: nextAttempt,
+        status: 'SENT',
+        provider: bounded(descriptor.provider, 120),
+        channelId: optionalBounded(descriptor.channelId, 160),
+        modelId: optionalBounded(descriptor.modelId, 160),
+        providerModel: optionalBounded(descriptor.providerModel, 200),
+        requestHash: requireHash(descriptor.requestHash, 'requestHash'),
+        promptHash: requireHash(descriptor.promptHash, 'attempt.promptHash'),
+        usage: descriptor.requestAccounting ? toInputJson({ inputBudget: descriptor.requestAccounting }) : undefined,
+      },
+      select: { id: true },
+    });
+    const updated = await tx.modelInvocation.updateMany({
+      where: {
+        ...invocationFence(runtime),
+        currentAttempt: invocation.currentAttempt,
+        reconciliationState: { not: 'REQUIRED' },
+      },
+      data: {
+        currentAttempt: nextAttempt,
+        status: 'IN_FLIGHT',
+        provider: bounded(descriptor.provider, 120),
+        channelId: optionalBounded(descriptor.channelId, 160),
+        modelId: optionalBounded(descriptor.modelId, 160),
+        providerModel: optionalBounded(descriptor.providerModel, 200),
+        startedAt: invocation.startedAt || new Date(),
+      },
+    });
+    if (updated.count !== 1) throw invocationFenced(runtime.id);
+    return attempt;
+  });
+}
+
+async function completeProviderAttempt(
+  runtime: ModelInvocationRuntimeContext,
+  attemptId: string,
+  outcome: ProviderAttemptOutcome,
+  replayValue: unknown,
+) {
+  const usage = normalizeUsage(outcome.usage);
+  const outputHash = outcome.outputHash
+    ? requireHash(outcome.outputHash, 'outputHash')
+    : stableModelHash(outcome.outputText || '');
+  const now = new Date();
+  const metricContext = await prisma.$transaction(async tx => {
+    const attempt = await tx.modelInvocationAttempt.findFirst({
+      where: { id: attemptId, invocationId: runtime.id, status: 'SENT' },
+    });
+    if (!attempt) throw invocationFenced(runtime.id);
+    const invocationMetric = await tx.modelInvocation.findUnique({
+      where: { id: runtime.id },
+      select: { stableOperation: true, requestMetadata: true },
+    });
+    const protectedReplay = protectModelInvocationReplay(
+      replayValue,
+      providerAttemptReplayContext(attempt),
+      { now },
+    );
+    await tx.modelInvocationAttempt.update({
+      where: { id: attempt.id },
+      data: {
+        status: 'SUCCEEDED',
+        providerRequestId: optionalBounded(outcome.providerRequestId, 240),
+        outputHash,
+        replayEnvelope: protectedReplay.envelope,
+        replaySchemaVersion: protectedReplay.schemaVersion,
+        replayByteLength: protectedReplay.byteLength,
+        replayDigest: protectedReplay.digest,
+        replayExpiresAt: protectedReplay.expiresAt,
+        replayConsumedAt: null,
+        finishReason: optionalBounded(outcome.finishReason, 120),
+        completionEvidence: outcome.completionEvidence == null
+          ? undefined
+          : toInputJson(outcome.completionEvidence),
+        usage: toInputJson({ ...jsonRecord(outcome.usage),
+          ...(jsonRecord(attempt.usage)?.inputBudget ? { inputBudget: jsonRecord(attempt.usage)!.inputBudget } : {}) }),
+        inputUsage: usage.input,
+        outputUsage: usage.output,
+        totalUsage: usage.total,
+        providerCompletedAt: now,
+        completedAt: now,
+      },
+    });
+    const totals = await tx.modelInvocationAttempt.aggregate({
+      where: { invocationId: runtime.id, status: 'SUCCEEDED' },
+      _sum: { inputUsage: true, outputUsage: true, totalUsage: true },
+    });
+    const updated = await tx.modelInvocation.updateMany({
+      where: invocationFence(runtime),
+      data: {
+        status: 'PROVIDER_SUCCEEDED',
+        providerRequestId: optionalBounded(outcome.providerRequestId, 240),
+        outputHash,
+        usage: toInputJson({
+          prompt_tokens: totals._sum.inputUsage || 0,
+          completion_tokens: totals._sum.outputUsage || 0,
+          total_tokens: Math.max(
+            totals._sum.totalUsage || 0,
+            (totals._sum.inputUsage || 0) + (totals._sum.outputUsage || 0),
+          ),
+        }),
+        inputUsage: totals._sum.inputUsage || 0,
+        outputUsage: totals._sum.outputUsage || 0,
+        totalUsage: Math.max(
+          totals._sum.totalUsage || 0,
+          (totals._sum.inputUsage || 0) + (totals._sum.outputUsage || 0),
+        ),
+        providerCompletedAt: now,
+      },
+    });
+    if (updated.count !== 1) throw invocationFenced(runtime.id);
+    const metadata = invocationMetric?.requestMetadata && typeof invocationMetric.requestMetadata === 'object'
+      ? invocationMetric.requestMetadata as Record<string, unknown>
+      : {};
+    return {
+      provider: attempt.provider,
+      channel: attempt.channelId,
+      model: attempt.modelId,
+      stableOperation: invocationMetric?.stableOperation,
+      samplingKey: typeof metadata.samplingKey === 'string' ? metadata.samplingKey : null,
+    };
+  });
+  const evidence = readCompletionEvidence(outcome.completionEvidence);
+  const metricLabels = {
+    ...metricContext,
+    deliveryMode: evidence?.transport === 'buffered_http' ? 'buffered' : 'stream',
+  };
+  if (evidence?.contentClassification === 'COMPLETE_JSON' && !evidence.finishReason) {
+    void recordOperationalMetric('structured_complete_but_finish_missing_total', 1, metricLabels);
+  }
+  if (evidence?.transport === 'sse' && evidence.protocolTerminalObserved !== true) {
+    void recordOperationalMetric('structured_protocol_terminal_missing_total', 1, metricLabels);
+  }
+  if (evidence?.transport === 'buffered_http' && evidence.contentClassification === 'COMPLETE_JSON') {
+    void recordOperationalMetric('structured_buffered_success_rate', 1, metricLabels);
+  }
+}
+
+async function countRejectedOutputAttempts(invocationId: string) {
+  return prisma.modelInvocationAttempt.count({
+    where: { invocationId, status: 'REJECTED_OUTPUT' },
+  });
+}
+
+async function latestRejectedOutputAttempt(invocationId: string) {
+  return prisma.modelInvocationAttempt.findFirst({
+    where: { invocationId, status: 'REJECTED_OUTPUT' },
+    orderBy: [{ attempt: 'desc' }, { completedAt: 'desc' }],
+    select: {
+      finishReason: true,
+      errorClass: true,
+      errorMessage: true,
+      usage: true,
+      outputHash: true,
+      completionEvidence: true,
+    },
+  });
+}
+
+function outcomeFromRejectedAttempt(attempt: {
+  finishReason: string | null;
+  usage: unknown;
+  outputHash: string | null;
+  completionEvidence: unknown;
+}): ProviderAttemptOutcome {
+  return {
+    finishReason: attempt.finishReason,
+    usage: attempt.usage,
+    outputText: '',
+    outputHash: attempt.outputHash,
+    completionEvidence: readCompletionEvidence(attempt.completionEvidence),
+  };
+}
+
+function rejectionErrorFromRejectedAttempt(
+  attempt: {
+    finishReason: string | null;
+    errorClass: string | null;
+    errorMessage: string | null;
+    usage: unknown;
+    outputHash: string | null;
+    completionEvidence: unknown;
+  },
+  outputPolicy: ProviderOutputPolicy,
+): Error {
+  const providerError = jsonRecord(jsonRecord(attempt.completionEvidence)?.providerResponseError);
+  if (attempt.errorClass === 'AI_PROVIDER_RESPONSE_INVALID' && providerError?.version === 1
+    && providerError.code === 'KIE_PROVIDER_BUSINESS_ERROR' && typeof providerError.providerCode === 'string') {
+    return new ProviderResponseContractError(providerError);
+  }
+  // Prefer the error class persisted at rejection time so length is not
+  // misreported as AI_EMPTY_TEXT_RESPONSE when rejectionError(null) is used.
+  const storedClass = String(attempt.errorClass || '').trim();
+  if (storedClass) {
+    const error = new Error(storedClass || attempt.errorMessage || storedClass) as Error & {
+      code?: string;
+    };
+    error.name = storedClass;
+    error.code = storedClass;
+    if (attempt.errorMessage && attempt.errorMessage !== storedClass) {
+      error.message = attempt.errorMessage;
+    }
+    return error;
+  }
+  return outputPolicy.rejectionError(outcomeFromRejectedAttempt(attempt));
+}
+
+async function rejectProviderOutputAttempt(
+  runtime: ModelInvocationRuntimeContext,
+  attemptId: string,
+  outcome: ProviderAttemptOutcome,
+  rejection: Error,
+) {
+  const usage = normalizeUsage(outcome.usage);
+  const outputHash = outcome.outputHash
+    ? requireHash(outcome.outputHash, 'outputHash')
+    : stableModelHash(outcome.outputText || '');
+  const now = new Date();
+  const rejected = await prisma.$transaction(async tx => {
+    const attempt = await tx.modelInvocationAttempt.findFirst({
+      where: { id: attemptId, invocationId: runtime.id, status: 'SENT' },
+    });
+    if (!attempt) throw invocationFenced(runtime.id);
+    const invocationMetric = await tx.modelInvocation.findUnique({
+      where: { id: runtime.id },
+      select: { stableOperation: true, requestMetadata: true },
+    });
+    await tx.modelInvocationAttempt.update({
+      where: { id: attempt.id },
+      data: {
+        status: 'REJECTED_OUTPUT',
+        providerRequestId: optionalBounded(outcome.providerRequestId, 240),
+        outputHash,
+        finishReason: optionalBounded(outcome.finishReason, 120),
+        completionEvidence: rejection instanceof ProviderResponseContractError && rejection.projectionCode === 'KIE_PROVIDER_BUSINESS_ERROR'
+          ? toInputJson({ ...outcome.completionEvidence, providerResponseError: {
+            version: 1, code: rejection.projectionCode, providerCode: rejection.providerCode,
+          } })
+          : outcome.completionEvidence == null
+          ? undefined
+          : toInputJson(outcome.completionEvidence),
+        usage: toInputJson({ ...jsonRecord(outcome.usage),
+          ...(jsonRecord(attempt.usage)?.inputBudget ? { inputBudget: jsonRecord(attempt.usage)!.inputBudget } : {}) }),
+        inputUsage: usage.input,
+        outputUsage: usage.output,
+        totalUsage: usage.total,
+        errorClass: bounded((rejection as Error & { code?: unknown }).code, 120) || rejection.name,
+        errorMessage: errorMessage(rejection),
+        providerCompletedAt: now,
+        completedAt: now,
+      },
+    });
+    const rejectedCount = await tx.modelInvocationAttempt.count({
+      where: { invocationId: runtime.id, status: 'REJECTED_OUTPUT' },
+    });
+    const updated = await tx.modelInvocation.updateMany({
+      where: invocationFence(runtime),
+      data: {
+        status: 'RESERVED',
+        providerRequestId: optionalBounded(outcome.providerRequestId, 240),
+        errorClass: bounded((rejection as Error & { code?: unknown }).code, 120) || rejection.name,
+        errorMessage: errorMessage(rejection),
+      },
+    });
+    if (updated.count !== 1) throw invocationFenced(runtime.id);
+    const metadata = invocationMetric?.requestMetadata && typeof invocationMetric.requestMetadata === 'object'
+      ? invocationMetric.requestMetadata as Record<string, unknown>
+      : {};
+    return {
+      count: rejectedCount,
+      metricContext: {
+        provider: attempt.provider,
+        channel: attempt.channelId,
+        model: attempt.modelId,
+        stableOperation: invocationMetric?.stableOperation,
+        samplingKey: typeof metadata.samplingKey === 'string' ? metadata.samplingKey : null,
+      },
+    };
+  }, { isolationLevel: Prisma.TransactionIsolationLevel.Serializable });
+  const evidence = readCompletionEvidence(outcome.completionEvidence);
+  if (evidence) {
+    void recordOperationalMetric('structured_rejected_by_content_kind', 1, {
+      ...rejected.metricContext,
+      deliveryMode: evidence.transport === 'buffered_http' ? 'buffered' : 'stream',
+      contentKind: evidence.contentClassification,
+    });
+  }
+  return rejected.count;
+}
+
+async function failProviderAttempt(
+  runtime: ModelInvocationRuntimeContext,
+  attemptId: string,
+  error: unknown,
+  safeRejection: boolean,
+) {
+  const now = new Date();
+  const failedProviderRequestId = providerRequestIdFromError(error);
+  await prisma.$transaction(async tx => {
+    const attempt = await tx.modelInvocationAttempt.findFirst({
+      where: { id: attemptId, invocationId: runtime.id, status: 'SENT' },
+    });
+    if (!attempt) throw invocationFenced(runtime.id);
+    await tx.modelInvocationAttempt.update({
+      where: { id: attempt.id },
+      data: {
+        status: safeRejection ? 'REJECTED_SAFE' : 'UNKNOWN',
+        errorClass: errorClass(error),
+        errorMessage: errorMessage(error),
+        providerRequestId: failedProviderRequestId,
+        completedAt: now,
+      },
+    });
+    const updated = await tx.modelInvocation.updateMany({
+      where: invocationFence(runtime),
+      data: safeRejection
+        ? {
+            status: 'RESERVED',
+            errorClass: errorClass(error),
+            errorMessage: errorMessage(error),
+            providerRequestId: failedProviderRequestId,
+          }
+        : {
+            status: 'UNKNOWN',
+            reconciliationState: 'REQUIRED',
+            errorClass: errorClass(error),
+            errorMessage: errorMessage(error),
+            providerRequestId: failedProviderRequestId,
+            leaseOwner: null,
+            leaseUntil: null,
+          },
+    });
+    if (updated.count !== 1) throw invocationFenced(runtime.id);
+  });
+  if (!safeRejection) untrackOwnedInvocation(runtime.id);
+}
+
+async function settleInvocationInternal<T>(params: {
+  invocation: ClaimedModelInvocation;
+  result: T;
+  text: string;
+  usage?: unknown;
+  modelId?: string | null;
+  storyId?: string | null;
+  businessLine: BusinessLine;
+  agentRole: string;
+  metadata: Record<string, unknown>;
+  settlement?: Pick<SettleOptions, 'fixedCost' | 'fixedModelCostRMB' | 'fixedIncomeRMB' | 'pricingVersionId' | 'pricingSnapshotOverride' | 'usageLines'>;
+  terminalStatus: 'SETTLED' | 'FAILED_BILLED';
+  terminalError?: unknown;
+  onSettled?: (
+    tx: Prisma.TransactionClient,
+    result: T,
+    billing: Awaited<ReturnType<typeof EconomyService.settleTokens>>,
+  ) => Promise<void>;
+}) {
+  const summary = await getInvocationAttemptSummary(params.invocation.id);
+  if (summary.hasUnknown) {
+    await requireReconciliation(params.invocation.id, 'PROVIDER_OUTCOME_UNKNOWN', params.invocation);
+    throw reconciliationRequired(params.invocation.id);
+  }
+  if (!summary.hasSucceeded) {
+    // REJECTED_OUTPUT is a determined provider result, not a missing attempt.
+    // Success settlement must not claim it; callers should failAndRelease → FAILED_SAFE.
+    if (summary.hasRejectedOutput) {
+      throw new ModelInvocationError(
+        'MODEL_INVOCATION_OUTPUT_REJECTED',
+        'Provider 已返回但输出被判定为不可用；禁止按成功结算，应 FAILED_SAFE 释放 reservation',
+        503,
+      );
+    }
+    await requireReconciliation(params.invocation.id, 'PROVIDER_ATTEMPT_MISSING', params.invocation);
+    throw new ModelInvocationError(
+      'MODEL_INVOCATION_RECONCILIATION_REQUIRED',
+      '声明为 REQUIRED 的模型调用没有可核验的 Provider Attempt，禁止结算或重采样',
+      503,
+    );
+  }
+  const effectiveUsage = summary.hasSucceeded ? summary.usage : params.usage;
+  const normalized = normalizeUsage(effectiveUsage);
+
+  const billing = await prisma.$transaction(async tx => {
+    const current = await tx.modelInvocation.findFirst({ where: invocationFence(params.invocation) });
+    if (!current) throw invocationFenced(params.invocation.id);
+    if (current.reconciliationState === 'REQUIRED') throw reconciliationRequired(current.id);
+    if (current.billingSettledAt && current.billing) {
+      return current.billing as unknown as Awaited<ReturnType<typeof EconomyService.settleTokens>>;
+    }
+    const billingIntent = jsonRecord(current.billingIntent) || {};
+    const authorKeyBilling = billingIntent.billingSource === 'AUTHOR_KEY';
+    if (
+      current.reservationStatus !== 'LOCKED'
+      || (!authorKeyBilling && current.reservedBudget <= 0)
+      || (authorKeyBilling && current.reservedBudget !== 0)
+    ) {
+      throw new ModelInvocationError('MODEL_INVOCATION_RESERVATION_MISSING', '结算时找不到逻辑调用的预算 reservation');
+    }
+
+    const claimed = await tx.modelInvocation.updateMany({
+      where: {
+        ...invocationFence(params.invocation),
+        billingSettledAt: null,
+        reconciliationState: { not: 'REQUIRED' },
+        status: { in: ['RESERVED', 'IN_FLIGHT', 'PROVIDER_SUCCEEDED', 'SETTLING'] },
+      },
+      data: { status: 'SETTLING' },
+    });
+    if (claimed.count !== 1) throw invocationFenced(current.id);
+
+    const settled = authorKeyBilling
+      ? {
+          actualCost: 0,
+          platformCut: 0,
+          pricingVersionId: null,
+          incomeRMB: 0,
+          modelCostRMB: 0,
+          billingSource: 'AUTHOR_KEY' as const,
+          chargedNC: 0,
+          connectionId: String(billingIntent.connectionId || ''),
+          entitlementId: String(billingIntent.entitlementId || '') || null,
+          entitlementSourceId: String(billingIntent.entitlementSourceId || ''),
+        }
+      : await EconomyService.settleTokens(
+          current.actorId,
+          Math.max(1, normalized.total || Math.ceil((params.text || '').length * 1.5)),
+          params.storyId || null,
+          effectiveUsage as Parameters<typeof EconomyService.settleTokens>[3],
+          {
+            lockedAmount: current.reservedBudget,
+            lockedBuckets: parseModelInvocationLockedBuckets(current.reservationBuckets),
+            action: params.businessLine,
+            agentRole: params.agentRole,
+            modelId: params.modelId || current.modelId || undefined,
+            ...params.settlement,
+            metadata: {
+              ...params.metadata,
+              modelInvocationId: current.id,
+              stableModelOperation: current.stableOperation,
+              modelInvocationIdempotencyKey: current.idempotencyKey,
+            },
+            tx,
+          },
+        );
+    if (params.onSettled) await params.onSettled(tx, params.result, settled);
+    const now = new Date();
+    await tx.modelInvocationAttempt.updateMany({
+      where: {
+        invocationId: current.id,
+        status: 'SUCCEEDED',
+        replayEnvelope: { not: null },
+      },
+      data: {
+        replayEnvelope: null,
+        replayExpiresAt: null,
+        replayConsumedAt: now,
+      },
+    });
+    const updated = await tx.modelInvocation.updateMany({
+      where: {
+        ...invocationFence(params.invocation),
+        status: 'SETTLING',
+        billingSettledAt: null,
+      },
+      data: {
+        status: params.terminalStatus,
+        reconciliationState: 'NONE',
+        reservationStatus: 'SETTLED',
+        billing: toInputJson(settled),
+        actualCost: settled.actualCost,
+        usage: toInputJson(effectiveUsage || {}),
+        inputUsage: normalized.input,
+        outputUsage: normalized.output,
+        totalUsage: normalized.total,
+        outputHash: params.text ? stableModelHash(params.text) : current.outputHash,
+        errorClass: params.terminalError ? errorClass(params.terminalError) : null,
+        errorMessage: params.terminalError ? errorMessage(params.terminalError) : null,
+        billingSettledAt: now,
+        completedAt: now,
+        leaseOwner: null,
+        leaseUntil: null,
+      },
+    });
+    if (updated.count !== 1) throw invocationFenced(current.id);
+    return settled;
+  }, { isolationLevel: Prisma.TransactionIsolationLevel.Serializable });
+  untrackOwnedInvocation(params.invocation.id);
+  return billing;
+}
+
+async function markReplayReadyOrRequireReconciliation(
+  invocation: ClaimedModelInvocation,
+  reason: string,
+) {
+  const now = new Date();
+  const replayable = await prisma.modelInvocationAttempt.count({
+    where: {
+      invocationId: invocation.id,
+      status: 'SUCCEEDED',
+      replayEnvelope: { not: null },
+      replaySchemaVersion: 1,
+      replayDigest: { not: null },
+      replayExpiresAt: { gt: now },
+      replayConsumedAt: null,
+    },
+  });
+  if (replayable > 0) {
+    const updated = await prisma.modelInvocation.updateMany({
+      where: invocationFence(invocation),
+      data: {
+        status: 'PROVIDER_SUCCEEDED',
+        reconciliationState: 'REPLAY_READY',
+        errorClass: reason,
+        leaseOwner: null,
+        leaseUntil: null,
+      },
+    });
+    if (updated.count !== 1) throw invocationFenced(invocation.id);
+    untrackOwnedInvocation(invocation.id);
+    return true;
+  }
+  await requireReconciliation(invocation.id, reason, invocation);
+  return false;
+}
+
+async function requireReconciliation(
+  invocationId: string,
+  reason: string,
+  invocation?: ClaimedModelInvocation,
+) {
+  await prisma.modelInvocation.updateMany({
+    where: {
+      ...(invocation ? invocationFence(invocation) : { id: invocationId }),
+      reconciliationState: { not: 'REQUIRED' },
+    },
+    data: {
+      status: 'RECONCILIATION_REQUIRED',
+      reconciliationState: 'REQUIRED',
+      errorClass: reason,
+      leaseOwner: null,
+      leaseUntil: null,
+    },
+  });
+  untrackOwnedInvocation(invocationId);
+}
+
+function normalizeDescriptor(input: ModelInvocationDescriptor) {
+  const descriptor = {
+    tenantId: bounded(input.tenantId || 'platform', 120),
+    ownerKind: normalizedOwnerKind(input.ownerKind),
+    ownerId: boundedRequired(input.ownerId, 200, 'ownerId'),
+    ownerLeaseOwner: boundedRequired(input.ownerLeaseOwner, 240, 'ownerLeaseOwner'),
+    ownerFencingToken: positiveFencingToken(input.ownerFencingToken),
+    stableOperation: boundedRequired(input.stableOperation, 200, 'stableOperation'),
+    idempotencyKey: boundedRequired(input.idempotencyKey, 240, 'idempotencyKey'),
+    payloadHash: requireHash(input.payloadHash, 'payloadHash'),
+    role: boundedRequired(input.role, 120, 'role'),
+    routeVersion: boundedRequired(input.routeVersion, 120, 'routeVersion'),
+    promptHash: requireHash(input.promptHash, 'promptHash'),
+    contextBaselineId: optionalBounded(input.contextBaselineId, 200),
+    contextHash: requireHash(input.contextHash, 'contextHash'),
+    toolsetHash: requireHash(input.toolsetHash, 'toolsetHash'),
+    outputSchemaHash: requireHash(input.outputSchemaHash, 'outputSchemaHash'),
+    samplingId: optionalBounded(input.samplingId, 200),
+    threadId: optionalBounded(input.threadId, 200),
+    turnId: optionalBounded(input.turnId, 200),
+    runId: optionalBounded(input.runId, 200),
+    metadata: input.metadata || {},
+  };
+  return descriptor;
+}
+
+function normalizedOwnerKind(value: unknown): ModelInvocationOwnerKind {
+  if ((MODEL_INVOCATION_OWNER_KINDS as readonly unknown[]).includes(value)) {
+    return value as ModelInvocationOwnerKind;
+  }
+  throw new ModelInvocationError(
+    'MODEL_INVOCATION_OWNER_KIND_INVALID',
+    '模型调用缺少已登记的持久领域任务类型',
+    500,
+  );
+}
+
+function positiveFencingToken(value: unknown) {
+  const token = Number(value);
+  if (!Number.isSafeInteger(token) || token <= 0) {
+    throw new ModelInvocationError(
+      'MODEL_INVOCATION_OWNER_FENCING_TOKEN_INVALID',
+      '模型调用缺少领域任务当前的 fencing token',
+      500,
+    );
+  }
+  return token;
+}
+
+function descriptorOwner(descriptor: ReturnType<typeof normalizeDescriptor>) {
+  return {
+    kind: descriptor.ownerKind,
+    id: descriptor.ownerId,
+    expectedLeaseOwner: descriptor.ownerLeaseOwner,
+    expectedFencingToken: descriptor.ownerFencingToken,
+  };
+}
+
+async function assertClaimedInvocationOwner(invocation: ClaimedModelInvocation) {
+  try {
+    await assertModelInvocationOwner({
+      owner: invocation.owner,
+      tenantId: invocation.tenantId,
+      actorId: invocation.actorId,
+    });
+  } catch (error) {
+    if (!(error instanceof ModelInvocationOwnerValidationError)) throw error;
+    throw new ModelInvocationError(error.code, error.message, 409, { cause: error });
+  }
+}
+
+function assertSameInvocationPayload(
+  existing: {
+    payloadHash: string;
+    role: string;
+    routeVersion: string;
+    promptHash: string;
+    contextBaselineId: string | null;
+    contextHash: string;
+    toolsetHash: string;
+    outputSchemaHash: string;
+    ownerKind: ModelInvocationOwnerKind;
+    ownerId: string;
+    samplingId: string | null;
+    threadId: string | null;
+    turnId: string | null;
+    runId: string | null;
+    stableOperation?: string;
+  },
+  descriptor: ReturnType<typeof normalizeDescriptor>,
+) {
+  const fields = [
+    'payloadHash',
+    'role',
+    'routeVersion',
+    'promptHash',
+    'contextBaselineId',
+    'contextHash',
+    'toolsetHash',
+    'outputSchemaHash',
+    'ownerKind',
+    'ownerId',
+    'samplingId',
+    'threadId',
+    'turnId',
+    'runId',
+  ] as const;
+  const conflict = fields.find(field => {
+    const existingVal = (existing as Record<string, unknown>)[field] ?? null;
+    const descriptorVal = (descriptor as Record<string, unknown>)[field] ?? null;
+    if (field === 'role') {
+      if (existingVal === descriptorVal) return false;
+      const isCompaction =
+        descriptor.stableOperation === 'book_agent.conversation_compaction' ||
+        existing.stableOperation === 'book_agent.conversation_compaction';
+      if (
+        isCompaction &&
+        (existingVal === 'agent_reasoning' || existingVal === 'compression') &&
+        (descriptorVal === 'agent_reasoning' || descriptorVal === 'compression')
+      ) {
+        return false;
+      }
+      return true;
+    }
+    return existingVal !== descriptorVal;
+  });
+  if (conflict) {
+    throw new ModelInvocationError(
+      'MODEL_INVOCATION_IDEMPOTENCY_CONFLICT',
+      `同一模型调用幂等键的 ${conflict} 已变化`,
+    );
+  }
+}
+
+function providerDefinitelyRejected(error: unknown) {
+  const record = error && typeof error === 'object' ? error as JsonRecord : {};
+  const status = Number(record.status || record.statusCode || 0);
+  if ([400, 401, 402, 403, 404, 409, 422, 429].includes(status)) return true;
+  const code = String(record.code || '').toUpperCase();
+  return [
+    'INVALID_API_KEY',
+    'AUTHENTICATION_ERROR',
+    'PERMISSION_DENIED',
+    'RATE_LIMIT_EXCEEDED',
+    'INSUFFICIENT_QUOTA',
+  ].includes(code);
+}
+
+function providerAttemptReplayContext(attempt: {
+  id: string;
+  invocationId: string;
+  attempt: number;
+  requestHash: string;
+  promptHash: string;
+}) {
+  return [
+    `invocation=${attempt.invocationId}`,
+    `attemptId=${attempt.id}`,
+    `attempt=${attempt.attempt}`,
+    `request=${attempt.requestHash}`,
+    `prompt=${attempt.promptHash}`,
+  ].join(':');
+}
+
+function normalizeUsage(value: unknown) {
+  const usage = value && typeof value === 'object' && !Array.isArray(value) ? value as JsonRecord : {};
+  const input = positiveInt(usage.prompt_tokens ?? usage.input_tokens ?? usage.promptTokens ?? usage.inputTokens);
+  const output = positiveInt(usage.completion_tokens ?? usage.output_tokens ?? usage.completionTokens ?? usage.outputTokens);
+  const total = Math.max(positiveInt(usage.total_tokens ?? usage.totalTokens), input + output);
+  return { input, output, total };
+}
+
+export function parseModelInvocationLockedBuckets(value: unknown): LockedWalletBuckets {
+  const record = value && typeof value === 'object' && !Array.isArray(value) ? value as JsonRecord : {};
+  const daily = positiveInt(record.daily);
+  const subscription = positiveInt(record.subscription);
+  const bonus = positiveInt(record.bonus);
+  const paid = positiveInt(record.paid);
+  const total = positiveInt(record.total);
+  if (total <= 0 || daily + subscription + bonus + paid !== total) {
+    throw new ModelInvocationError('MODEL_INVOCATION_RESERVATION_CORRUPT', '模型预算 reservation 的来源桶记录无效');
+  }
+  return { daily, subscription, bonus, paid, total };
+}
+
+function stableStringify(value: unknown): string {
+  if (value === null || value === undefined) return JSON.stringify(value ?? null);
+  if (typeof value === 'bigint') return JSON.stringify(value.toString());
+  if (typeof value !== 'object') return JSON.stringify(value);
+  if (Array.isArray(value)) return `[${value.map(stableStringify).join(',')}]`;
+  return `{${Object.entries(value as JsonRecord)
+    .filter(([, item]) => item !== undefined)
+    .sort(([left], [right]) => left.localeCompare(right))
+    .map(([key, item]) => `${JSON.stringify(key)}:${stableStringify(item)}`)
+    .join(',')}}`;
+}
+
+function boundedRequired(value: unknown, max: number, field: string) {
+  const normalized = String(value || '').trim();
+  if (!normalized) throw new ModelInvocationError('MODEL_INVOCATION_DESCRIPTOR_INVALID', `${field} 不能为空`, 500);
+  return normalized.slice(0, max);
+}
+
+function bounded(value: unknown, max: number) {
+  return String(value || '').trim().slice(0, max);
+}
+
+function optionalBounded(value: unknown, max: number) {
+  const normalized = bounded(value, max);
+  return normalized || null;
+}
+
+function requireHash(value: unknown, field: string) {
+  const normalized = String(value || '').trim();
+  if (!HASH_PATTERN.test(normalized)) {
+    throw new ModelInvocationError('MODEL_INVOCATION_DESCRIPTOR_INVALID', `${field} 必须是稳定 hash`, 500);
+  }
+  return normalized.toLowerCase();
+}
+
+function positiveInt(value: unknown) {
+  const number = Number(value);
+  return Number.isFinite(number) && number > 0 ? Math.floor(number) : 0;
+}
+
+function errorClass(error: unknown) {
+  if (error instanceof ModelInvocationError) return error.code;
+  if (error instanceof Error) return error.name || 'Error';
+  return 'UNKNOWN_ERROR';
+}
+
+function providerRequestIdFromError(error: unknown) {
+  if (!error || typeof error !== 'object') return null;
+  const value = (error as JsonRecord).providerRequestId;
+  const normalized = bounded(value, 256);
+  return normalized || null;
+}
+
+function errorMessage(error: unknown) {
+  const chain: string[] = [];
+  const visited = new Set<unknown>();
+  let current: unknown = error;
+  for (let depth = 0; current && depth < 4 && !visited.has(current); depth += 1) {
+    visited.add(current);
+    if (current instanceof Error) {
+      const record = current as Error & { code?: unknown; cause?: unknown };
+      const code = bounded(record.code, 120);
+      const name = bounded(record.name, 120) || 'Error';
+      const message = bounded(record.message, 1_000) || 'UNKNOWN_ERROR';
+      chain.push(`${name}${code ? `[${code}]` : ''}: ${message}`);
+      current = record.cause;
+      continue;
+    }
+    if (typeof current === 'object') {
+      const record = current as JsonRecord;
+      const code = bounded(record.code, 120);
+      const name = bounded(record.name, 120) || 'Error';
+      const message = bounded(record.message, 1_000) || 'UNKNOWN_ERROR';
+      chain.push(`${name}${code ? `[${code}]` : ''}: ${message}`);
+      current = record.cause;
+      continue;
+    }
+    chain.push(bounded(current, 1_000) || 'UNKNOWN_ERROR');
+    break;
+  }
+  return (chain.join(' <- caused by ') || 'UNKNOWN_ERROR').slice(0, 4_000);
+}
+
+function reconciliationRequired(invocationId: string) {
+  return new ModelInvocationError(
+    'MODEL_INVOCATION_RECONCILIATION_REQUIRED',
+    `逻辑调用 ${invocationId} 的 Provider 结果不确定；禁止自动重试、换 Key 或换模型`,
+    503,
+  );
+}
+
+function invocationFenced(invocationId: string) {
+  return new ModelInvocationError('MODEL_INVOCATION_FENCED', `逻辑调用 ${invocationId} 的执行租约已失效`, 409);
+}
+
+function invocationFence(invocation: ClaimedModelInvocation) {
+  return {
+    id: invocation.id,
+    actorId: invocation.actorId,
+    leaseOwner: invocation.leaseOwner,
+    fencingToken: invocation.fencingToken,
+  };
+}
+
+function isUniqueConstraintError(error: unknown) {
+  return error instanceof Prisma.PrismaClientKnownRequestError && error.code === 'P2002';
+}
+
+function toInputJson(value: unknown) {
+  return JSON.parse(JSON.stringify(value, (_key, item) => typeof item === 'bigint' ? item.toString() : item)) as Prisma.InputJsonValue;
+}
+
+const invocationClaimSelect = {
+  id: true,
+  tenantId: true,
+  actorId: true,
+  leaseOwner: true,
+  fencingToken: true,
+  reservedBudget: true,
+  reservationStatus: true,
+} as const;
+
+function asClaimedInvocation(value: {
+  id: string;
+  tenantId: string;
+  actorId: string;
+  leaseOwner: string | null;
+  fencingToken: number;
+  reservedBudget: number;
+  reservationStatus: string;
+}, recoveringProviderResult: boolean, owner: ClaimedModelInvocation['owner'], tenantId: string): ClaimedModelInvocation {
+  if (!value.leaseOwner) throw invocationFenced(value.id);
+  if (value.tenantId !== tenantId) throw invocationFenced(value.id);
+  return {
+    ...value,
+    owner,
+    leaseOwner: value.leaseOwner,
+    recoveringProviderResult,
+    providerReplayRestored: false,
+  };
+}

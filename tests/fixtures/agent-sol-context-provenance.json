@@ -1,0 +1,21 @@
+{
+  "model": "gpt-6-sol",
+  "simulation": true,
+  "agentPath": "/root/model_fixtures",
+  "externalRequestId": "external_10218c75-38e5-4185-9601-942383b0d929",
+  "inputHash": "0327b6fb0578415e4025f80da53dabc0093c9f849c256674e844edff765082a3",
+  "requestEvidencePath": "/Users/yang/Desktop/code/movie/a-22/artifacts/agent-foundation-study-2026-09-26/sol-context-request.json",
+  "scope": {
+    "operation": "text_rewrite",
+    "projectId": "script_2702601d-473f-451a-b4a5-4a55548ade21",
+    "sceneId": "scene_6432e7e3-426a-461e-a464-225559a0d99a",
+    "selectedText": "林夏很紧张，不知道要不要开门。",
+    "selectedStart": 10,
+    "selectedEnd": 25
+  },
+  "limitations": [
+    "子 Agent 模拟模型返回，未调用外部模型 provider。",
+    "仅生成选中句的替换文本，未执行数据库回填。",
+    "模拟返回不构成真实 provider 结果或艺术质量验收。"
+  ]
+}

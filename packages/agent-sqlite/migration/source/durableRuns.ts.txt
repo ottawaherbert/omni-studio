@@ -1,0 +1,2386 @@
+import { assertAuthorAgentQueueCapacity } from './authorAdmission';
+import { Prisma } from '@prisma/client';
+import { randomUUID } from 'node:crypto';
+import { prisma } from '@/services/db';
+import { appendAgentItem, getAgentThread, toPublicAgentTurn } from '@/services/bookAgent/protocol';
+import { assertAgentResourceScope } from '@/services/bookAgent/scope';
+import { hashAgentCommand, assertSameIdempotentPayload } from '@/services/bookAgent/idempotency';
+import { sanitizeForAgentModel, stableAgentHash } from '@/services/bookAgent/security';
+import {
+  agentRunCommandSchema,
+  createAgentCapabilityRunSchema,
+  createAgentGoalSchema,
+  type AgentRunCommandInput,
+  type CreateAgentCapabilityRunInput,
+  type CreateAgentGoalInput,
+} from '@/services/bookAgent/durableRunContracts';
+import { AGENT_RUNTIME_VERSION, agentSurfaceContextSchema } from '@/services/bookAgent/contracts';
+import { getBookAgentRuntime } from '@/services/bookAgent/runtime';
+import {
+  classifyCapabilityFailure,
+  defaultCapabilityRetryDisposition,
+} from '@/services/bookAgent/capabilityDiagnostics';
+import type { AgentAccessContext, CapabilityObservation, CapabilitySpec } from '@/services/bookAgent/runtimeTypes';
+import type { AgentPrincipal } from '@/services/bookAgent/principal';
+import { chapterContentHash } from '@/services/story/chapterContentHash';
+import { BOOK_SEMANTIC_REVIEW_JOB_KIND, processBookSemanticReviewStep } from '@/services/story/bookSemanticReviewJob';
+import { routeError } from '@/services/routeErrors';
+import { findProfile } from '@/services/bookAgent/relationshipProfile';
+import { isModelInvocationReplayReadyError } from '@/services/ai/modelInvocation';
+import { isBlueprintRetryPending } from '@/services/story/genesisBlueprintRecovery';
+import { blueprintRetryReadyWhere, requeueBlueprintRetry } from './blueprintRunRecovery';
+import {
+  assertAgentTurnExecution,
+  type AgentTurnExecutionLease,
+} from '@/services/bookAgent/turnLease';
+import {
+  processPrecisionRevisionBatchStep,
+  REVISION_BATCH_JOB_KIND,
+} from '@/services/story/precisionRevision/batchJob';
+import {
+  classifyDurableRunLane,
+  extractCapabilitySchedulingMeta,
+  formatQueueWaitLog,
+  priorityForCapabilitySpec,
+  type DurableRunLane,
+} from '@/services/bookAgent/durableRunScheduling';
+
+const TERMINAL_RUN_STATUSES = ['CANCELED', 'PARTIAL', 'FAILED', 'SUCCEEDED', 'EXPIRED'] as const;
+const ACTIVE_RUN_STATUSES = ['QUEUED', 'RUNNING', 'PAUSE_REQUESTED', 'PAUSED', 'CANCEL_REQUESTED', 'BLOCKED', 'DEGRADED'] as const;
+const DEFAULT_LEASE_MS = 60_000;
+export const DIRECT_CAPABILITY_JOB_KIND = 'DIRECT_CAPABILITY' as const;
+type AgentRunRecord = Prisma.AgentRunGetPayload<Record<string, never>>;
+type AgentArtifactRecord = Prisma.AgentArtifactGetPayload<Record<string, never>>;
+type AgentRunWithOptionalArtifacts = AgentRunRecord & { artifacts?: AgentArtifactRecord[] };
+type AgentCapabilityRunReplay = Prisma.AgentTurnGetPayload<{
+  include: { initiatedRuns: { include: { artifacts: true } } };
+}>;
+
+const AGENT_LOOP_DISPATCH_MODE = 'AGENT_LOOP' as const;
+
+export class AgentDurableCapabilityPendingError extends Error {
+  readonly code = 'AGENT_DURABLE_CAPABILITY_PENDING';
+
+  constructor(readonly runId: string) {
+    super('能力已交给耐久 Worker，将在同一回合恢复');
+    this.name = 'AgentDurableCapabilityPendingError';
+  }
+}
+
+export function isAgentDurableCapabilityPendingError(error: unknown): error is AgentDurableCapabilityPendingError {
+  return error instanceof AgentDurableCapabilityPendingError
+    || Boolean(error && typeof error === 'object' && 'code' in error
+      && (error as { code?: unknown }).code === 'AGENT_DURABLE_CAPABILITY_PENDING');
+}
+
+function agentLoopCapabilityRunId(principal: AgentPrincipal, turnId: string, callId: string) {
+  return `caprun_loop_${stableAgentHash({
+    tenantId: principal.tenantId,
+    actorId: principal.actorId,
+    turnId,
+    callId,
+  }).slice(0, 40)}`;
+}
+
+export async function loadAgentLoopCapabilityRunResult(params: {
+  principal: AgentPrincipal;
+  turnId: string;
+  threadId: string;
+  prepared: {
+    request: { capabilityId: string; capabilityVersion: string; input: unknown; callId: string };
+    inputDigest: string;
+  };
+}) {
+  const runId = agentLoopCapabilityRunId(
+    params.principal,
+    params.turnId,
+    params.prepared.request.callId,
+  );
+  const run = await prisma.agentRun.findFirst({
+    where: {
+      id: runId,
+      tenantId: params.principal.tenantId,
+      actorId: params.principal.actorId,
+      threadId: params.threadId,
+      initiatingTurnId: params.turnId,
+      jobKind: DIRECT_CAPABILITY_JOB_KIND,
+      trigger: 'AGENT_LOOP',
+    },
+    include: { artifacts: { where: { type: 'CAPABILITY_RESULT' }, orderBy: { createdAt: 'desc' }, take: 1 } },
+  });
+  if (!run) return null;
+  const stored = record(run.input);
+  const dispatch = record(stored.dispatch);
+  const prepared = record(stored.prepared);
+  const request = record(prepared.request);
+  if (
+    dispatch.mode !== AGENT_LOOP_DISPATCH_MODE
+    || dispatch.callId !== params.prepared.request.callId
+    || dispatch.canonicalInputDigest !== params.prepared.inputDigest
+    || request.capabilityId !== params.prepared.request.capabilityId
+    || request.capabilityVersion !== params.prepared.request.capabilityVersion
+  ) {
+    throw routeError('AGENT_CAPABILITY_RUN_IDEMPOTENCY_CONFLICT', '耐久能力结果与当前工具调用不一致', 409);
+  }
+  if (!TERMINAL_RUN_STATUSES.includes(run.status as typeof TERMINAL_RUN_STATUSES[number])) {
+    throw new AgentDurableCapabilityPendingError(run.id);
+  }
+  const artifact = run.artifacts[0];
+  if (!artifact || stableAgentHash(artifact.content) !== artifact.contentHash) {
+    throw routeError('AGENT_CAPABILITY_RUN_RESULT_INVALID', '耐久能力结果产物缺失或校验失败', 409);
+  }
+  const content = record(artifact.content);
+  const observation = record(content.observation) as unknown as CapabilityObservation;
+  if (
+    observation.callId !== params.prepared.request.callId
+    || observation.capabilityId !== params.prepared.request.capabilityId
+    || observation.capabilityVersion !== params.prepared.request.capabilityVersion
+  ) {
+    throw routeError('AGENT_CAPABILITY_RUN_RESULT_INVALID', '耐久能力观察结果与原工具调用不一致', 409);
+  }
+  return {
+    runId: run.id,
+    observation,
+  };
+}
+
+export async function handoffAgentLoopCapabilityRun(params: {
+  principal: AgentPrincipal;
+  lease: AgentTurnExecutionLease;
+  threadId: string;
+  spec: CapabilitySpec;
+  prepared: {
+    request: { capabilityId: string; capabilityVersion: string; input: unknown; callId: string };
+    inputDigest: string;
+    providerId: string;
+    providerVersion: string;
+    artifactDigest: string;
+  };
+  scope: AgentAccessContext['scope'];
+  surfaceContext: AgentAccessContext['surfaceContext'];
+}) {
+  if (params.spec.dispatchPolicy !== 'DURABLE_RUN_REQUIRED') {
+    throw routeError('AGENT_CAPABILITY_EXECUTION_MODE_INVALID', '只有声明为耐久执行的能力可以交给任务 Worker', 409);
+  }
+  assertCapabilityRunSpec(params.spec);
+  const callId = params.prepared.request.callId;
+  const runId = agentLoopCapabilityRunId(params.principal, params.lease.turnId, callId);
+  const persistedInput = {
+    schemaVersion: 1,
+    dispatch: {
+      mode: AGENT_LOOP_DISPATCH_MODE,
+      callId,
+      canonicalInput: params.prepared.request.input,
+      canonicalInputDigest: params.prepared.inputDigest,
+    },
+    capability: {
+      id: params.spec.id,
+      version: params.spec.version,
+      title: params.spec.title,
+      effectClass: params.spec.effectClass,
+      exposurePolicy: params.spec.exposurePolicy,
+      dispatchPolicy: params.spec.dispatchPolicy,
+      timeoutMs: params.spec.timeoutMs,
+    },
+    prepared: params.prepared,
+    scope: params.scope,
+    surfaceContext: params.surfaceContext,
+  };
+  const persistedInputJson = toJson(persistedInput);
+  const inputHash = stableAgentHash(persistedInputJson);
+  const queueGraceMs = Math.max(60_000, Math.min(5 * 60_000, Math.floor(params.spec.timeoutMs / 2)));
+  const deadline = new Date(Date.now() + params.spec.timeoutMs + queueGraceMs);
+  const created = await prisma.$transaction(async tx => {
+    await assertAgentTurnExecution(tx, params.lease);
+    const existing = await tx.agentRun.findUnique({ where: { id: runId } });
+    if (existing) {
+      if (
+        existing.threadId !== params.threadId
+        || existing.initiatingTurnId !== params.lease.turnId
+        || existing.jobKind !== DIRECT_CAPABILITY_JOB_KIND
+        || stableAgentHash(existing.input) !== inputHash
+      ) {
+        throw routeError('AGENT_CAPABILITY_RUN_IDEMPOTENCY_CONFLICT', '同一工具调用已经绑定到不同的耐久任务', 409);
+      }
+    } else {
+      await tx.agentRun.create({
+        data: {
+          id: runId,
+          tenantId: params.principal.tenantId,
+          actorId: params.principal.actorId,
+          threadId: params.threadId,
+          initiatingTurnId: params.lease.turnId,
+          attempt: 1,
+          trigger: 'AGENT_LOOP',
+          jobKind: DIRECT_CAPABILITY_JOB_KIND,
+          input: persistedInputJson,
+          priority: priorityForCapabilitySpec({
+            id: params.spec.id,
+            timeoutMs: params.spec.timeoutMs,
+          }),
+          deadline,
+          currentFocus: params.spec.title,
+          budget: toJson({
+            maxWallClockMs: params.spec.timeoutMs,
+            effectClasses: [params.spec.effectClass],
+            formalWrites: 0,
+          }),
+          progressTotal: 1,
+        },
+      });
+    }
+    const handedOff = await tx.agentTurn.updateMany({
+      where: {
+        id: params.lease.turnId,
+        threadId: params.threadId,
+        tenantId: params.principal.tenantId,
+        actorId: params.principal.actorId,
+        trigger: 'USER_MESSAGE',
+        status: 'RUNNING',
+        leaseOwner: params.lease.workerId,
+        fencingToken: params.lease.fencingToken,
+        leaseUntil: { gte: new Date() },
+      },
+      data: {
+        status: 'WAITING_FOR_RUN',
+        leaseOwner: null,
+        leaseUntil: null,
+        fencingToken: { increment: 1 },
+        completedAt: null,
+      },
+    });
+    if (handedOff.count !== 1) throw routeError('AGENT_TURN_LEASE_LOST', '能力任务交接时回合租约已失效', 409);
+    return existing || tx.agentRun.findUniqueOrThrow({ where: { id: runId } });
+  }, { isolationLevel: Prisma.TransactionIsolationLevel.Serializable });
+  return created;
+}
+
+export async function createAgentCapabilityRun(
+  principal: AgentPrincipal,
+  threadId: string,
+  rawInput: CreateAgentCapabilityRunInput,
+) {
+  const input = createAgentCapabilityRunSchema.parse(rawInput);
+  const payloadHash = hashAgentCommand('create_capability_run', { threadId, ...input });
+  const replay = await findCapabilityRunReplay(principal, input.clientId, input.clientRequestId);
+  if (replay) return validateCapabilityRunReplay(principal, threadId, payloadHash, replay);
+
+  const thread = await getAgentThread(principal, threadId);
+  if (thread.originMode !== 'NATIVE') {
+    throw routeError('AGENT_LEGACY_THREAD_READ_ONLY', '历史导入会话不能启动能力任务', 409);
+  }
+  if (thread.status !== 'ACTIVE') {
+    throw routeError('AGENT_THREAD_NOT_ACTIVE', '当前助手会话不可启动能力任务', 409);
+  }
+  const surfaceResult = agentSurfaceContextSchema.safeParse({
+    ...(input.surfaceContext || {}),
+    storyId: input.surfaceContext?.storyId ?? thread.defaultStoryId,
+    chapterId: input.surfaceContext?.chapterId ?? thread.defaultChapterId,
+  });
+  if (!surfaceResult.success) throw routeError('AGENT_SCHEMA_INVALID', '能力任务页面上下文格式不正确', 400);
+  const surfaceContext = surfaceResult.data;
+  const scope = await assertAgentResourceScope(principal, surfaceContext, { requireActiveStory: true });
+  const runtime = getBookAgentRuntime();
+  const spec = runtime.capabilities.find(input.capabilityId, input.capabilityVersion);
+  if (!spec) throw routeError('AGENT_CAPABILITY_NOT_FOUND', '助手能力不存在或版本不可用', 404);
+  assertCapabilityRunSpec(spec);
+
+  const turnId = `capturn_${randomUUID().replaceAll('-', '')}`;
+  const runId = `caprun_${randomUUID().replaceAll('-', '')}`;
+  const callId = `capability-run:${runId}`;
+  const accessContext: AgentAccessContext = {
+    principal,
+    threadId,
+    turnId,
+    originTurnId: turnId,
+    purpose: 'USER_REQUEST',
+    scope,
+    surfaceContext,
+  };
+  const prepared = await runtime.capabilities.prepare({
+    capabilityId: spec.id,
+    capabilityVersion: spec.version,
+    input: input.input,
+    callId,
+  }, accessContext);
+  const persistedInput = {
+    schemaVersion: 1,
+    recovery: input.recovery || null,
+    capability: {
+      id: spec.id,
+      version: spec.version,
+      title: spec.title,
+      effectClass: spec.effectClass,
+      exposurePolicy: spec.exposurePolicy,
+      clientLaunchPolicy: spec.clientLaunchPolicy || null,
+      timeoutMs: spec.timeoutMs,
+    },
+    prepared,
+    scope,
+    surfaceContext,
+  };
+  const entryContextHash = hashAgentCommand('entry_context', {
+    tenantId: principal.tenantId,
+    actorId: principal.actorId,
+    authorizationModel: 'CURRENT_AUTHENTICATED_USER',
+    threadId,
+    surfaceContext,
+  });
+
+  try {
+    const created = await prisma.$transaction(async tx => {
+      const concurrent = await tx.agentTurn.findFirst({
+        where: {
+          tenantId: principal.tenantId,
+          actorId: principal.actorId,
+          clientId: input.clientId,
+          clientRequestId: input.clientRequestId,
+        },
+        include: { initiatedRuns: { include: { artifacts: true }, orderBy: { createdAt: 'asc' }, take: 1 } },
+      });
+      if (concurrent) return { replayed: true as const, turn: concurrent, run: concurrent.initiatedRuns[0] || null };
+      await assertAuthorAgentQueueCapacity(tx, principal);
+
+      const allocated = await tx.agentThread.updateManyAndReturn({
+        where: {
+          id: threadId,
+          tenantId: principal.tenantId,
+          actorId: principal.actorId,
+          originMode: 'NATIVE',
+          status: 'ACTIVE',
+          deletedAt: null,
+        },
+        data: { lastSeq: { increment: 1 } },
+        select: { lastSeq: true },
+      });
+      const firstSeq = allocated[0]?.lastSeq;
+      if (firstSeq === undefined) throw routeError('AGENT_THREAD_NOT_ACTIVE', '当前助手会话不可启动能力任务', 409);
+      const turn = await tx.agentTurn.create({
+        data: {
+          id: turnId,
+          threadId,
+          tenantId: principal.tenantId,
+          actorId: principal.actorId,
+          trigger: 'CAPABILITY_RUN',
+          runtimeVersion: AGENT_RUNTIME_VERSION,
+          status: 'ACCEPTED',
+          clientId: input.clientId,
+          clientRequestId: input.clientRequestId,
+          deviceId: input.deviceId,
+          payloadHash,
+          entryContextHash,
+          firstSeq,
+          surfaceContext: toJson(surfaceContext),
+        },
+      });
+      await tx.agentItem.create({
+        data: {
+          threadId,
+          turnId,
+          seq: firstSeq,
+          kind: 'tool_call',
+          visibility: spec.clientLaunchPolicy === 'SURFACE_ONLY' ? 'INTERNAL' : 'PUBLIC',
+          payloadVersion: 1,
+          correlationId: runId,
+          clientRequestId: input.clientRequestId,
+          payload: toJson({
+            callId,
+            capabilityId: spec.id,
+            capabilityVersion: spec.version,
+            arguments: spec.clientLaunchPolicy === 'SURFACE_ONLY'
+              ? { surfaceOnly: true, capabilityId: spec.id }
+              : sanitizeForAgentModel(prepared.request.input, { maxString: 4_000, maxArray: 50 }),
+            effectClass: spec.effectClass,
+            dispatch: 'DURABLE_CAPABILITY_WORKER',
+          }),
+          provenance: toJson({
+            source: 'authenticated_user',
+            runtimeVersion: AGENT_RUNTIME_VERSION,
+            semanticRole: 'DIRECT_CAPABILITY_REQUEST',
+            inputDigest: prepared.inputDigest,
+          }),
+        },
+      });
+      const run = await tx.agentRun.create({
+        data: {
+          id: runId,
+          tenantId: principal.tenantId,
+          actorId: principal.actorId,
+          threadId,
+          initiatingTurnId: turnId,
+          attempt: 1,
+          trigger: 'USER_REQUEST',
+          jobKind: DIRECT_CAPABILITY_JOB_KIND,
+          input: toJson(persistedInput),
+          priority: priorityForCapabilitySpec({ id: spec.id, timeoutMs: spec.timeoutMs }),
+          currentFocus: spec.title,
+          budget: toJson({ maxWallClockMs: spec.timeoutMs, effectClasses: [spec.effectClass], formalWrites: 0 }),
+          progressTotal: 1,
+        },
+        include: { artifacts: true },
+      });
+      return { replayed: false as const, turn, run };
+    });
+    if (created.replayed) {
+      return validateCapabilityRunReplay(principal, threadId, payloadHash, created.turn, created.run);
+    }
+    await appendRunItem(principal, created.run, `能力 ${spec.id}@${spec.version} 已持久化排队`);
+    return { replayed: false, turn: toPublicAgentTurn(created.turn), run: publicRun(created.run) };
+  } catch (error) {
+    if (!isUniqueConstraintError(error)) throw error;
+    const concurrent = await findCapabilityRunReplay(principal, input.clientId, input.clientRequestId);
+    if (!concurrent) throw error;
+    return validateCapabilityRunReplay(principal, threadId, payloadHash, concurrent);
+  }
+}
+
+export function assertCapabilityRunSpec(
+  spec: Pick<CapabilitySpec, 'effectClass' | 'exposurePolicy' | 'clientLaunchPolicy'>,
+) {
+  if (spec.exposurePolicy !== 'DIRECT' && spec.clientLaunchPolicy !== 'SURFACE_ONLY') {
+    throw routeError('AGENT_CAPABILITY_NOT_DIRECT', '这个能力不能由客户端直接启动', 409);
+  }
+  if (!['READ', 'PROPOSE'].includes(spec.effectClass)) {
+    throw routeError(
+      'BOOK_AGENT_APPROVAL_REQUIRED',
+      '正式写入、发布、删除和外部效果必须通过 ChangeSet 与作者确认执行',
+      409,
+    );
+  }
+}
+
+async function findCapabilityRunReplay(principal: AgentPrincipal, clientId: string, clientRequestId: string) {
+  return prisma.agentTurn.findFirst({
+    where: {
+      tenantId: principal.tenantId,
+      actorId: principal.actorId,
+      clientId,
+      clientRequestId,
+    },
+    include: { initiatedRuns: { include: { artifacts: true }, orderBy: { createdAt: 'asc' } } },
+  });
+}
+
+async function validateCapabilityRunReplay(
+  principal: AgentPrincipal,
+  threadId: string,
+  payloadHash: string,
+  turn: AgentCapabilityRunReplay,
+  suppliedRun?: AgentRunWithOptionalArtifacts | null,
+) {
+  if (turn.threadId !== threadId || turn.trigger !== 'CAPABILITY_RUN') {
+    throw routeError('IDEMPOTENCY_CONFLICT', '相同请求标识已用于其他助手操作', 409);
+  }
+  assertSameIdempotentPayload(turn.payloadHash, payloadHash);
+  await getAgentThread(principal, threadId);
+  const surface = agentSurfaceContextSchema.safeParse(turn.surfaceContext);
+  if (!surface.success) throw routeError('AGENT_CAPABILITY_RUN_CONTRACT_INVALID', '能力任务页面上下文已损坏', 409);
+  await assertAgentResourceScope(principal, surface.data, { requireActiveStory: false });
+  const run = suppliedRun || turn.initiatedRuns.find(candidate => candidate.jobKind === DIRECT_CAPABILITY_JOB_KIND);
+  if (!run) throw routeError('AGENT_CAPABILITY_RUN_NOT_FOUND', '幂等请求对应的能力任务不存在', 409);
+  return { replayed: true, turn: toPublicAgentTurn(turn), run: publicRun(run) };
+}
+
+export async function createAgentGoalRun(principal: AgentPrincipal, rawInput: CreateAgentGoalInput) {
+  const input = createAgentGoalSchema.parse(rawInput);
+  const payloadHash = hashAgentCommand('create_goal', input);
+  const replay = await prisma.agentGoal.findFirst({
+    where: {
+      tenantId: principal.tenantId,
+      actorId: principal.actorId,
+      createClientId: input.clientId,
+      createClientRequestId: input.clientRequestId,
+    },
+    include: { runs: { orderBy: { attempt: 'desc' }, take: 1 } },
+  });
+  if (replay) {
+    assertSameIdempotentPayload(replay.createPayloadHash, payloadHash);
+    return { goal: publicGoal(replay), run: publicRun(replay.runs[0]) };
+  }
+
+  await getAgentThread(principal, input.threadId);
+  const scope = await assertAgentResourceScope(principal, input.resourceScope, { requireActiveStory: true });
+  if (!scope.storyId) throw routeError('AGENT_GOAL_STORY_REQUIRED', '当前长任务必须绑定作品', 400);
+  if (input.jobKind === BOOK_SEMANTIC_REVIEW_JOB_KIND
+    && (input.input.branchId !== scope.branchId || input.input.focusChapterId !== scope.chapterId)) {
+    throw routeError('BOOK_REVIEW_SCOPE_MISMATCH', '语义审查目标必须与已授权的章节范围一致', 409);
+  }
+  if (input.resourceScope.branchId) {
+    const branch = await prisma.branch.findFirst({
+      where: { id: input.resourceScope.branchId, storyId: scope.storyId },
+      select: { id: true },
+    });
+    if (!branch) throw routeError('AGENT_GOAL_BRANCH_NOT_FOUND', '任务分支不属于当前作品', 404);
+  }
+  if (input.initiatingTurnId) {
+    const turn = await prisma.agentTurn.findFirst({
+      where: {
+        id: input.initiatingTurnId,
+        threadId: input.threadId,
+        tenantId: principal.tenantId,
+        actorId: principal.actorId,
+      },
+      select: { id: true },
+    });
+    if (!turn) throw routeError('AGENT_TURN_NOT_FOUND', '启动任务的回合不存在', 404);
+  }
+  const authorizedEffects = [...new Set(input.authorizationEnvelope.effectClasses)].sort();
+  const requiredEffects = input.jobKind === REVISION_BATCH_JOB_KIND
+    ? ['PROPOSE', 'READ']
+    : ['READ'];
+  if (stableAgentHash(authorizedEffects) !== stableAgentHash(requiredEffects)) {
+    throw routeError(
+      'AGENT_RUN_EFFECT_NOT_SUPPORTED',
+      input.jobKind === REVISION_BATCH_JOB_KIND
+        ? '跨章修订任务只能读取正文并创建候选，不能获得正式写入权限'
+        : '全书扫描任务只允许只读权限',
+      400,
+    );
+  }
+  if (input.jobKind === BOOK_SEMANTIC_REVIEW_JOB_KIND
+    && (input.budget.maxCost <= 0 || !input.budget.maxModelCalls)) {
+    throw routeError('BOOK_REVIEW_COST_BUDGET_REQUIRED', '语义审查需设置费用阈值和模型调用次数上限', 400);
+  }
+
+  const result = await prisma.$transaction(async tx => {
+    const goal = await tx.agentGoal.create({
+      data: {
+        tenantId: principal.tenantId,
+        actorId: principal.actorId,
+        threadId: input.threadId,
+        objective: input.objective,
+        acceptanceCriteria: toJson(input.acceptanceCriteria),
+        resourceScope: toJson(input.resourceScope),
+        authorizationEnvelope: toJson(input.authorizationEnvelope),
+        budget: toJson(input.budget),
+        createClientId: input.clientId,
+        createClientRequestId: input.clientRequestId,
+        createPayloadHash: payloadHash,
+      },
+    });
+    const run = await tx.agentRun.create({
+      data: {
+        tenantId: principal.tenantId,
+        actorId: principal.actorId,
+        goalId: goal.id,
+        threadId: input.threadId,
+        initiatingTurnId: input.initiatingTurnId || null,
+        attempt: 1,
+        jobKind: input.jobKind,
+        input: toJson({ ...input.input, storyId: scope.storyId }),
+        priority: input.priority,
+        deadline: input.deadline ? new Date(input.deadline) : null,
+        budget: toJson(input.budget),
+        currentFocus: input.objective,
+        progressTotal: input.jobKind === REVISION_BATCH_JOB_KIND ? input.input.requests.length : null,
+      },
+    });
+    return { goal, run };
+  });
+
+  await appendAgentItem(principal, {
+    threadId: result.goal.threadId,
+    turnId: input.initiatingTurnId || null,
+    kind: 'goal_update',
+    payload: publicGoal(result.goal),
+    provenance: { source: 'goal_scheduler' },
+    clientRequestId: input.clientRequestId,
+  });
+  await appendRunItem(principal, result.run, '任务已排队');
+  return { goal: publicGoal(result.goal), run: publicRun(result.run) };
+}
+
+export async function listAgentGoals(principal: AgentPrincipal, params: { threadId?: string | null; status?: string | null; limit?: number }) {
+  const goals = await prisma.agentGoal.findMany({
+    where: {
+      tenantId: principal.tenantId,
+      actorId: principal.actorId,
+      ...(params.threadId ? { threadId: params.threadId } : {}),
+      ...(params.status ? { status: params.status } : {}),
+    },
+    include: { runs: { orderBy: { attempt: 'desc' }, take: 1 } },
+    orderBy: { updatedAt: 'desc' },
+    take: boundedLimit(params.limit),
+  });
+  return goals.map(goal => ({ ...publicGoal(goal), latestRun: publicRun(goal.runs[0]) }));
+}
+
+export async function listAgentRuns(principal: AgentPrincipal, params: { threadId?: string | null; goalId?: string | null; status?: string | null; limit?: number }) {
+  const runs = await prisma.agentRun.findMany({
+    where: {
+      tenantId: principal.tenantId,
+      actorId: principal.actorId,
+      ...(params.threadId ? { threadId: params.threadId } : {}),
+      ...(params.goalId ? { goalId: params.goalId } : {}),
+      ...(params.status ? { status: params.status } : {}),
+    },
+    include: { artifacts: { orderBy: { createdAt: 'desc' } } },
+    orderBy: { updatedAt: 'desc' },
+    take: boundedLimit(params.limit),
+  });
+  return runs.map(run => publicRun(run));
+}
+
+export async function getAgentRun(principal: AgentPrincipal, runId: string) {
+  const run = await loadOwnedRun(principal, runId, true);
+  return publicRun(run);
+}
+
+export async function commandAgentRun(principal: AgentPrincipal, runId: string, rawInput: AgentRunCommandInput) {
+  const input = agentRunCommandSchema.parse(rawInput);
+  const payloadHash = hashAgentCommand(`run_command:${input.commandType}`, input);
+  const replay = await prisma.agentRunCommand.findFirst({
+    where: {
+      tenantId: principal.tenantId,
+      actorId: principal.actorId,
+      clientId: input.clientId,
+      commandType: input.commandType,
+      clientRequestId: input.clientRequestId,
+    },
+    include: { run: { include: { artifacts: true } } },
+  });
+  if (replay) {
+    if (replay.runId !== runId) throw routeError('IDEMPOTENCY_CONFLICT', '相同任务命令标识已用于其他任务', 409);
+    assertSameIdempotentPayload(replay.payloadHash, payloadHash);
+    const replayRun = replay.resultRunId && replay.resultRunId !== replay.runId
+      ? await prisma.agentRun.findFirst({
+          where: { id: replay.resultRunId, tenantId: principal.tenantId, actorId: principal.actorId },
+          include: { artifacts: true },
+        })
+      : replay.run;
+    if (!replayRun) throw routeError('AGENT_RUN_NOT_FOUND', '幂等命令对应的任务结果不存在', 404);
+    return { command: publicCommand(replay), run: publicRun(replayRun) };
+  }
+  const current = await loadOwnedRun(principal, runId, false);
+  if (current.jobKind === DIRECT_CAPABILITY_JOB_KIND && ['STEER', 'RETRY'].includes(input.commandType)) {
+    throw routeError(
+      'AGENT_CAPABILITY_RUN_COMMAND_UNSUPPORTED',
+      '单次能力任务不能调整输入或重试；请用新的请求标识重新启动，避免改变已冻结的能力合同。',
+      409,
+    );
+  }
+  if (current.jobKind === REVISION_BATCH_JOB_KIND && input.commandType === 'STEER') {
+    throw routeError(
+      'REVISION_BATCH_STEER_REQUIRES_NEW_REQUEST',
+      '跨章候选已冻结逐章锚点；请取消当前任务并按新要求创建另一批，避免同批候选语义不一致。',
+      409,
+    );
+  }
+  if (current.jobKind === BOOK_SEMANTIC_REVIEW_JOB_KIND && input.commandType === 'STEER') {
+    throw routeError('BOOK_REVIEW_STEER_REQUIRES_NEW_REQUEST',
+      '逐章语义审查已冻结目标、来源和判断口径；请取消当前任务后按新要求启动审查', 409);
+  }
+  if (current.stateVersion !== input.expectedStateVersion) {
+    throw routeError('AGENT_RUN_CONFLICT', '任务状态已变化，请刷新后重试', 409);
+  }
+
+  if (input.commandType === 'RETRY') {
+    if (!TERMINAL_RUN_STATUSES.includes(current.status as typeof TERMINAL_RUN_STATUSES[number])) {
+      throw routeError('AGENT_RUN_NOT_RETRYABLE', '只有终态任务可以创建新的重试 attempt', 409);
+    }
+    const result = await prisma.$transaction(async tx => {
+      if (current.goalId) {
+        const active = await tx.agentRun.findFirst({
+          where: { goalId: current.goalId, status: { in: [...ACTIVE_RUN_STATUSES] } },
+          select: { id: true },
+        });
+        if (active) throw routeError('AGENT_GOAL_ALREADY_RUNNING', '该目标已有活动中的任务 attempt', 409);
+      }
+      const consumed = await tx.agentRun.updateMany({
+        where: {
+          id: current.id,
+          tenantId: principal.tenantId,
+          actorId: principal.actorId,
+          stateVersion: input.expectedStateVersion,
+          status: current.status,
+        },
+        data: { stateVersion: { increment: 1 } },
+      });
+      if (consumed.count !== 1) throw routeError('AGENT_RUN_CONFLICT', '任务重试与其他控制操作冲突', 409);
+      const latest = current.goalId
+        ? await tx.agentRun.aggregate({ where: { goalId: current.goalId }, _max: { attempt: true } })
+        : { _max: { attempt: current.attempt } };
+      let run = await tx.agentRun.create({
+        data: {
+          tenantId: principal.tenantId,
+          actorId: principal.actorId,
+          goalId: current.goalId,
+          threadId: current.threadId,
+          initiatingTurnId: current.initiatingTurnId,
+          parentRunId: current.parentRunId,
+          attempt: (latest._max.attempt || current.attempt) + 1,
+          trigger: 'RETRY',
+          jobKind: current.jobKind,
+          input: toJson(current.input),
+          priority: current.priority,
+          deadline: current.deadline,
+          checkpoint: input.retryMode === 'RESUME_CHECKPOINT' ? toJson(current.checkpoint) : {},
+          currentFocus: current.currentFocus,
+          budget: toJson(current.budget),
+          consumedBudget: input.retryMode === 'RESUME_CHECKPOINT' ? toJson(current.consumedBudget) : {},
+          progressCompleted: input.retryMode === 'RESUME_CHECKPOINT' ? current.progressCompleted : 0,
+          progressTotal: current.progressTotal,
+        },
+        include: { artifacts: true },
+      });
+      if (current.jobKind === BOOK_SEMANTIC_REVIEW_JOB_KIND && input.retryMode === 'RESUME_CHECKPOINT') {
+        const checkpoint = record(current.checkpoint);
+        const artifacts = await tx.agentArtifact.findMany({
+          where: { runId: current.id, tenantId: principal.tenantId, actorId: principal.actorId,
+            type: { in: ['BOOK_SEMANTIC_REVIEW_MANIFEST', 'BOOK_SEMANTIC_REVIEW_BATCH'] } },
+        });
+        const manifest = artifacts.find(artifact => artifact.id === checkpoint.manifestArtifactId
+          && artifact.type === 'BOOK_SEMANTIC_REVIEW_MANIFEST');
+        if (!manifest || artifacts.some(artifact => stableAgentHash(artifact.content) !== artifact.contentHash)) {
+          throw routeError('BOOK_REVIEW_CHECKPOINT_INVALID', '无法核实原审查来源与批次证据，不能从该检查点重试', 409);
+        }
+        const copiedManifest = await tx.agentArtifact.create({ data: {
+          tenantId: run.tenantId, actorId: run.actorId, threadId: run.threadId,
+          runId: run.id, storyId: manifest.storyId, type: manifest.type,
+          title: manifest.title, content: toJson(manifest.content), contentHash: manifest.contentHash,
+          retentionPolicy: toJson(manifest.retentionPolicy),
+        } });
+        const batches = artifacts.filter(artifact => artifact.type === 'BOOK_SEMANTIC_REVIEW_BATCH');
+        if (batches.length) await tx.agentArtifact.createMany({ data: batches.map(artifact => ({
+          tenantId: run.tenantId, actorId: run.actorId, threadId: run.threadId,
+          runId: run.id, storyId: artifact.storyId, type: artifact.type,
+          title: artifact.title, content: toJson(artifact.content), contentHash: artifact.contentHash,
+          retentionPolicy: toJson(artifact.retentionPolicy),
+        })) });
+        run = await tx.agentRun.update({ where: { id: run.id },
+          data: { checkpoint: toJson({ ...checkpoint, manifestArtifactId: copiedManifest.id,
+            inheritedRunIds: [...new Set([
+              ...(Array.isArray(checkpoint.inheritedRunIds) ? checkpoint.inheritedRunIds : []),
+              current.id,
+            ])],
+          }) },
+          include: { artifacts: true } });
+      }
+      const command = await tx.agentRunCommand.create({
+        data: { ...commandData(principal, current, input, payloadHash, 'APPLIED'), resultRunId: run.id },
+      });
+      if (current.goalId) await tx.agentGoal.update({ where: { id: current.goalId }, data: { status: 'ACTIVE', completedAt: null } });
+      return { command, run };
+    });
+    await appendRunItem(principal, result.run, `已创建第 ${result.run.attempt} 次执行`);
+    return { command: publicCommand(result.command), run: publicRun(result.run) };
+  }
+
+  const requestedStatus = commandStatusTransition(current.status, input.commandType);
+  // Keep a semantic-review model invocation's owner RUNNING until its provider
+  // result and batch checkpoint settle atomically. Control is applied next step.
+  const nextStatus = current.jobKind === BOOK_SEMANTIC_REVIEW_JOB_KIND
+    && current.status === 'RUNNING'
+    && ['PAUSE', 'CANCEL', 'INTERRUPT'].includes(input.commandType)
+    ? 'RUNNING' : requestedStatus;
+  const result = await prisma.$transaction(async tx => {
+    const updated = await tx.agentRun.updateMany({
+      where: {
+        id: current.id,
+        tenantId: principal.tenantId,
+        actorId: principal.actorId,
+        stateVersion: input.expectedStateVersion,
+        status: current.status,
+      },
+      data: {
+        status: nextStatus,
+        stateVersion: { increment: 1 },
+        ...(input.commandType === 'RESUME' ? { leaseOwner: null, leaseUntil: null } : {}),
+      },
+    });
+    if (updated.count !== 1) throw routeError('AGENT_RUN_CONFLICT', '任务命令与其他控制操作冲突', 409);
+    const command = await tx.agentRunCommand.create({
+      data: {
+        ...commandData(principal, current, input, payloadHash, input.commandType === 'RESUME' ? 'APPLIED' : 'ACCEPTED'),
+        resultRunId: current.id,
+      },
+    });
+    const run = await tx.agentRun.findUniqueOrThrow({ where: { id: current.id }, include: { artifacts: true } });
+    return { command, run };
+  });
+  await appendRunItem(principal, result.run, runCommandMessage(input.commandType));
+  return { command: publicCommand(result.command), run: publicRun(result.run) };
+}
+
+export async function claimNextAgentRun(
+  workerId: string,
+  leaseMs = DEFAULT_LEASE_MS,
+  options: { allowLanes?: DurableRunLane[] } = {},
+) {
+  await expireDueAgentRuns();
+  const now = new Date();
+  const allowLanes = options.allowLanes && options.allowLanes.length > 0
+    ? new Set(options.allowLanes)
+    : null;
+  // Fetch more candidates when lane filtering is active so a blocked heavy head
+  // of line does not hide interactive work further down the queue.
+  const take = allowLanes && allowLanes.size < 2 ? 40 : 10;
+  const candidates = await prisma.agentRun.findMany({
+    where: {
+      status: { in: ['QUEUED', 'RUNNING', 'PAUSE_REQUESTED', 'CANCEL_REQUESTED'] },
+      AND: [
+        { OR: [{ leaseUntil: null }, { leaseUntil: { lt: now } }] },
+        { OR: [{ deadline: null }, { deadline: { gt: now } }] },
+        blueprintRetryReadyWhere(now),
+      ],
+    },
+    orderBy: [{ priority: 'desc' }, { createdAt: 'asc' }],
+    take,
+  });
+  for (const candidate of candidates) {
+    const lane = classifyDurableRunLane(candidate);
+    if (allowLanes && !allowLanes.has(lane)) continue;
+    const claimed = await prisma.agentRun.updateMany({
+      where: {
+        id: candidate.id,
+        stateVersion: candidate.stateVersion,
+        status: candidate.status,
+        OR: [{ leaseUntil: null }, { leaseUntil: { lt: now } }],
+      },
+      data: {
+        status: candidate.status === 'QUEUED' ? 'RUNNING' : candidate.status,
+        stateVersion: { increment: 1 },
+        leaseOwner: workerId,
+        leaseUntil: new Date(Date.now() + leaseMs),
+        fencingToken: { increment: 1 },
+        lastHeartbeatAt: now,
+        startedAt: candidate.startedAt || now,
+      },
+    });
+    if (claimed.count !== 1) continue;
+    const { capabilityId } = extractCapabilitySchedulingMeta(candidate.input);
+    const queueWaitMs = Math.max(0, now.getTime() - candidate.createdAt.getTime());
+    console.log(formatQueueWaitLog({
+      runId: candidate.id,
+      lane,
+      priority: candidate.priority,
+      queueWaitMs,
+      jobKind: candidate.jobKind,
+      capabilityId,
+      statusBeforeClaim: candidate.status,
+    }));
+    return prisma.agentRun.findUnique({ where: { id: candidate.id } });
+  }
+  return null;
+}
+
+export async function processClaimedAgentRunStep(params: { runId: string; workerId: string; fencingToken: number; leaseMs?: number }) {
+  const run = await prisma.agentRun.findFirst({
+    where: { id: params.runId, leaseOwner: params.workerId, fencingToken: params.fencingToken },
+  });
+  if (!run) throw routeError('AGENT_RUN_FENCED', '任务租约已失效', 409);
+  const principal = workerPrincipal(run);
+  if (run.jobKind === DIRECT_CAPABILITY_JOB_KIND) {
+    return processDirectCapabilityRun(run, params, principal);
+  }
+  if (run.jobKind === BOOK_SEMANTIC_REVIEW_JOB_KIND && run.status === 'RUNNING') {
+    const controls = await prisma.agentRunCommand.findMany({
+      where: { runId: run.id, commandType: { in: ['PAUSE', 'CANCEL', 'INTERRUPT'] }, status: 'ACCEPTED' },
+      orderBy: { createdAt: 'asc' },
+    });
+    if (controls.some(command => ['CANCEL', 'INTERRUPT'].includes(command.commandType))) {
+      const terminal = await finalizeControlledRun(run, params, 'CANCELED', 'USER_CANCELED',
+        ['CANCEL', 'INTERRUPT', 'PAUSE']);
+      await appendRunItem(principal, terminal, '语义审查已在模型结算后的安全检查点取消');
+      return publicRun(terminal);
+    }
+    if (controls.length) {
+      const paused = await transitionClaimedRun(run, params, {
+        status: 'PAUSED', leaseOwner: null, leaseUntil: null,
+        terminalReason: 'USER_PAUSED_AT_CHECKPOINT',
+      }, ['PAUSE']);
+      await appendRunItem(principal, paused, '语义审查已在模型结算后的安全检查点暂停');
+      return publicRun(paused);
+    }
+  }
+  if (run.status === 'CANCEL_REQUESTED') {
+    const terminal = await finalizeControlledRun(run, params, 'CANCELED', 'USER_CANCELED', ['CANCEL', 'INTERRUPT']);
+    await appendRunItem(principal, terminal, '任务已取消，未产生正式写入');
+    return publicRun(terminal);
+  }
+  if (run.deadline && run.deadline.getTime() <= Date.now()) {
+    const expired = await finalizeControlledRun(run, params, 'EXPIRED', 'DEADLINE_EXCEEDED');
+    await appendRunItem(principal, expired, '任务超过截止时间，已保留 checkpoint 并停止');
+    return publicRun(expired);
+  }
+  if (run.status === 'PAUSE_REQUESTED') {
+    const paused = await transitionClaimedRun(run, params, {
+      status: 'PAUSED',
+      leaseOwner: null,
+      leaseUntil: null,
+      terminalReason: 'USER_PAUSED_AT_CHECKPOINT',
+    }, ['PAUSE']);
+    await appendRunItem(principal, paused, '任务已在安全 checkpoint 暂停');
+    return publicRun(paused);
+  }
+  if (run.status !== 'RUNNING') throw routeError('AGENT_RUN_NOT_RUNNING', '任务当前不可执行', 409);
+
+  const maxWallClockMs = Number(record(run.budget).maxWallClockMs || 0);
+  if (run.startedAt && Number.isFinite(maxWallClockMs) && maxWallClockMs > 0
+    && Date.now() - run.startedAt.getTime() >= maxWallClockMs) {
+    const partial = await finalizeControlledRun(run, params, 'PARTIAL', 'WALL_CLOCK_BUDGET_EXCEEDED');
+    await appendRunItem(principal, partial, '任务达到时间预算，已保存 checkpoint 并部分完成');
+    return publicRun(partial);
+  }
+
+  const pendingCommands = await prisma.agentRunCommand.findMany({
+    where: { runId: run.id, commandType: 'STEER', status: 'ACCEPTED' },
+    orderBy: { createdAt: 'asc' },
+  });
+  const latestSteer = pendingCommands.at(-1);
+  const focus = latestSteer ? stringField(latestSteer.payload, 'instruction') || run.currentFocus : run.currentFocus;
+  if (run.jobKind === REVISION_BATCH_JOB_KIND) {
+    const processed = await processPrecisionRevisionBatchStep({
+      run,
+      workerId: params.workerId,
+      fencingToken: params.fencingToken,
+      leaseMs: params.leaseMs || DEFAULT_LEASE_MS,
+      principal,
+    });
+    return publicRun(processed);
+  }
+  if (run.jobKind === BOOK_SEMANTIC_REVIEW_JOB_KIND) {
+    const processed = await processBookSemanticReviewStep(run, {
+      workerId: params.workerId,
+      fencingToken: params.fencingToken,
+      leaseMs: params.leaseMs || DEFAULT_LEASE_MS,
+    });
+    return publicRun(processed);
+  }
+  if (run.jobKind !== 'BOOK_RESOURCE_SCAN') {
+    const failed = await finalizeControlledRun(run, params, 'FAILED', 'UNSUPPORTED_JOB_KIND');
+    await appendRunItem(principal, failed, '任务类型不受当前 Worker 支持');
+    return publicRun(failed);
+  }
+  return processBookResourceScanStep(run, params, pendingCommands.map(command => command.id), focus, principal);
+}
+
+export async function runAgentWorkerUntilIdle(workerId: string, options: {
+  maxClaims?: number;
+  leaseMs?: number;
+  /** Hard cap on concurrent in-flight runs for this worker process. */
+  concurrency?: number;
+  /** Max concurrent interactive-lane runs (bounded by concurrency). */
+  interactiveSlots?: number;
+  /** Max concurrent heavy-lane runs (bounded by concurrency). */
+  heavySlots?: number;
+} = {}) {
+  const processed: string[] = [];
+  const maxClaims = Math.max(1, Math.min(10_000, options.maxClaims || 1_000));
+  const concurrency = Math.max(1, Math.min(16, options.concurrency ?? 1));
+  let interactiveSlots = Math.max(0, Math.min(concurrency, options.interactiveSlots ?? concurrency));
+  let heavySlots = Math.max(0, Math.min(concurrency, options.heavySlots ?? 1));
+  if (interactiveSlots === 0 && heavySlots === 0) {
+    interactiveSlots = concurrency;
+    heavySlots = concurrency;
+  }
+  const leaseMs = options.leaseMs || DEFAULT_LEASE_MS;
+  const inFlight = new Map<string, Promise<void>>();
+  const laneByRunId = new Map<string, DurableRunLane>();
+
+  const countLane = (lane: DurableRunLane) => (
+    [...laneByRunId.values()].filter(value => value === lane).length
+  );
+
+  const launchClaimed = (claimed: NonNullable<Awaited<ReturnType<typeof claimNextAgentRun>>>) => {
+    const lane = classifyDurableRunLane(claimed);
+    laneByRunId.set(claimed.id, lane);
+    const work = (async () => {
+      try {
+        const result = await processClaimedAgentRunStep({
+          runId: claimed.id,
+          workerId,
+          fencingToken: claimed.fencingToken,
+          leaseMs,
+        });
+        if (result && ['RUNNING', 'QUEUED', 'PAUSE_REQUESTED', 'CANCEL_REQUESTED'].includes(result.status)) {
+          await prisma.agentRun.updateMany({
+            where: { id: claimed.id, leaseOwner: workerId, fencingToken: claimed.fencingToken },
+            data: { leaseOwner: null, leaseUntil: null },
+          });
+        }
+      } catch (error) {
+        console.error(`[AgentRun] worker step failed runId=${claimed.id} lane=${lane}:`, error);
+        try {
+          await prisma.agentRun.updateMany({
+            where: { id: claimed.id, leaseOwner: workerId, fencingToken: claimed.fencingToken },
+            data: { leaseOwner: null, leaseUntil: null },
+          });
+        } catch (releaseError) {
+          console.error(`[AgentRun] failed to release lease runId=${claimed.id}:`, releaseError);
+        }
+      } finally {
+        inFlight.delete(claimed.id);
+        laneByRunId.delete(claimed.id);
+      }
+    })();
+    inFlight.set(claimed.id, work);
+    processed.push(claimed.id);
+  };
+
+  // While a heavy job holds a slot, free interactive capacity must still notice
+  // newly queued interview work without waiting for the heavy job to finish.
+  const QUEUE_REPOLL_MS = 500;
+  while (processed.length < maxClaims) {
+    while (inFlight.size < concurrency && processed.length < maxClaims) {
+      const interactiveFree = countLane('interactive') < interactiveSlots;
+      const heavyFree = countLane('heavy') < heavySlots;
+      if (!interactiveFree && !heavyFree) break;
+      const allowLanes: DurableRunLane[] = [];
+      if (interactiveFree) allowLanes.push('interactive');
+      if (heavyFree) allowLanes.push('heavy');
+      const claimed = await claimNextAgentRun(workerId, leaseMs, { allowLanes });
+      if (!claimed) break;
+      launchClaimed(claimed);
+    }
+    if (inFlight.size === 0) break;
+    const capacityFull = inFlight.size >= concurrency
+      || (
+        countLane('interactive') >= interactiveSlots
+        && countLane('heavy') >= heavySlots
+      );
+    if (capacityFull) {
+      await Promise.race(inFlight.values());
+      continue;
+    }
+    await Promise.race([
+      ...inFlight.values(),
+      new Promise<void>(resolve => {
+        setTimeout(resolve, QUEUE_REPOLL_MS);
+      }),
+    ]);
+  }
+  if (inFlight.size > 0) await Promise.all([...inFlight.values()]);
+  return processed;
+}
+
+export async function expireDueAgentRuns(limit = 100) {
+  const now = new Date();
+  const candidates = await prisma.agentRun.findMany({
+    where: {
+      status: { in: [...ACTIVE_RUN_STATUSES] },
+      deadline: { lte: now },
+      OR: [{ leaseUntil: null }, { leaseUntil: { lt: now } }],
+    },
+    orderBy: [{ deadline: 'asc' }, { createdAt: 'asc' }],
+    take: Math.max(1, Math.min(1_000, limit)),
+  });
+  const expiredIds: string[] = [];
+  for (const candidate of candidates) {
+    if (
+      candidate.jobKind === DIRECT_CAPABILITY_JOB_KIND
+      && candidate.trigger === 'AGENT_LOOP'
+      && record(record(candidate.input).dispatch).mode === AGENT_LOOP_DISPATCH_MODE
+    ) {
+      const expiredAgentLoopRun = await expireWaitingAgentLoopCapabilityRun(candidate, now);
+      if (!expiredAgentLoopRun) continue;
+      expiredIds.push(candidate.id);
+      await appendRunItem(
+        workerPrincipal(candidate),
+        expiredAgentLoopRun,
+        '能力任务超过执行期限，失败观察已保存，原助手回合将继续处理',
+      );
+      continue;
+    }
+    const expired = await prisma.agentRun.updateMany({
+      where: {
+        id: candidate.id,
+        stateVersion: candidate.stateVersion,
+        status: candidate.status,
+        deadline: { lte: now },
+        OR: [{ leaseUntil: null }, { leaseUntil: { lt: now } }],
+      },
+      data: {
+        status: 'EXPIRED',
+        stateVersion: { increment: 1 },
+        terminalReason: 'DEADLINE_EXCEEDED',
+        completedAt: now,
+        leaseOwner: null,
+        leaseUntil: null,
+        effectSummary: { formalWrites: 0 },
+        verificationSummary: { checkpointPreserved: true },
+      },
+    });
+    if (expired.count !== 1) continue;
+    expiredIds.push(candidate.id);
+    if (candidate.jobKind === DIRECT_CAPABILITY_JOB_KIND && candidate.initiatingTurnId) {
+      await prisma.agentTurn.updateMany({
+        where: {
+          id: candidate.initiatingTurnId,
+          threadId: candidate.threadId,
+          tenantId: candidate.tenantId,
+          actorId: candidate.actorId,
+          trigger: 'CAPABILITY_RUN',
+          status: { in: ['ACCEPTED', 'RUNNING', 'WAITING_FOR_USER'] },
+        },
+        data: {
+          status: 'FAILED',
+          completedAt: now,
+          usageSummary: toJson({
+            executionType: DIRECT_CAPABILITY_JOB_KIND,
+            runId: candidate.id,
+            terminalReason: 'DEADLINE_EXCEEDED',
+            formalWrites: 0,
+          }),
+        },
+      });
+    }
+    if (candidate.goalId) {
+      await prisma.agentGoal.updateMany({
+        where: { id: candidate.goalId, status: 'ACTIVE' },
+        data: { status: 'EXPIRED', completedAt: now },
+      });
+    }
+    const updated = await prisma.agentRun.findUniqueOrThrow({ where: { id: candidate.id }, include: { artifacts: true } });
+    await appendRunItem(workerPrincipal(candidate), updated, '任务超过截止时间，已保留 checkpoint 并停止');
+  }
+  return expiredIds;
+}
+
+async function expireWaitingAgentLoopCapabilityRun(
+  run: AgentRunRecord,
+  now: Date,
+) {
+  const stored = record(run.input);
+  const prepared = record(stored.prepared);
+  const request = record(prepared.request);
+  const capability = record(stored.capability);
+  const capabilityId = String(request.capabilityId || capability.id || 'unknown');
+  const capabilityVersion = String(request.capabilityVersion || capability.version || 'unknown');
+  const callId = String(request.callId || record(stored.dispatch).callId || '');
+  const observation = capabilityRunFailureObservation({
+    runId: run.id,
+    callId,
+    capabilityId,
+    capabilityVersion,
+    error: Object.assign(new Error('能力任务超过执行期限'), {
+      code: 'DEADLINE_EXCEEDED',
+      userMessage: '能力任务超过执行期限，系统已保存失败观察并恢复原助手回合。',
+      status: 503,
+    }),
+  });
+  const artifactContent = {
+    schemaVersion: 1,
+    executionId: run.id,
+    capability: {
+      id: capabilityId,
+      version: capabilityVersion,
+      effectClass: capability.effectClass || 'UNKNOWN',
+      providerId: prepared.providerId || null,
+      providerVersion: prepared.providerVersion || null,
+      artifactDigest: prepared.artifactDigest || null,
+    },
+    observation,
+  };
+  return prisma.$transaction(async tx => {
+    const expired = await tx.agentRun.updateMany({
+      where: {
+        id: run.id,
+        stateVersion: run.stateVersion,
+        status: run.status,
+        deadline: { lte: now },
+        OR: [{ leaseUntil: null }, { leaseUntil: { lt: now } }],
+      },
+      data: {
+        status: 'EXPIRED',
+        stateVersion: { increment: 1 },
+        progressCompleted: 1,
+        progressTotal: 1,
+        childExecutions: toJson([{ callId, capabilityId, capabilityVersion, status: 'FAILED' }]),
+        terminalReason: 'DEADLINE_EXCEEDED',
+        completedAt: now,
+        leaseOwner: null,
+        leaseUntil: null,
+        lastHeartbeatAt: now,
+        effectSummary: toJson({ formalWrites: 0, artifactsCreated: 1 }),
+        verificationSummary: toJson({ observationStatus: 'FAILED', deadlineExceeded: true }),
+      },
+    });
+    if (expired.count !== 1) return null;
+    const awakened = await tx.agentTurn.updateMany({
+      where: {
+        id: run.initiatingTurnId || '',
+        threadId: run.threadId,
+        tenantId: run.tenantId,
+        actorId: run.actorId,
+        trigger: 'USER_MESSAGE',
+        status: 'WAITING_FOR_RUN',
+        leaseOwner: null,
+        leaseUntil: null,
+      },
+      data: { status: 'ACCEPTED', completedAt: null },
+    });
+    if (awakened.count !== 1) {
+      throw routeError('AGENT_CAPABILITY_TURN_CONFLICT', '能力超时后无法恢复原助手回合', 409);
+    }
+    await tx.agentArtifact.create({
+      data: {
+        tenantId: run.tenantId,
+        actorId: run.actorId,
+        threadId: run.threadId,
+        runId: run.id,
+        storyId: stringField(record(stored.scope), 'storyId') || null,
+        type: 'CAPABILITY_RESULT',
+        title: `${String(capability.title || capabilityId)}结果`,
+        content: toJson(artifactContent),
+        contentHash: stableAgentHash(artifactContent),
+        retentionPolicy: toJson({ class: 'AUTHOR_ARTIFACT', deletable: true }),
+      },
+    });
+    return tx.agentRun.findUniqueOrThrow({ where: { id: run.id }, include: { artifacts: true } });
+  });
+}
+
+async function processDirectCapabilityRun(
+  run: Awaited<ReturnType<typeof prisma.agentRun.findFirstOrThrow>>,
+  lease: { workerId: string; fencingToken: number; leaseMs?: number },
+  principal: AgentPrincipal,
+) {
+  if (!run.initiatingTurnId) {
+    const failed = await finalizeControlledRun(run, lease, 'FAILED', 'CAPABILITY_TURN_MISSING');
+    await appendRunItem(principal, failed, '能力任务缺少关联回合，已安全停止');
+    return publicRun(failed);
+  }
+  if (run.status === 'CANCEL_REQUESTED') {
+    return finalizeDirectCapabilityRunState({
+      run,
+      lease,
+      principal,
+      runStatus: 'CANCELED',
+      turnStatus: 'CANCELED',
+      terminalReason: 'USER_CANCELED',
+      message: '能力任务已取消，没有执行正式写入',
+    });
+  }
+  if (run.deadline && run.deadline.getTime() <= Date.now()) {
+    return finalizeDirectCapabilityRunState({
+      run,
+      lease,
+      principal,
+      runStatus: 'EXPIRED',
+      turnStatus: 'FAILED',
+      terminalReason: 'DEADLINE_EXCEEDED',
+      message: '能力任务等待超时，已安全停止',
+    });
+  }
+  if (run.status === 'PAUSE_REQUESTED') {
+    return finalizeDirectCapabilityRunState({
+      run,
+      lease,
+      principal,
+      runStatus: 'PAUSED',
+      turnStatus: 'WAITING_FOR_USER',
+      terminalReason: 'USER_PAUSED_BEFORE_CAPABILITY_EXECUTION',
+      message: '能力任务已在执行前暂停',
+      terminal: false,
+    });
+  }
+  if (run.status !== 'RUNNING') throw routeError('AGENT_RUN_NOT_RUNNING', '能力任务当前不可执行', 409);
+
+  const runtime = getBookAgentRuntime();
+  const stored = record(run.input);
+  const agentLoopDispatch = record(stored.dispatch).mode === AGENT_LOOP_DISPATCH_MODE;
+  const capability = record(stored.capability);
+  const preparedRecord = record(stored.prepared);
+  const requestRecord = record(preparedRecord.request);
+  const capabilityId = String(requestRecord.capabilityId || capability.id || 'unknown');
+  const capabilityVersion = String(requestRecord.capabilityVersion || capability.version || 'unknown');
+  const spec = runtime.capabilities.find(capabilityId, capabilityVersion);
+
+  let observation: CapabilityObservation | null = null;
+  let activeRun = run;
+  let stopCapabilityHeartbeat: (() => void) | null = null;
+  let replayReady = false;
+  let blueprintRetryPending = false;
+  try {
+    if (Number(stored.schemaVersion) !== 1) {
+      throw routeError('AGENT_CAPABILITY_RUN_CONTRACT_INVALID', '能力任务持久化合同版本不可用', 409);
+    }
+    if (!spec) throw routeError('AGENT_CAPABILITY_NOT_FOUND', '能力版本已经不可用', 409);
+    assertCapabilityRunSpec(spec);
+    const surfaceResult = agentSurfaceContextSchema.safeParse(stored.surfaceContext);
+    if (!surfaceResult.success) throw routeError('AGENT_CAPABILITY_RUN_CONTRACT_INVALID', '能力任务页面上下文已损坏', 409);
+    const scope = await assertAgentResourceScope(principal, surfaceResult.data, { requireActiveStory: true });
+    const prepared = {
+      request: {
+        capabilityId,
+        capabilityVersion,
+        input: requestRecord.input,
+        callId: String(requestRecord.callId || ''),
+      },
+      inputDigest: String(preparedRecord.inputDigest || ''),
+      providerId: String(preparedRecord.providerId || ''),
+      providerVersion: String(preparedRecord.providerVersion || ''),
+      artifactDigest: String(preparedRecord.artifactDigest || ''),
+    };
+    if (!prepared.request.callId || !prepared.inputDigest || !prepared.providerId
+      || !prepared.providerVersion || !prepared.artifactDigest) {
+      throw routeError('AGENT_CAPABILITY_RUN_CONTRACT_INVALID', '能力任务执行凭据不完整', 409);
+    }
+    if (agentLoopDispatch) {
+      const waitingTurn = await prisma.agentTurn.findFirst({
+        where: {
+          id: run.initiatingTurnId,
+          threadId: run.threadId,
+          tenantId: run.tenantId,
+          actorId: run.actorId,
+          trigger: 'USER_MESSAGE',
+          status: 'WAITING_FOR_RUN',
+          leaseOwner: null,
+          leaseUntil: null,
+        },
+        select: { id: true },
+      });
+      if (!waitingTurn) throw routeError('AGENT_CAPABILITY_TURN_CONFLICT', '原助手回合已不再等待这个能力任务', 409);
+    } else {
+      const turnClaimed = await prisma.agentTurn.updateMany({
+        where: {
+          id: run.initiatingTurnId,
+          threadId: run.threadId,
+          tenantId: run.tenantId,
+          actorId: run.actorId,
+          trigger: 'CAPABILITY_RUN',
+          status: { in: ['ACCEPTED', 'RUNNING', 'WAITING_FOR_USER'] },
+        },
+        data: { status: 'RUNNING', completedAt: null },
+      });
+      if (turnClaimed.count !== 1) throw routeError('AGENT_CAPABILITY_TURN_CONFLICT', '能力任务回合状态已变化', 409);
+    }
+    const leaseMs = Math.max(lease.leaseMs || DEFAULT_LEASE_MS, spec.timeoutMs + 30_000);
+    const extended = await prisma.agentRun.updateMany({
+      where: claimedRunWhere(run, lease),
+      data: {
+        leaseUntil: new Date(Date.now() + leaseMs),
+        lastHeartbeatAt: new Date(),
+        stateVersion: { increment: 1 },
+      },
+    });
+    if (extended.count !== 1) throw routeError('AGENT_RUN_FENCED', '能力任务执行前已失去租约', 409);
+    activeRun = await prisma.agentRun.findFirstOrThrow({
+      where: { id: run.id, leaseOwner: lease.workerId, fencingToken: lease.fencingToken },
+    });
+    stopCapabilityHeartbeat = startDurableCapabilityHeartbeat(activeRun.id, lease, leaseMs);
+    await appendAgentItem(principal, {
+      threadId: run.threadId,
+      turnId: run.initiatingTurnId,
+      kind: 'tool_status',
+      payload: {
+        runId: run.id,
+        callId: prepared.request.callId,
+        capabilityId,
+        capabilityVersion,
+        status: 'RUNNING',
+      },
+      provenance: { source: 'durable_capability_worker', fencingToken: lease.fencingToken },
+      correlationId: run.id,
+    });
+    // Provider SDKs own the cancellable network timeout. Never detach a
+    // paid/effectful promise and then publish a synthetic terminal timeout.
+    observation = await runtime.capabilities.executePrepared(prepared, {
+        principal,
+        threadId: run.threadId,
+        turnId: run.initiatingTurnId,
+        purpose: 'USER_REQUEST',
+        scope,
+        surfaceContext: surfaceResult.data,
+        durableExecution: {
+          runId: activeRun.id,
+          workerId: lease.workerId,
+          fencingToken: lease.fencingToken,
+          checkpoint: activeRun.checkpoint,
+        },
+      });
+  } catch (error) {
+    blueprintRetryPending = capabilityId === 'genesis.build_blueprint' && isBlueprintRetryPending(error);
+    replayReady = isModelInvocationReplayReadyError(error);
+    if (!replayReady && !blueprintRetryPending) {
+      observation = capabilityRunFailureObservation({
+        runId: run.id,
+        callId: String(requestRecord.callId || `capability-run:${run.id}`),
+        capabilityId,
+        capabilityVersion,
+        error,
+      });
+    }
+  } finally {
+    stopCapabilityHeartbeat?.();
+  }
+
+  if (blueprintRetryPending) {
+    return publicRun(await requeueBlueprintRetry({ runId: run.id, tenantId: run.tenantId, actorId: run.actorId,
+      workerId: lease.workerId, fencingToken: lease.fencingToken }));
+  }
+  if (replayReady) {
+    const requeued = await requeueDirectCapabilityForModelReplay(activeRun, lease);
+    await appendRunItem(
+      principal,
+      requeued,
+      'Provider 结果已保存，能力任务将从同一结果恢复，不会重新采样或重复计费',
+    );
+    return publicRun(requeued);
+  }
+  if (!observation) {
+    throw routeError('AGENT_CAPABILITY_EXECUTION_UNRESOLVED', '能力执行没有产生可提交的观察结果', 503);
+  }
+
+  // A capability may persist a model-settlement checkpoint inside the same
+  // fenced lease. Refresh the optimistic stateVersion before committing its
+  // Artifact so that the checkpoint and terminal result form one recoverable
+  // execution instead of forcing a lease-expiry retry.
+  const checkpointedRun = await prisma.agentRun.findFirst({
+    where: {
+      id: activeRun.id,
+      leaseOwner: lease.workerId,
+      fencingToken: lease.fencingToken,
+    },
+  });
+  if (checkpointedRun) activeRun = checkpointedRun;
+
+  return finalizeDirectCapabilityObservation({
+    run: activeRun,
+    lease,
+    principal,
+    spec,
+    observation,
+  });
+}
+
+async function requeueDirectCapabilityForModelReplay(
+  run: Awaited<ReturnType<typeof prisma.agentRun.findFirstOrThrow>>,
+  lease: { workerId: string; fencingToken: number },
+) {
+  return prisma.$transaction(async tx => {
+    const requeued = await tx.agentRun.updateMany({
+      where: claimedRunWhere(run, lease),
+      data: {
+        status: 'QUEUED',
+        stateVersion: { increment: 1 },
+        currentFocus: '恢复已保存的 Provider 结果',
+        terminalReason: null,
+        completedAt: null,
+        leaseOwner: null,
+        leaseUntil: null,
+        lastHeartbeatAt: new Date(),
+      },
+    });
+    if (requeued.count !== 1) throw routeError('AGENT_RUN_FENCED', '能力任务恢复已失去租约', 409);
+    if (run.initiatingTurnId) {
+      await tx.agentTurn.updateMany({
+        where: {
+          id: run.initiatingTurnId,
+          threadId: run.threadId,
+          tenantId: run.tenantId,
+          actorId: run.actorId,
+          trigger: 'CAPABILITY_RUN',
+          status: 'RUNNING',
+        },
+        data: { status: 'ACCEPTED', completedAt: null },
+      });
+    }
+    return tx.agentRun.findUniqueOrThrow({ where: { id: run.id } });
+  });
+}
+
+async function finalizeDirectCapabilityObservation(params: {
+  run: Awaited<ReturnType<typeof prisma.agentRun.findFirstOrThrow>>;
+  lease: { workerId: string; fencingToken: number };
+  principal: AgentPrincipal;
+  spec: CapabilitySpec | null;
+  observation: CapabilityObservation;
+  runStatusOverride?: string;
+  terminalReasonOverride?: string;
+}) {
+  const agentLoopDispatch = record(record(params.run.input).dispatch).mode === AGENT_LOOP_DISPATCH_MODE;
+  const succeeded = params.observation.status === 'SUCCEEDED';
+  const runStatus = params.runStatusOverride || (succeeded ? 'SUCCEEDED' : 'FAILED');
+  const turnStatus = succeeded ? 'COMPLETED' : 'FAILED';
+  const capabilityTitle = params.spec?.title || params.observation.capabilityId;
+  const artifactContent = {
+    schemaVersion: 1,
+    executionId: params.run.id,
+    capability: {
+      id: params.observation.capabilityId,
+      version: params.observation.capabilityVersion,
+      effectClass: params.spec?.effectClass || record(params.run.input).effectClass || 'UNKNOWN',
+      providerId: params.spec?.providerId || null,
+      providerVersion: params.spec?.providerVersion || null,
+      artifactDigest: params.spec?.artifactDigest || null,
+    },
+    observation: params.observation,
+  };
+  const artifactHash = stableAgentHash(artifactContent);
+  const result = await prisma.$transaction(async tx => {
+    const completed = await tx.agentRun.updateMany({
+      where: claimedRunWhere(params.run, params.lease),
+      data: {
+        status: runStatus,
+        progressCompleted: 1,
+        progressTotal: 1,
+        childExecutions: toJson([{
+          callId: params.observation.callId,
+          capabilityId: params.observation.capabilityId,
+          capabilityVersion: params.observation.capabilityVersion,
+          status: params.observation.status,
+        }]),
+        consumedBudget: toJson({ formalWrites: 0, capabilityExecutions: 1 }),
+        effectSummary: toJson({
+          formalWrites: 0,
+          artifactsCreated: 1,
+          capabilityEffectClass: params.spec?.effectClass || 'UNKNOWN',
+        }),
+        verificationSummary: toJson({
+          observationStatus: params.observation.status,
+          evidenceCount: params.observation.evidence.length,
+          providerAttested: Boolean(params.spec),
+        }),
+        terminalReason: params.terminalReasonOverride
+          || (succeeded ? 'CAPABILITY_SUCCEEDED' : `CAPABILITY_${params.observation.status}`),
+        completedAt: new Date(),
+        stateVersion: { increment: 1 },
+        leaseOwner: null,
+        leaseUntil: null,
+        lastHeartbeatAt: new Date(),
+      },
+    });
+    if (completed.count !== 1) throw routeError('AGENT_RUN_FENCED', '能力任务结果提交已失去租约', 409);
+    const turnUpdated = agentLoopDispatch
+      ? await tx.agentTurn.updateMany({
+          where: {
+            id: params.run.initiatingTurnId || '',
+            threadId: params.run.threadId,
+            tenantId: params.run.tenantId,
+            actorId: params.run.actorId,
+            trigger: 'USER_MESSAGE',
+            status: 'WAITING_FOR_RUN',
+            leaseOwner: null,
+            leaseUntil: null,
+          },
+          data: { status: 'ACCEPTED', completedAt: null },
+        })
+      : await tx.agentTurn.updateMany({
+          where: {
+            id: params.run.initiatingTurnId || '',
+            threadId: params.run.threadId,
+            tenantId: params.run.tenantId,
+            actorId: params.run.actorId,
+            trigger: 'CAPABILITY_RUN',
+            status: { in: ['ACCEPTED', 'RUNNING', 'WAITING_FOR_USER'] },
+          },
+          data: {
+            status: turnStatus,
+            completedAt: new Date(),
+            usageSummary: toJson({
+              executionType: DIRECT_CAPABILITY_JOB_KIND,
+              runId: params.run.id,
+              capabilityId: params.observation.capabilityId,
+              capabilityVersion: params.observation.capabilityVersion,
+              observationStatus: params.observation.status,
+              formalWrites: 0,
+            }),
+          },
+        });
+    if (turnUpdated.count !== 1) throw routeError('AGENT_CAPABILITY_TURN_CONFLICT', '能力任务回合终态提交冲突', 409);
+    const artifact = await tx.agentArtifact.create({
+      data: {
+        tenantId: params.run.tenantId,
+        actorId: params.run.actorId,
+        threadId: params.run.threadId,
+        runId: params.run.id,
+        storyId: stringField(record(record(params.run.input).scope), 'storyId') || null,
+        type: 'CAPABILITY_RESULT',
+        title: `${capabilityTitle}结果`,
+        content: toJson(artifactContent),
+        contentHash: artifactHash,
+        retentionPolicy: toJson({ class: 'AUTHOR_ARTIFACT', deletable: true }),
+      },
+    });
+    const updated = await tx.agentRun.findUniqueOrThrow({ where: { id: params.run.id }, include: { artifacts: true } });
+    return { artifact, updated };
+  });
+  if (!agentLoopDispatch) {
+    const visibility = params.spec?.clientLaunchPolicy === 'SURFACE_ONLY' ? 'INTERNAL' : 'PUBLIC';
+    await appendAgentItem(params.principal, {
+      threadId: params.run.threadId,
+      turnId: params.run.initiatingTurnId,
+      kind: 'tool_result',
+      visibility,
+      payload: {
+        ...params.observation,
+        runId: params.run.id,
+        artifactId: result.artifact.id,
+        effectClass: params.spec?.effectClass || 'UNKNOWN',
+      },
+      provenance: { source: 'durable_capability_worker', fencingToken: params.lease.fencingToken },
+      correlationId: params.run.id,
+    });
+    await appendAgentItem(params.principal, {
+      threadId: params.run.threadId,
+      turnId: params.run.initiatingTurnId,
+      kind: 'artifact_created',
+      visibility,
+      payload: publicArtifact(result.artifact),
+      provenance: { source: 'durable_capability_worker', runId: params.run.id },
+      correlationId: params.run.id,
+    });
+  }
+  await appendRunItem(params.principal, result.updated, params.observation.summary);
+  return publicRun(result.updated);
+}
+
+async function finalizeDirectCapabilityRunState(params: {
+  run: Awaited<ReturnType<typeof prisma.agentRun.findFirstOrThrow>>;
+  lease: { workerId: string; fencingToken: number };
+  principal: AgentPrincipal;
+  runStatus: string;
+  turnStatus: string;
+  terminalReason: string;
+  message: string;
+  terminal?: boolean;
+}) {
+  const terminal = params.terminal !== false;
+  const stored = record(params.run.input);
+  const agentLoopDispatch = record(stored.dispatch).mode === AGENT_LOOP_DISPATCH_MODE;
+  if (agentLoopDispatch && terminal) {
+    const capability = record(stored.capability);
+    const prepared = record(stored.prepared);
+    const request = record(prepared.request);
+    const capabilityId = String(request.capabilityId || capability.id || 'unknown');
+    const capabilityVersion = String(request.capabilityVersion || capability.version || 'unknown');
+    const callId = String(request.callId || record(stored.dispatch).callId || '');
+    const spec = getBookAgentRuntime().capabilities.find(capabilityId, capabilityVersion);
+    return finalizeDirectCapabilityObservation({
+      run: params.run,
+      lease: params.lease,
+      principal: params.principal,
+      spec,
+      runStatusOverride: params.runStatus,
+      terminalReasonOverride: params.terminalReason,
+      observation: {
+        callId,
+        capabilityId,
+        capabilityVersion,
+        status: 'FAILED',
+        summary: params.message,
+        structuredData: { code: params.terminalReason },
+        evidence: [],
+        warnings: [params.terminalReason],
+        partials: [],
+        retryable: params.runStatus === 'EXPIRED',
+        provenance: { source: 'durable_capability_worker', terminalReason: params.terminalReason },
+        diagnostic: {
+          schemaVersion: 1,
+          code: params.terminalReason,
+          category: params.terminalReason === 'DEADLINE_EXCEEDED' ? 'PROVIDER' : 'STATE',
+          phase: 'durable_run_control',
+          message: params.message,
+          retryDisposition: params.runStatus === 'EXPIRED' ? 'REPLAN_REQUIRED' : 'NOT_RETRYABLE',
+          effectState: 'NO_EFFECT',
+          authoritativeResourceUris: [`book://tasks/runs/${params.run.id}`],
+          suggestedCapabilities: ['resource.open'],
+          resume: {
+            kind: 'RUN_HANDLE',
+            id: params.run.id,
+            resourceUri: `book://tasks/runs/${params.run.id}`,
+          },
+        },
+      },
+    });
+  }
+  const result = await prisma.$transaction(async tx => {
+    const updated = await tx.agentRun.updateMany({
+      where: claimedRunWhere(params.run, params.lease),
+      data: {
+        status: params.runStatus,
+        terminalReason: params.terminalReason,
+        ...(terminal ? { completedAt: new Date() } : {}),
+        effectSummary: toJson({ formalWrites: 0 }),
+        verificationSummary: toJson({ capabilityExecuted: false }),
+        stateVersion: { increment: 1 },
+        leaseOwner: null,
+        leaseUntil: null,
+        lastHeartbeatAt: new Date(),
+      },
+    });
+    if (updated.count !== 1) throw routeError('AGENT_RUN_FENCED', '能力任务状态提交已失去租约', 409);
+    const turn = agentLoopDispatch ? { count: 1 } : await tx.agentTurn.updateMany({
+      where: {
+        id: params.run.initiatingTurnId || '',
+        threadId: params.run.threadId,
+        tenantId: params.run.tenantId,
+        actorId: params.run.actorId,
+        trigger: 'CAPABILITY_RUN',
+        status: { in: ['ACCEPTED', 'RUNNING', 'WAITING_FOR_USER'] },
+      },
+      data: {
+        status: params.turnStatus,
+        ...(terminal ? { completedAt: new Date() } : { completedAt: null }),
+        usageSummary: toJson({
+          executionType: DIRECT_CAPABILITY_JOB_KIND,
+          runId: params.run.id,
+          capabilityExecuted: false,
+          terminalReason: params.terminalReason,
+          formalWrites: 0,
+        }),
+      },
+    });
+    if (turn.count !== 1) throw routeError('AGENT_CAPABILITY_TURN_CONFLICT', '能力任务回合状态提交冲突', 409);
+    return tx.agentRun.findUniqueOrThrow({ where: { id: params.run.id }, include: { artifacts: true } });
+  });
+  await appendRunItem(params.principal, result, params.message);
+  return publicRun(result);
+}
+
+async function processBookResourceScanStep(
+  run: Awaited<ReturnType<typeof prisma.agentRun.findFirstOrThrow>>,
+  lease: { workerId: string; fencingToken: number; leaseMs?: number },
+  steerCommandIds: string[],
+  focus: string | null,
+  principal: AgentPrincipal,
+) {
+  const input = record(run.input);
+  const storyId = String(input.storyId || '');
+  if (!storyId) throw routeError('AGENT_RUN_SCOPE_INVALID', '任务缺少作品范围', 409);
+  const story = await prisma.story.findFirst({
+    where: { id: storyId, ownerId: run.actorId, status: 'ACTIVE' },
+    select: { id: true, title: true },
+  });
+  if (!story) return failRunScope(run, lease, principal);
+  const checkpoint = record(run.checkpoint);
+  let branchId = String(checkpoint.branchId || input.branchId || '');
+  if (!branchId) {
+    const branch = await prisma.branch.findFirst({
+      where: { storyId, OR: [{ ownerId: run.actorId }, { story: { ownerId: run.actorId } }] },
+      orderBy: [{ depth: 'asc' }, { createdAt: 'asc' }],
+      select: { id: true },
+    });
+    branchId = branch?.id || '';
+  }
+  const branch = branchId
+    ? await prisma.branch.findFirst({ where: { id: branchId, storyId }, select: { id: true, name: true } })
+    : null;
+  if (!branch) return failRunScope(run, lease, principal);
+
+  const budget = record(run.budget);
+  const maxChapters = Math.max(1, Math.min(2_000, Number(budget.maxChapters || 500)));
+  const batchSize = Math.max(1, Math.min(50, Number(input.batchSize || 10)));
+  const total = await prisma.chapter.count({ where: { branchId } });
+  const lastSequenceNumber = numberOrNull(checkpoint.lastSequenceNumber);
+  const lastChapterId = String(checkpoint.lastChapterId || '');
+  const cursorWhere = lastSequenceNumber === null ? {} : {
+    OR: [
+      { sequenceNumber: { gt: lastSequenceNumber } },
+      { sequenceNumber: lastSequenceNumber, id: { gt: lastChapterId } },
+    ],
+  };
+  const remaining = Math.max(0, maxChapters - run.progressCompleted);
+  const chapters = remaining === 0 ? [] : await prisma.chapter.findMany({
+    where: { branchId, ...cursorWhere },
+    orderBy: [{ sequenceNumber: 'asc' }, { id: 'asc' }],
+    take: Math.min(batchSize, remaining),
+    select: {
+      id: true,
+      sequenceNumber: true,
+      title: true,
+      type: true,
+      moderationStatus: true,
+      content: true,
+      summary: true,
+      createdAt: true,
+    },
+  });
+  const previous = Array.isArray(checkpoint.chapters) ? checkpoint.chapters : [];
+  const scanned = chapters.map(chapter => ({
+    chapterId: chapter.id,
+    sequenceNumber: chapter.sequenceNumber,
+    title: chapter.title,
+    type: chapter.type,
+    moderationStatus: chapter.moderationStatus,
+    contentLength: chapter.content.length,
+    contentHash: input.includeContentDigest === false ? null : chapterContentHash(chapter.content),
+    summaryPresent: Boolean(chapter.summary?.trim()),
+    sourceRevision: chapter.createdAt.toISOString(),
+  }));
+  const allChapters = [...previous, ...scanned];
+  const completed = run.progressCompleted + scanned.length;
+  const last = chapters.at(-1);
+  const done = chapters.length === 0 || completed >= total || completed >= maxChapters;
+  const nextCheckpoint = {
+    schemaVersion: 1,
+    storyId,
+    branchId,
+    lastSequenceNumber: last?.sequenceNumber ?? lastSequenceNumber,
+    lastChapterId: last?.id || lastChapterId || null,
+    chapters: allChapters,
+    appliedSteering: [
+      ...(Array.isArray(checkpoint.appliedSteering) ? checkpoint.appliedSteering : []),
+      ...steerCommandIds,
+    ],
+  };
+
+  if (!done) {
+    const updated = await prisma.$transaction(async tx => {
+      const claimed = await tx.agentRun.updateMany({
+        where: claimedRunWhere(run, lease),
+        data: {
+          checkpoint: toJson(nextCheckpoint),
+          currentFocus: focus,
+          progressCompleted: completed,
+          progressTotal: total,
+          consumedBudget: toJson({ chaptersRead: completed, modelCalls: 0, formalWrites: 0 }),
+          stateVersion: { increment: 1 },
+          lastHeartbeatAt: new Date(),
+          leaseUntil: new Date(Date.now() + (lease.leaseMs || DEFAULT_LEASE_MS)),
+        },
+      });
+      if (claimed.count !== 1) throw routeError('AGENT_RUN_FENCED', '任务 checkpoint 提交已失去租约', 409);
+      if (steerCommandIds.length) {
+        await tx.agentRunCommand.updateMany({ where: { id: { in: steerCommandIds }, status: 'ACCEPTED' }, data: { status: 'APPLIED', appliedAt: new Date() } });
+      }
+      return tx.agentRun.findUniqueOrThrow({ where: { id: run.id }, include: { artifacts: true } });
+    });
+    await appendRunProgress(principal, updated, `已读取 ${completed}/${total} 章`);
+    return publicRun(updated);
+  }
+
+  const terminalStatus = completed >= total ? 'SUCCEEDED' : 'PARTIAL';
+  const terminalReason = terminalStatus === 'SUCCEEDED' ? 'ACCEPTANCE_CRITERIA_MET' : 'CHAPTER_BUDGET_EXCEEDED';
+  const artifactContent = {
+    schemaVersion: 1,
+    jobKind: run.jobKind,
+    objective: focus,
+    story: { id: story.id, title: story.title },
+    branch: { id: branch.id, name: branch.name },
+    coverage: { scannedChapters: completed, totalChapters: total, complete: completed >= total },
+    chapters: allChapters,
+  };
+  const contentHash = stableAgentHash(artifactContent);
+  const relationshipProfile = await findProfile(principal);
+  const persistEpisodicMemory = Boolean(
+    relationshipProfile?.status === 'ACTIVE' && relationshipProfile.memoryEnabled,
+  );
+  const result = await prisma.$transaction(async tx => {
+    const claimed = await tx.agentRun.updateMany({
+      where: claimedRunWhere(run, lease),
+      data: {
+        status: terminalStatus,
+        checkpoint: toJson(nextCheckpoint),
+        currentFocus: focus,
+        progressCompleted: completed,
+        progressTotal: total,
+        consumedBudget: toJson({ chaptersRead: completed, modelCalls: 0, formalWrites: 0 }),
+        effectSummary: toJson({ formalWrites: 0, artifactsCreated: 1 }),
+        verificationSummary: toJson({ coverageComplete: completed >= total, scannedChapters: completed, totalChapters: total }),
+        terminalReason,
+        completedAt: new Date(),
+        stateVersion: { increment: 1 },
+        leaseOwner: null,
+        leaseUntil: null,
+        lastHeartbeatAt: new Date(),
+      },
+    });
+    if (claimed.count !== 1) throw routeError('AGENT_RUN_FENCED', '任务终态提交已失去租约', 409);
+    if (steerCommandIds.length) {
+      await tx.agentRunCommand.updateMany({ where: { id: { in: steerCommandIds }, status: 'ACCEPTED' }, data: { status: 'APPLIED', appliedAt: new Date() } });
+    }
+    const artifact = await tx.agentArtifact.create({
+      data: {
+        tenantId: run.tenantId,
+        actorId: run.actorId,
+        threadId: run.threadId,
+        runId: run.id,
+        storyId,
+        type: 'BOOK_RESOURCE_SCAN_REPORT',
+        title: `${story.title} 全书资源扫描报告`,
+        content: toJson(artifactContent),
+        contentHash,
+        retentionPolicy: { class: 'AUTHOR_ARTIFACT', deletable: true },
+      },
+    });
+    if (run.goalId) {
+      await tx.agentGoal.update({
+        where: { id: run.goalId },
+        data: {
+          status: terminalStatus,
+          consumedBudget: toJson({ chaptersRead: completed, modelCalls: 0, formalWrites: 0 }),
+          completedAt: new Date(),
+        },
+      });
+    }
+    if (persistEpisodicMemory) {
+      await tx.agentMemoryEntry.upsert({
+        where: {
+          tenantId_actorId_kind_scopeKey_normalizedKey: {
+            tenantId: run.tenantId,
+            actorId: run.actorId,
+            kind: 'EPISODIC_RUN',
+            scopeKey: `story:${storyId}`,
+            normalizedKey: `run:${run.id}`,
+          },
+        },
+        update: {
+          content: toJson({ runId: run.id, artifactId: artifact.id, outcome: terminalStatus, coverage: artifactContent.coverage }),
+          lastVerifiedAt: new Date(),
+        },
+        create: {
+          tenantId: run.tenantId,
+          actorId: run.actorId,
+          storyId,
+          threadId: run.threadId,
+          runId: run.id,
+          kind: 'EPISODIC_RUN',
+          scopeKey: `story:${storyId}`,
+          normalizedKey: `run:${run.id}`,
+          content: toJson({ runId: run.id, artifactId: artifact.id, outcome: terminalStatus, coverage: artifactContent.coverage }),
+          sourceResourceUris: toJson([`book://stories/${storyId}`]),
+          consentBasis: 'TASK_EXECUTION_RECORD',
+          confirmationState: 'SYSTEM_FACT',
+          confidence: 1,
+          lastVerifiedAt: new Date(),
+        },
+      });
+    }
+    const updated = await tx.agentRun.findUniqueOrThrow({ where: { id: run.id }, include: { artifacts: true } });
+    return { updated, artifact };
+  });
+  await appendAgentItem(principal, {
+    threadId: run.threadId,
+    turnId: run.initiatingTurnId,
+    kind: 'artifact_created',
+    payload: publicArtifact(result.artifact),
+    provenance: { source: 'durable_run_worker', runId: run.id, fencingToken: lease.fencingToken },
+    correlationId: run.id,
+  });
+  await appendRunItem(
+    principal,
+    result.updated,
+    terminalStatus === 'SUCCEEDED'
+      ? `扫描完成，实际覆盖 ${completed}/${total} 章`
+      : `任务达到章节预算，已覆盖 ${completed}/${total} 章并保存部分产物`,
+  );
+  return publicRun(result.updated);
+}
+
+async function failRunScope(
+  run: Awaited<ReturnType<typeof prisma.agentRun.findFirstOrThrow>>,
+  lease: { workerId: string; fencingToken: number },
+  principal: AgentPrincipal,
+) {
+  const failed = await finalizeControlledRun(run, lease, 'FAILED', 'RESOURCE_SCOPE_REVOKED');
+  await appendRunItem(principal, failed, '作品或分支权限已变化，任务已停止');
+  return publicRun(failed);
+}
+
+async function finalizeControlledRun(
+  run: Awaited<ReturnType<typeof prisma.agentRun.findFirstOrThrow>>,
+  lease: { workerId: string; fencingToken: number },
+  status: string,
+  terminalReason: string,
+  appliedCommandTypes: string[] = [],
+) {
+  const updated = await transitionClaimedRun(run, lease, {
+    status,
+    terminalReason,
+    completedAt: new Date(),
+    leaseOwner: null,
+    leaseUntil: null,
+    effectSummary: { formalWrites: 0 },
+    verificationSummary: { checkpointPreserved: true },
+  }, appliedCommandTypes);
+  if (run.goalId) {
+    await prisma.agentGoal.updateMany({
+      where: { id: run.goalId, status: 'ACTIVE' },
+      data: { status, completedAt: new Date() },
+    });
+  }
+  return updated;
+}
+
+async function transitionClaimedRun(
+  run: Awaited<ReturnType<typeof prisma.agentRun.findFirstOrThrow>>,
+  lease: { workerId: string; fencingToken: number },
+  data: Prisma.AgentRunUpdateManyMutationInput,
+  appliedCommandTypes: string[] = [],
+) {
+  return prisma.$transaction(async tx => {
+    const updated = await tx.agentRun.updateMany({
+      where: claimedRunWhere(run, lease),
+      data: { ...data, stateVersion: { increment: 1 }, lastHeartbeatAt: new Date() },
+    });
+    if (updated.count !== 1) throw routeError('AGENT_RUN_FENCED', '任务状态提交已失去租约', 409);
+    if (appliedCommandTypes.length) {
+      await tx.agentRunCommand.updateMany({
+        where: { runId: run.id, commandType: { in: appliedCommandTypes }, status: 'ACCEPTED' },
+        data: { status: 'APPLIED', appliedAt: new Date() },
+      });
+    }
+    return tx.agentRun.findUniqueOrThrow({ where: { id: run.id }, include: { artifacts: true } });
+  });
+}
+
+function claimedRunWhere(
+  run: Awaited<ReturnType<typeof prisma.agentRun.findFirstOrThrow>>,
+  lease: { workerId: string; fencingToken: number },
+) {
+  return {
+    id: run.id,
+    stateVersion: run.stateVersion,
+    status: run.status,
+    leaseOwner: lease.workerId,
+    fencingToken: lease.fencingToken,
+  };
+}
+
+async function loadOwnedRun(principal: AgentPrincipal, runId: string, includeArtifacts: boolean) {
+  const run = await prisma.agentRun.findFirst({
+    where: { id: runId, tenantId: principal.tenantId, actorId: principal.actorId },
+    include: { artifacts: includeArtifacts },
+  });
+  if (!run) throw routeError('AGENT_RUN_NOT_FOUND', '助手任务不存在', 404);
+  return run;
+}
+
+function commandStatusTransition(status: string, commandType: AgentRunCommandInput['commandType']) {
+  if (commandType === 'STEER') {
+    if (TERMINAL_RUN_STATUSES.includes(status as typeof TERMINAL_RUN_STATUSES[number])) {
+      throw routeError('AGENT_RUN_TERMINAL', '终态任务不能再接收 steering', 409);
+    }
+    return status;
+  }
+  if (commandType === 'PAUSE') {
+    if (status !== 'RUNNING') throw routeError('AGENT_RUN_NOT_PAUSABLE', '只有运行中的任务可以请求暂停', 409);
+    return 'PAUSE_REQUESTED';
+  }
+  if (commandType === 'RESUME') {
+    if (!['PAUSED', 'DEGRADED', 'BLOCKED'].includes(status)) throw routeError('AGENT_RUN_NOT_RESUMABLE', '当前任务不能恢复', 409);
+    return 'QUEUED';
+  }
+  if (commandType === 'CANCEL' || commandType === 'INTERRUPT') {
+    if (TERMINAL_RUN_STATUSES.includes(status as typeof TERMINAL_RUN_STATUSES[number])) {
+      throw routeError('AGENT_RUN_TERMINAL', '终态任务不能取消', 409);
+    }
+    return 'CANCEL_REQUESTED';
+  }
+  throw routeError('AGENT_RUN_COMMAND_INVALID', '任务命令不受支持', 400);
+}
+
+function commandData(
+  principal: AgentPrincipal,
+  run: { id: string; stateVersion: number },
+  input: AgentRunCommandInput,
+  payloadHash: string,
+  status: string,
+) {
+  return {
+    tenantId: principal.tenantId,
+    actorId: principal.actorId,
+    runId: run.id,
+    commandType: input.commandType,
+    clientId: input.clientId,
+    clientRequestId: input.clientRequestId,
+    payloadHash,
+    payload: toJson({ reason: input.reason, instruction: input.instruction, retryMode: input.retryMode }),
+    status,
+    stateVersionSeen: input.expectedStateVersion,
+    appliedAt: status === 'APPLIED' ? new Date() : null,
+  };
+}
+
+function publicGoal(goal: {
+  id: string; threadId: string; objective: string; acceptanceCriteria: Prisma.JsonValue;
+  resourceScope: Prisma.JsonValue; authorizationEnvelope: Prisma.JsonValue; budget: Prisma.JsonValue;
+  consumedBudget: Prisma.JsonValue; status: string; runtimeVersion: string; createdAt: Date; updatedAt: Date; completedAt: Date | null;
+}) {
+  return {
+    id: goal.id,
+    threadId: goal.threadId,
+    objective: goal.objective,
+    acceptanceCriteria: goal.acceptanceCriteria,
+    resourceScope: goal.resourceScope,
+    authorizationEnvelope: goal.authorizationEnvelope,
+    budget: goal.budget,
+    consumedBudget: goal.consumedBudget,
+    status: goal.status,
+    runtimeVersion: goal.runtimeVersion,
+    createdAt: goal.createdAt.toISOString(),
+    updatedAt: goal.updatedAt.toISOString(),
+    completedAt: goal.completedAt?.toISOString() || null,
+  };
+}
+
+function publicRun(run: AgentRunWithOptionalArtifacts | null | undefined) {
+  if (!run) return null;
+  return {
+    id: run.id,
+    goalId: run.goalId,
+    threadId: run.threadId,
+    initiatingTurnId: run.initiatingTurnId,
+    parentRunId: run.parentRunId,
+    attempt: run.attempt,
+    trigger: run.trigger,
+    runtimeVersion: run.runtimeVersion,
+    jobKind: run.jobKind,
+    priority: run.priority,
+    deadline: run.deadline?.toISOString() || null,
+    status: run.status,
+    stateVersion: run.stateVersion,
+    checkpoint: run.checkpoint,
+    currentFocus: run.currentFocus,
+    budget: run.budget,
+    consumedBudget: run.consumedBudget,
+    progress: { completed: run.progressCompleted, total: run.progressTotal },
+    lease: run.leaseOwner ? { owner: run.leaseOwner, until: run.leaseUntil?.toISOString() || null, fencingToken: run.fencingToken } : null,
+    lastHeartbeatAt: run.lastHeartbeatAt?.toISOString() || null,
+    startedAt: run.startedAt?.toISOString() || null,
+    completedAt: run.completedAt?.toISOString() || null,
+    terminalReason: run.terminalReason,
+    effectSummary: run.effectSummary,
+    verificationSummary: run.verificationSummary,
+    compensationSummary: run.compensationSummary,
+    artifacts: Array.isArray(run.artifacts) ? run.artifacts.map(publicArtifact) : [],
+    createdAt: run.createdAt.toISOString(),
+    updatedAt: run.updatedAt.toISOString(),
+  };
+}
+
+function publicArtifact(artifact: AgentArtifactRecord) {
+  return {
+    id: artifact.id,
+    runId: artifact.runId,
+    storyId: artifact.storyId,
+    type: artifact.type,
+    title: artifact.title,
+    status: artifact.status,
+    contentHash: artifact.contentHash,
+    createdAt: artifact.createdAt.toISOString(),
+  };
+}
+
+function publicCommand(command: { id: string; runId: string; resultRunId: string | null; commandType: string; status: string; stateVersionSeen: number; createdAt: Date; appliedAt: Date | null }) {
+  return {
+    id: command.id,
+    runId: command.runId,
+    resultRunId: command.resultRunId,
+    commandType: command.commandType,
+    status: command.status,
+    stateVersionSeen: command.stateVersionSeen,
+    createdAt: command.createdAt.toISOString(),
+    appliedAt: command.appliedAt?.toISOString() || null,
+  };
+}
+
+async function appendRunItem(principal: AgentPrincipal, run: AgentRunWithOptionalArtifacts, message: string) {
+  const surfaceOnly = record(record(run.input).capability).clientLaunchPolicy === 'SURFACE_ONLY';
+  await appendAgentItem(principal, {
+    threadId: run.threadId,
+    turnId: run.initiatingTurnId,
+    kind: 'run_update',
+    visibility: surfaceOnly ? 'INTERNAL' : 'PUBLIC',
+    payload: { ...publicRun(run), message },
+    provenance: { source: 'durable_run_scheduler', runId: run.id },
+    correlationId: run.id,
+  });
+}
+
+async function appendRunProgress(principal: AgentPrincipal, run: AgentRunWithOptionalArtifacts, message: string) {
+  const surfaceOnly = record(record(run.input).capability).clientLaunchPolicy === 'SURFACE_ONLY';
+  await appendAgentItem(principal, {
+    threadId: run.threadId,
+    turnId: run.initiatingTurnId,
+    kind: 'progress',
+    visibility: surfaceOnly ? 'INTERNAL' : 'PUBLIC',
+    payload: {
+      runId: run.id,
+      status: run.status,
+      completed: run.progressCompleted,
+      total: run.progressTotal,
+      currentFocus: run.currentFocus,
+      message,
+    },
+    provenance: { source: 'durable_run_worker', fencingToken: run.fencingToken },
+    correlationId: run.id,
+  });
+}
+
+function workerPrincipal(run: { tenantId: string; actorId: string }): AgentPrincipal {
+  return { tenantId: run.tenantId as AgentPrincipal['tenantId'], actorId: run.actorId };
+}
+
+function runCommandMessage(command: AgentRunCommandInput['commandType']) {
+  return ({
+    STEER: 'steering 已接受，将在下一个 checkpoint 生效',
+    PAUSE: '暂停请求已接受',
+    RESUME: '任务已恢复排队',
+    CANCEL: '取消请求已接受',
+    INTERRUPT: '中断请求已接受',
+    RETRY: '已创建新的任务 attempt',
+  } as const)[command];
+}
+
+function startDurableCapabilityHeartbeat(
+  runId: string,
+  lease: { workerId: string; fencingToken: number },
+  leaseMs: number,
+) {
+  let stopped = false;
+  let inFlight = false;
+  const beat = async () => {
+    if (stopped || inFlight) return;
+    inFlight = true;
+    try {
+      const now = new Date();
+      const renewed = await prisma.agentRun.updateMany({
+        where: {
+          id: runId,
+          status: 'RUNNING',
+          leaseOwner: lease.workerId,
+          fencingToken: lease.fencingToken,
+          leaseUntil: { gte: now },
+        },
+        data: {
+          leaseUntil: new Date(now.getTime() + leaseMs),
+          lastHeartbeatAt: now,
+        },
+      });
+      if (renewed.count !== 1) {
+        stopped = true;
+        throw routeError('AGENT_RUN_FENCED', '能力执行已失去耐久租约', 409);
+      }
+    } finally {
+      inFlight = false;
+    }
+  };
+  const timer = setInterval(
+    () => void beat().catch(error => console.error('[AgentRun] Capability heartbeat failed:', error)),
+    Math.max(10_000, Math.floor(leaseMs / 3)),
+  );
+  timer.unref?.();
+  return () => {
+    stopped = true;
+    clearInterval(timer);
+  };
+}
+
+function capabilityRunFailureObservation(params: {
+  runId: string;
+  callId: string;
+  capabilityId: string;
+  capabilityVersion: string;
+  error: unknown;
+}): CapabilityObservation {
+  const value = params.error && typeof params.error === 'object'
+    ? params.error as {
+      code?: unknown;
+      userMessage?: unknown;
+      diagnosticMessage?: unknown;
+      status?: unknown;
+      message?: unknown;
+      issues?: unknown;
+      details?: unknown;
+    }
+    : {};
+  const messageCode = typeof value.message === 'string' && /^[A-Z][A-Z0-9_]{2,80}$/.test(value.message)
+    ? value.message
+    : null;
+  const code = typeof value.code === 'string' && /^[A-Z][A-Z0-9_]{2,80}$/.test(value.code)
+    ? value.code
+    : messageCode || 'AGENT_CAPABILITY_EXECUTION_FAILED';
+  const zodDiagnostic = describeZodIssues(value.issues);
+  const explicitUser = typeof value.userMessage === 'string' && value.userMessage.trim()
+    ? value.userMessage.trim().slice(0, 1_000)
+    : '';
+  // Prefer domain userMessage (e.g. genesis interview schema failures). Never
+  // collapse a specific public code into the generic durable-worker sentence.
+  const summary = explicitUser
+    || userFacingCapabilityFailureSummary(code, params.capabilityId)
+    || '能力执行失败，系统已保留任务与诊断结果。';
+  const diagnosticMessage = (
+    typeof value.diagnosticMessage === 'string' && value.diagnosticMessage.trim()
+      ? value.diagnosticMessage.trim()
+      : zodDiagnostic || summary
+  ).slice(0, 1_200);
+  const category = classifyCapabilityFailure(code, Number(value.status || 0));
+  const retryDisposition = defaultCapabilityRetryDisposition(category);
+  const retryable = ['REPLAN_REQUIRED', 'RETRY_SAME_INPUT'].includes(retryDisposition);
+  const runResourceUri = `book://tasks/runs/${params.runId}`;
+  return {
+    callId: params.callId,
+    capabilityId: params.capabilityId,
+    capabilityVersion: params.capabilityVersion,
+    status: 'FAILED',
+    summary,
+    structuredData: {
+      code,
+      ...(value.details && typeof value.details === 'object' && !Array.isArray(value.details)
+        ? value.details as Record<string, unknown>
+        : {}),
+    },
+    evidence: [],
+    warnings: [code],
+    partials: [],
+    retryable,
+    provenance: { source: 'durable_capability_worker', executionId: params.runId },
+    diagnostic: {
+      schemaVersion: 1,
+      code,
+      category,
+      phase: 'capability_execution',
+      message: diagnosticMessage,
+      retryDisposition,
+      effectState: 'EFFECT_UNKNOWN',
+      authoritativeResourceUris: [runResourceUri],
+      suggestedCapabilities: ['resource.open'],
+      resume: { kind: 'RUN_HANDLE', id: params.runId, resourceUri: runResourceUri },
+    },
+  };
+}
+
+function describeZodIssues(issues: unknown): string | null {
+  if (!Array.isArray(issues) || issues.length === 0) return null;
+  const parts = issues.slice(0, 6).map(issue => {
+    const record = issue && typeof issue === 'object' ? issue as Record<string, unknown> : {};
+    const path = Array.isArray(record.path) ? record.path.join('.') : '';
+    const message = typeof record.message === 'string' ? record.message : 'invalid';
+    return path ? `${path}: ${message}` : message;
+  });
+  return parts.length ? parts.join('；').slice(0, 1_200) : null;
+}
+
+function userFacingCapabilityFailureSummary(code: string, capabilityId: string) {
+  if (code === 'GENESIS_INTERVIEW_MODEL_OUTPUT_INVALID'
+    || code === 'GENESIS_INTERVIEW_MODEL_FAILED_BILLED') {
+    return '构思访谈模型返回了无法采用的结构，系统已保留任务与诊断；请重试本轮或简化本轮补充。';
+  }
+  if (code.startsWith('GENESIS_')) {
+    return '开书构思任务未能完成，系统已保留任务与诊断结果。';
+  }
+  if (capabilityId.startsWith('genesis.')) {
+    return '开书相关能力执行失败，系统已保留任务与诊断结果。';
+  }
+  return null;
+}
+
+function record(value: unknown): Record<string, unknown> {
+  return value && typeof value === 'object' && !Array.isArray(value) ? value as Record<string, unknown> : {};
+}
+
+function stringField(value: unknown, key: string) {
+  const result = record(value)[key];
+  return typeof result === 'string' ? result : '';
+}
+
+function numberOrNull(value: unknown) {
+  const parsed = Number(value);
+  return Number.isInteger(parsed) && parsed >= 0 ? parsed : null;
+}
+
+function toJson(value: unknown) {
+  return JSON.parse(JSON.stringify(value)) as Prisma.InputJsonValue;
+}
+
+function boundedLimit(value?: number) {
+  return Math.max(1, Math.min(100, Number(value || 30)));
+}
+
+function isUniqueConstraintError(error: unknown) {
+  return error instanceof Prisma.PrismaClientKnownRequestError && error.code === 'P2002';
+}

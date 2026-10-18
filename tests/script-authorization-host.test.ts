@@ -1,0 +1,42 @@
+import test from 'node:test';
+import assert from 'node:assert/strict';
+import Database from 'better-sqlite3';
+import { hashValue } from '../packages/agent-core/src';
+import { compileContext, memorySection } from '../packages/agent-context/src';
+import { createScriptAgentHost } from '../apps/api/src/agent/scriptHost';
+import { createScriptProject, newUnit } from '../packages/script/src/project';
+import { createScriptCreationProfile } from '../packages/script/src/creation';
+import type { ScriptDraftScope } from '../packages/script/src/agentScope';
+import type { ScriptReadSource } from '../apps/api/src/repositories/scriptAuthorizationStore';
+
+test('real host binds workspace model context to the manual command and rejects a wider historic source',t=>{
+ const db=new Database(':memory:');t.after(()=>db.close());let sends=0;
+ const host=createScriptAgentHost(db,{sendOnce:async()=>{sends++;throw new Error('No model calls permitted');}},'mechanical-host',{trustedLegacyProjectOwner:'author'});
+ const thread=host.conversations.open('author','script:home','authorizations');
+ const original=createScriptProject('【前集机械协议】',createScriptCreationProfile('tv-series',2,20));original.units.push(newUnit('第二集',1200000,original.id));original.brief.outline='【不应进入正文来源】未来集规划';original.units[1].scenes[0].blocks[0].text='【未选单元原文】';
+ const previous=host.scripts.saveProject(original,0),w=host.workspaces.create({ownerId:'author',threadId:thread.id,requestId:'workspace',source:{document:createScriptProject('【新集机械稿】',createScriptCreationProfile('tv-series',2,20))}});
+ const access={ownerId:'author',scopeId:w.id,branch:`workspace:${w.id}`};
+ const scope:ScriptDraftScope={workspaceId:w.id,documentId:w.documentId,originRevision:w.revision,originContentHash:hashValue(w.document),operations:['scene_body'],units:w.document.units.map(unit=>({unitId:unit.id,allowSummary:false,allowAllScenes:true,maxNewScenes:0,scenes:[]})),newUnitSlots:[],sharedFields:[],characterScopeIds:[],factScopeIds:[]};
+ const source:ScriptReadSource={ref:{uri:`resource://script/projects/${previous.id}`,version:'1',contentHash:hashValue(previous),branch:'author'},access:{ownerId:'author',scopeId:previous.id,branch:'author'},purpose:'PREVIOUS_SCRIPT',unitIds:null};
+ const manual=(requestId:string,selected:ScriptReadSource)=>{
+   const auth=host.authorizations.issue({ownerId:'author',threadId:thread.id,workspaceId:w.id,commandId:requestId,scope,sources:[selected]});
+   const command=host.store.accept({ownerId:'author',threadId:thread.id,scopeId:'script:home',requestId,kind:'CAPABILITY',input:{authorizationRef:auth.id},policyRevision:'1',maxInvocations:1});
+   host.authorizations.bind(auth.id,'author',{kind:'RUN',runId:command.runId,inputRevision:1});return {auth,run:host.store.readRun(command.runId)};
+ };
+ const wide=manual('wide',source),oldRef=host.authorizations.ref(host.authorizations.grants(wide.auth.id,'author')[0]);
+ const memory=host.contexts.createMemory(access,'model','old-wide',{key:'old.script.summary',kind:'DOMAIN_DERIVED',content:{label:'机械摘要',value:'【测试依赖】过去全稿的摘要'},dependencies:[{ref:oldRef,freshness:'EXACT'}]});
+ const wideBundle=compileContext({systemInstruction:'机械输入',skills:[],sections:[memorySection(host.contexts.getMemory(memory.id,access))]}),wideContext=host.contexts.capture(access,wideBundle);
+ const narrow=manual('narrow',{...source,unitIds:[previous.units[0].id]}),grant=host.authorizations.grants(narrow.auth.id,'author')[0],ref=host.authorizations.ref(grant);
+ const selected=host.authorizations.withRunAuthorization(narrow.run,'CONSUME',()=>host.authorizations.readGranted(ref,access));
+ assert.equal((selected.data as any).units.length,1);assert.doesNotMatch(JSON.stringify(selected.data),/未选单元原文|未来集规划/);
+ const schema={type:'object',additionalProperties:false,required:['text'],properties:{text:{type:'string'}}};
+ const compiled=compileContext({systemInstruction:'机械输入',outputSchema:schema,skills:[],sections:[{id:'selected-body',text:JSON.stringify(selected.data),required:true,priority:100,dependencies:[{ref,freshness:'CURRENT'}]}]});
+ const contextRef=host.authorizations.withRunAuthorization(narrow.run,'CONSUME',()=>host.contexts.capture(access,compiled));
+ const request={operationKey:'mechanical',channel:'external' as const,routeRef:'mechanical-only',prompt:compiled.prompt,systemInstruction:compiled.systemInstruction,outputSchema:schema,contextRef};
+ assert.doesNotThrow(()=>host.journal.assertRunInput(request,narrow.run));
+ assert.throws(()=>host.journal.assertRunInput({...request,prompt:wideBundle.prompt,outputSchema:undefined,contextRef:wideContext},narrow.run),/来源/);
+ assert.throws(()=>host.journal.assertRunInput({...request,prompt:request.prompt+'tampered'},narrow.run),/冻结上下文/);
+ host.scripts.deleteProject(previous.id);
+ assert.throws(()=>host.journal.assertRunInput(request,narrow.run,'VIEW'),/来源/);
+ assert.equal(host.workspaces.read(w.id,'author').revision,1);assert.equal(sends,0);
+});

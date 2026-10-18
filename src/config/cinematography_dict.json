@@ -1,0 +1,15 @@
+{
+  "_comment": "此文件已废弃硬编码映射。仅作为 AI 视听推演的参考示例（Logic Sampling）。",
+  "examples": {
+    "压抑": {
+      "context": "广阔荒原上的压抑",
+      "reasoning": "冰冷的压抑，秩序崩塌感",
+      "output": {
+        "cameraAngle": ["High angle", "Dutch angle"],
+        "lighting": ["Cold fluorescent", "Low key lighting"],
+        "composition": ["Vast negative space", "Tiny figure"],
+        "lens": ["Long Lens"]
+      }
+    }
+  }
+}

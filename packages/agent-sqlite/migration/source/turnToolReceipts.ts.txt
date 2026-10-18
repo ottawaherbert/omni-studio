@@ -1,0 +1,243 @@
+import { Prisma } from '@prisma/client';
+import { prisma } from '@/services/db';
+import { routeError } from '@/services/routeErrors';
+import type { AgentPrincipal } from '@/services/bookAgent/principal';
+import {
+  assertAgentTurnExecution,
+  type AgentTurnExecutionLease,
+} from '@/services/bookAgent/turnLease';
+import type { CapabilityObservation } from '@/services/bookAgent/runtimeTypes';
+
+function toInputJson(value: unknown) {
+  return JSON.parse(JSON.stringify(value)) as Prisma.InputJsonValue;
+}
+
+async function allocateSequence(
+  tx: Prisma.TransactionClient,
+  principal: AgentPrincipal,
+  threadId: string,
+) {
+  const allocated = await tx.agentThread.updateManyAndReturn({
+    where: {
+      id: threadId,
+      tenantId: principal.tenantId,
+      actorId: principal.actorId,
+      status: 'ACTIVE',
+      deletedAt: null,
+    },
+    data: { lastSeq: { increment: 1 } },
+    select: { lastSeq: true },
+  });
+  const seq = allocated[0]?.lastSeq;
+  if (seq === undefined) {
+    throw routeError('AGENT_THREAD_NOT_ACTIVE', '当前助手会话不可追加事件', 409);
+  }
+  return seq;
+}
+
+function assertSameToolRequest(
+  receipt: {
+    threadId: string;
+    turnId: string;
+    samplingId: string;
+    callIndex: number;
+    capabilityId: string;
+    capabilityVersion: string;
+    requestHash: string;
+  },
+  params: {
+    threadId: string;
+    lease: AgentTurnExecutionLease;
+    samplingId: string;
+    callIndex: number;
+    capabilityId: string;
+    capabilityVersion: string;
+    requestHash: string;
+  },
+) {
+  if (
+    receipt.threadId !== params.threadId
+    || receipt.turnId !== params.lease.turnId
+    || receipt.samplingId !== params.samplingId
+    || receipt.callIndex !== params.callIndex
+    || receipt.capabilityId !== params.capabilityId
+    || receipt.capabilityVersion !== params.capabilityVersion
+    || receipt.requestHash !== params.requestHash
+  ) {
+    throw routeError(
+      'AGENT_TOOL_RECEIPT_IDEMPOTENCY_CONFLICT',
+      '相同工具调用标识已用于不同参数',
+      409,
+    );
+  }
+}
+
+export async function claimAgentToolExecution(params: {
+  principal: AgentPrincipal;
+  lease: AgentTurnExecutionLease;
+  threadId: string;
+  samplingId: string;
+  callIndex: number;
+  callId: string;
+  capabilityId: string;
+  capabilityVersion: string;
+  requestHash: string;
+  toolCallPayload: unknown;
+  provenance: unknown;
+}) {
+  return prisma.$transaction(async tx => {
+    await assertAgentTurnExecution(tx, params.lease);
+    const existing = await tx.agentToolReceipt.findUnique({
+      where: { callId: params.callId },
+    });
+    if (existing) {
+      assertSameToolRequest(existing, params);
+      if (existing.completedAt && existing.observation) {
+        const resultItem = existing.toolResultItemId
+          ? await tx.agentItem.findUnique({ where: { id: existing.toolResultItemId }, select: { seq: true } })
+          : null;
+        return {
+          replayed: true as const,
+          observation: existing.observation as unknown as CapabilityObservation,
+          resultSeq: resultItem?.seq.toString() || null,
+          canonicalInput: existing.canonicalInput,
+          canonicalInputDigest: existing.canonicalInputDigest,
+        };
+      }
+      const reclaimed = await tx.agentToolReceipt.updateMany({
+        where: { id: existing.id, completedAt: null },
+        data: {
+          status: 'RUNNING',
+          attempt: { increment: 1 },
+          executionFencingToken: params.lease.fencingToken,
+          startedAt: new Date(),
+        },
+      });
+      if (reclaimed.count !== 1) {
+        throw routeError('AGENT_TOOL_RECEIPT_CONFLICT', '工具执行状态已变化', 409);
+      }
+      return {
+        replayed: false as const,
+        observation: null,
+        resultSeq: null,
+        canonicalInput: null,
+        canonicalInputDigest: null,
+      };
+    }
+
+    const seq = await allocateSequence(tx, params.principal, params.threadId);
+    const toolCallItem = await tx.agentItem.create({
+      data: {
+        threadId: params.threadId,
+        turnId: params.lease.turnId,
+        seq,
+        kind: 'tool_call',
+        visibility: 'PUBLIC',
+        payloadVersion: 1,
+        correlationId: params.callId,
+        payload: toInputJson(params.toolCallPayload),
+        provenance: toInputJson(params.provenance),
+      },
+      select: { id: true },
+    });
+    await tx.agentToolReceipt.create({
+      data: {
+        threadId: params.threadId,
+        turnId: params.lease.turnId,
+        samplingId: params.samplingId,
+        callId: params.callId,
+        callIndex: params.callIndex,
+        capabilityId: params.capabilityId,
+        capabilityVersion: params.capabilityVersion || '',
+        requestHash: params.requestHash,
+        executionFencingToken: params.lease.fencingToken,
+        toolCallItemId: toolCallItem.id,
+      },
+    });
+    return {
+      replayed: false as const,
+      observation: null,
+      resultSeq: null,
+      canonicalInput: null,
+      canonicalInputDigest: null,
+    };
+  }, { isolationLevel: Prisma.TransactionIsolationLevel.Serializable });
+}
+
+export async function settleAgentToolExecution(params: {
+  principal: AgentPrincipal;
+  lease: AgentTurnExecutionLease;
+  threadId: string;
+  callId: string;
+  observation: CapabilityObservation;
+  canonicalInput: unknown;
+  canonicalInputDigest: string;
+  provenance: unknown;
+}) {
+  return prisma.$transaction(async tx => {
+    await assertAgentTurnExecution(tx, params.lease);
+    const receipt = await tx.agentToolReceipt.findUnique({ where: { callId: params.callId } });
+    if (!receipt) throw routeError('AGENT_TOOL_RECEIPT_NOT_FOUND', '工具执行凭证不存在', 409);
+    if (receipt.completedAt && receipt.observation) {
+      const resultItem = receipt.toolResultItemId
+        ? await tx.agentItem.findUnique({ where: { id: receipt.toolResultItemId }, select: { seq: true } })
+        : null;
+      return {
+        observation: receipt.observation as unknown as CapabilityObservation,
+        resultSeq: resultItem?.seq.toString() || null,
+        canonicalInput: receipt.canonicalInput,
+        canonicalInputDigest: receipt.canonicalInputDigest,
+        replayed: true,
+      };
+    }
+    if (
+      receipt.turnId !== params.lease.turnId
+      || receipt.executionFencingToken !== params.lease.fencingToken
+      || receipt.status !== 'RUNNING'
+    ) {
+      throw routeError('AGENT_TURN_LEASE_LOST', '旧执行器不能提交工具结果', 409);
+    }
+
+    const seq = await allocateSequence(tx, params.principal, params.threadId);
+    const resultItem = await tx.agentItem.create({
+      data: {
+        threadId: params.threadId,
+        turnId: params.lease.turnId,
+        seq,
+        kind: 'tool_result',
+        visibility: 'PUBLIC',
+        payloadVersion: 1,
+        correlationId: params.callId,
+        payload: toInputJson(params.observation),
+        provenance: toInputJson(params.provenance),
+      },
+      select: { id: true, seq: true },
+    });
+    const terminal = await tx.agentToolReceipt.updateMany({
+      where: {
+        id: receipt.id,
+        status: 'RUNNING',
+        executionFencingToken: params.lease.fencingToken,
+        completedAt: null,
+      },
+      data: {
+        status: 'COMPLETED',
+        observation: toInputJson(params.observation),
+        canonicalInput: toInputJson(params.canonicalInput),
+        canonicalInputDigest: params.canonicalInputDigest,
+        toolResultItemId: resultItem.id,
+        completedAt: new Date(),
+      },
+    });
+    if (terminal.count !== 1) {
+      throw routeError('AGENT_TURN_LEASE_LOST', '工具结果提交时执行租约已失效', 409);
+    }
+    return {
+      observation: params.observation,
+      resultSeq: resultItem.seq.toString(),
+      canonicalInput: params.canonicalInput,
+      canonicalInputDigest: params.canonicalInputDigest,
+      replayed: false,
+    };
+  }, { isolationLevel: Prisma.TransactionIsolationLevel.Serializable });
+}

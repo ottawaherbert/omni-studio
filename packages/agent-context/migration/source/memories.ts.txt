@@ -1,0 +1,374 @@
+import { Prisma } from '@prisma/client';
+import { prisma } from '@/services/db';
+import { appendAgentItem, getAgentThread } from '@/services/bookAgent/protocol';
+import { assertAgentResourceScope } from '@/services/bookAgent/scope';
+import { assertSameIdempotentPayload, hashAgentCommand } from '@/services/bookAgent/idempotency';
+import { stableAgentHash } from '@/services/bookAgent/security';
+import { createAgentMemorySchema, updateAgentMemorySchema, type CreateAgentMemoryInput, type UpdateAgentMemoryInput } from '@/services/bookAgent/memoryContracts';
+import type { AgentPrincipal } from '@/services/bookAgent/principal';
+import { findProfile, requireMemoryEnabled } from '@/services/bookAgent/relationshipProfile';
+import { routeError } from '@/services/routeErrors';
+
+export async function createAgentMemory(principal: AgentPrincipal, rawInput: CreateAgentMemoryInput) {
+  const input = createAgentMemorySchema.parse(rawInput);
+  const sourceItemIds = [...new Set(input.sourceItemIds)].sort();
+  const canonicalInput = { ...input, sourceItemIds };
+  const payloadHash = hashAgentCommand('memory:create', canonicalInput);
+  const replay = await findMemoryCommandReplay(principal, 'CREATE', input.clientId, input.clientRequestId);
+  if (replay) {
+    assertSameIdempotentPayload(replay.payloadHash, payloadHash);
+    return publicMemory(replay.memory);
+  }
+  await requireMemoryEnabled(principal);
+  if (input.storyId) await assertAgentResourceScope(principal, { storyId: input.storyId }, { requireActiveStory: true });
+  if (input.threadId) await getAgentThread(principal, input.threadId);
+  if (sourceItemIds.length) {
+    const count = await prisma.agentItem.count({
+      where: {
+        id: { in: sourceItemIds },
+        thread: { tenantId: principal.tenantId, actorId: principal.actorId },
+      },
+    });
+    if (count !== sourceItemIds.length) throw routeError('AGENT_MEMORY_SOURCE_NOT_FOUND', '记忆来源不属于当前作者', 404);
+  }
+  const scopeKey = input.storyId ? `story:${input.storyId}` : 'author';
+  const existing = await prisma.agentMemoryEntry.findUnique({
+    where: {
+      tenantId_actorId_kind_scopeKey_normalizedKey: {
+        tenantId: principal.tenantId,
+        actorId: principal.actorId,
+        kind: input.kind,
+        scopeKey,
+        normalizedKey: input.normalizedKey,
+      },
+    },
+  });
+  const requestedFingerprint = stableAgentHash({
+    content: input.content,
+    storyId: input.storyId || null,
+    sourceItemIds,
+    expiresAt: input.expiresAt || null,
+  });
+  if (existing) {
+    if (memoryFingerprint(existing) !== requestedFingerprint) {
+      throw routeError('AGENT_MEMORY_CONFLICT', '同名记忆已存在，请使用纠正操作更新', 409);
+    }
+    await recordMemoryCommand(principal, {
+      memoryId: existing.id,
+      commandType: 'CREATE',
+      clientId: input.clientId,
+      clientRequestId: input.clientRequestId,
+      payloadHash,
+      resultRevision: existing.revision,
+    });
+    return publicMemory(existing);
+  }
+  let memory: Prisma.AgentMemoryEntryGetPayload<Record<string, never>>;
+  try {
+    memory = await prisma.$transaction(async tx => {
+      const created = await tx.agentMemoryEntry.create({
+        data: {
+          tenantId: principal.tenantId,
+          actorId: principal.actorId,
+          storyId: input.storyId || null,
+          threadId: input.threadId || null,
+          kind: input.kind,
+          scopeKey,
+          normalizedKey: input.normalizedKey,
+          content: toJson(input.content),
+          sourceItemIds: toJson(sourceItemIds),
+          confidence: 1,
+          confirmationState: 'CONFIRMED',
+          consentBasis: 'EXPLICIT_AUTHOR_REQUEST',
+          sensitivity: 'PRIVATE',
+          inheritedTaint: toJson(sourceItemIds.length ? ['USER_AUTHORED_TRANSCRIPT'] : ['USER_AUTHORED']),
+          lastVerifiedAt: new Date(),
+          expiresAt: input.expiresAt ? new Date(input.expiresAt) : null,
+        },
+      });
+      await tx.agentMemoryCommand.create({
+        data: memoryCommandData(principal, {
+          memoryId: created.id,
+          commandType: 'CREATE',
+          clientId: input.clientId,
+          clientRequestId: input.clientRequestId,
+          payloadHash,
+          resultRevision: created.revision,
+        }),
+      });
+      return created;
+    });
+  } catch (error) {
+    if (!isUniqueConstraintError(error)) throw error;
+    const concurrentReplay = await findMemoryCommandReplay(principal, 'CREATE', input.clientId, input.clientRequestId);
+    if (concurrentReplay) {
+      assertSameIdempotentPayload(concurrentReplay.payloadHash, payloadHash);
+      return publicMemory(concurrentReplay.memory);
+    }
+    const concurrentMemory = await prisma.agentMemoryEntry.findUnique({
+      where: {
+        tenantId_actorId_kind_scopeKey_normalizedKey: {
+          tenantId: principal.tenantId,
+          actorId: principal.actorId,
+          kind: input.kind,
+          scopeKey,
+          normalizedKey: input.normalizedKey,
+        },
+      },
+    });
+    if (!concurrentMemory || memoryFingerprint(concurrentMemory) !== requestedFingerprint) {
+      throw routeError('AGENT_MEMORY_CONFLICT', '同名记忆已被其他请求创建', 409);
+    }
+    await recordMemoryCommand(principal, {
+      memoryId: concurrentMemory.id,
+      commandType: 'CREATE',
+      clientId: input.clientId,
+      clientRequestId: input.clientRequestId,
+      payloadHash,
+      resultRevision: concurrentMemory.revision,
+    });
+    memory = concurrentMemory;
+  }
+  if (input.threadId) {
+    await appendAgentItem(principal, {
+      threadId: input.threadId,
+      kind: 'memory_notice',
+      payload: { action: 'CREATED', memory: publicMemory(memory) },
+      provenance: { source: 'memory_service', consentBasis: 'EXPLICIT_AUTHOR_REQUEST' },
+      clientRequestId: input.clientRequestId,
+    });
+  }
+  return publicMemory(memory);
+}
+
+export async function listAgentMemories(principal: AgentPrincipal, params: {
+  storyId?: string | null;
+  kind?: string | null;
+  status?: string | null;
+  limit?: number;
+}) {
+  if (params.storyId) await assertAgentResourceScope(principal, { storyId: params.storyId }, { requireActiveStory: false });
+  const rows = await prisma.agentMemoryEntry.findMany({
+    where: {
+      tenantId: principal.tenantId,
+      actorId: principal.actorId,
+      ...(params.storyId ? { storyId: params.storyId } : {}),
+      ...(params.kind ? { kind: params.kind } : {}),
+      ...(params.status ? { status: params.status } : { status: { not: 'DELETED' } }),
+    },
+    orderBy: { updatedAt: 'desc' },
+    take: Math.max(1, Math.min(100, Number(params.limit || 50))),
+  });
+  return rows.map(publicMemory);
+}
+
+export async function updateAgentMemory(principal: AgentPrincipal, memoryId: string, rawInput: UpdateAgentMemoryInput) {
+  const input = updateAgentMemorySchema.parse(rawInput);
+  const commandType = `MEMORY_${input.action}`;
+  const payloadHash = hashAgentCommand('memory:update', { memoryId, ...input });
+  const replay = await findMemoryCommandReplay(principal, commandType, input.clientId, input.clientRequestId);
+  if (replay) {
+    if (replay.memoryId !== memoryId) throw routeError('IDEMPOTENCY_CONFLICT', '相同记忆命令标识已用于其他记忆', 409);
+    assertSameIdempotentPayload(replay.payloadHash, payloadHash);
+    return publicMemory(replay.memory);
+  }
+  const current = await prisma.agentMemoryEntry.findFirst({
+    where: { id: memoryId, tenantId: principal.tenantId, actorId: principal.actorId },
+  });
+  if (!current) throw routeError('AGENT_MEMORY_NOT_FOUND', '助手记忆不存在', 404);
+  if (current.revision !== input.expectedRevision) throw routeError('AGENT_MEMORY_CONFLICT', '记忆已变化，请刷新后重试', 409);
+  if (current.status === 'DELETED' && input.action !== 'DELETE') throw routeError('AGENT_MEMORY_DELETED', '已删除记忆不能恢复', 409);
+  const data: Prisma.AgentMemoryEntryUpdateManyMutationInput = {
+    revision: { increment: 1 },
+    lastVerifiedAt: new Date(),
+  };
+  if (input.action === 'DISABLE') data.status = 'DISABLED';
+  if (input.action === 'ENABLE') data.status = 'ACTIVE';
+  if (input.action === 'CORRECT') {
+    data.content = toJson(input.content);
+    data.status = 'ACTIVE';
+    data.confirmationState = 'CONFIRMED';
+  }
+  if (input.action === 'DELETE') {
+    data.status = 'DELETED';
+    data.deletedAt = new Date();
+    data.content = { tombstone: true };
+    data.sourceItemIds = [];
+    data.sourceResourceUris = [];
+    data.inheritedTaint = [];
+  }
+  let memory: Prisma.AgentMemoryEntryGetPayload<Record<string, never>>;
+  try {
+    memory = await prisma.$transaction(async tx => {
+      const updated = await tx.agentMemoryEntry.updateMany({
+        where: { id: current.id, revision: input.expectedRevision, status: current.status },
+        data,
+      });
+      if (updated.count !== 1) throw routeError('AGENT_MEMORY_CONFLICT', '记忆更新与其他操作冲突', 409);
+      const next = await tx.agentMemoryEntry.findUniqueOrThrow({ where: { id: current.id } });
+      await tx.agentMemoryCommand.create({
+        data: memoryCommandData(principal, {
+          memoryId: current.id,
+          commandType,
+          clientId: input.clientId,
+          clientRequestId: input.clientRequestId,
+          payloadHash,
+          resultRevision: next.revision,
+        }),
+      });
+      return next;
+    });
+  } catch (error) {
+    if (!isUniqueConstraintError(error)) throw error;
+    const concurrentReplay = await findMemoryCommandReplay(principal, commandType, input.clientId, input.clientRequestId);
+    if (!concurrentReplay || concurrentReplay.memoryId !== memoryId) throw error;
+    assertSameIdempotentPayload(concurrentReplay.payloadHash, payloadHash);
+    return publicMemory(concurrentReplay.memory);
+  }
+  if (memory.threadId) {
+    await appendAgentItem(principal, {
+      threadId: memory.threadId,
+      kind: 'memory_notice',
+      payload: { action: input.action, memory: publicMemory(memory) },
+      provenance: { source: 'memory_service', consentBasis: 'EXPLICIT_AUTHOR_REQUEST' },
+      clientRequestId: input.clientRequestId,
+    });
+  }
+  return publicMemory(memory);
+}
+
+export async function retrieveAgentMemories(params: {
+  principal: AgentPrincipal;
+  storyId?: string | null;
+  threadId?: string | null;
+  limit?: number;
+}) {
+  const profile = await findProfile(params.principal);
+  if (!profile || profile.status !== 'ACTIVE' || !profile.memoryEnabled) return [];
+  const forgottenThreads = await prisma.agentThread.findMany({
+    where: {
+      tenantId: params.principal.tenantId,
+      actorId: params.principal.actorId,
+      forgottenAt: { not: null },
+    },
+    select: { id: true },
+  });
+  const rows = await prisma.agentMemoryEntry.findMany({
+    where: {
+      tenantId: params.principal.tenantId,
+      actorId: params.principal.actorId,
+      status: 'ACTIVE',
+      OR: [{ expiresAt: null }, { expiresAt: { gt: new Date() } }],
+      AND: [
+        { OR: [{ storyId: null }, ...(params.storyId ? [{ storyId: params.storyId }] : [])] },
+        { OR: [{ threadId: null }, { threadId: { notIn: forgottenThreads.map(thread => thread.id) } }] },
+        ...(profile.crossThreadMemoryEnabled
+          ? []
+          : [{ OR: [{ threadId: null }, ...(params.threadId ? [{ threadId: params.threadId }] : [])] }]),
+      ],
+    },
+    orderBy: [{ lastUsedAt: 'desc' }, { updatedAt: 'desc' }],
+    take: Math.max(1, Math.min(50, Number(params.limit || 20))),
+  });
+  return rows.map(publicMemory);
+}
+
+function publicMemory(memory: Prisma.AgentMemoryEntryGetPayload<Record<string, never>>) {
+  return {
+    id: memory.id,
+    storyId: memory.storyId,
+    threadId: memory.threadId,
+    runId: memory.runId,
+    kind: memory.kind,
+    scopeKey: memory.scopeKey,
+    normalizedKey: memory.normalizedKey,
+    content: memory.content,
+    sourceItemIds: memory.sourceItemIds,
+    sourceResourceUris: memory.sourceResourceUris,
+    confidence: memory.confidence,
+    confirmationState: memory.confirmationState,
+    consentBasis: memory.consentBasis,
+    sensitivity: memory.sensitivity,
+    status: memory.status,
+    revision: memory.revision,
+    createdAt: memory.createdAt.toISOString(),
+    updatedAt: memory.updatedAt.toISOString(),
+    lastUsedAt: memory.lastUsedAt?.toISOString() || null,
+    lastVerifiedAt: memory.lastVerifiedAt?.toISOString() || null,
+    expiresAt: memory.expiresAt?.toISOString() || null,
+    deletedAt: memory.deletedAt?.toISOString() || null,
+  };
+}
+
+type MemoryCommandRecordInput = {
+  memoryId: string;
+  commandType: string;
+  clientId: string;
+  clientRequestId: string;
+  payloadHash: string;
+  resultRevision: number;
+};
+
+async function findMemoryCommandReplay(
+  principal: AgentPrincipal,
+  commandType: string,
+  clientId: string,
+  clientRequestId: string,
+) {
+  return prisma.agentMemoryCommand.findUnique({
+    where: {
+      tenantId_actorId_clientId_commandType_clientRequestId: {
+        tenantId: principal.tenantId,
+        actorId: principal.actorId,
+        clientId,
+        commandType,
+        clientRequestId,
+      },
+    },
+    include: { memory: true },
+  });
+}
+
+async function recordMemoryCommand(principal: AgentPrincipal, input: MemoryCommandRecordInput) {
+  try {
+    await prisma.agentMemoryCommand.create({ data: memoryCommandData(principal, input) });
+  } catch (error) {
+    if (!isUniqueConstraintError(error)) throw error;
+    const replay = await findMemoryCommandReplay(principal, input.commandType, input.clientId, input.clientRequestId);
+    if (!replay || replay.memoryId !== input.memoryId) throw error;
+    assertSameIdempotentPayload(replay.payloadHash, input.payloadHash);
+  }
+}
+
+function memoryCommandData(principal: AgentPrincipal, input: MemoryCommandRecordInput) {
+  return {
+    tenantId: principal.tenantId,
+    actorId: principal.actorId,
+    ...input,
+  };
+}
+
+function memoryFingerprint(memory: {
+  content: Prisma.JsonValue;
+  storyId: string | null;
+  sourceItemIds: Prisma.JsonValue;
+  expiresAt: Date | null;
+}) {
+  const sourceItemIds = Array.isArray(memory.sourceItemIds)
+    ? memory.sourceItemIds.filter((value): value is string => typeof value === 'string').sort()
+    : [];
+  return stableAgentHash({
+    content: memory.content,
+    storyId: memory.storyId,
+    sourceItemIds,
+    expiresAt: memory.expiresAt?.toISOString() || null,
+  });
+}
+
+function isUniqueConstraintError(error: unknown) {
+  return error instanceof Prisma.PrismaClientKnownRequestError && error.code === 'P2002';
+}
+
+function toJson(value: unknown) {
+  return JSON.parse(JSON.stringify(value)) as Prisma.InputJsonValue;
+}

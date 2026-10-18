@@ -1,0 +1,46 @@
+import { createHash } from 'node:crypto';
+import { routeError } from '@/services/routeErrors';
+
+export function stableJsonStringify(value: unknown): string {
+  const serialized = JSON.stringify(normalizeJson(value));
+  if (typeof serialized !== 'string') {
+    throw new TypeError('Agent command must be a JSON value');
+  }
+  return serialized;
+}
+
+export function hashAgentCommand(commandType: string, payload: unknown) {
+  return createHash('sha256')
+    .update(stableJsonStringify({ commandType, payload }))
+    .digest('hex');
+}
+
+export function assertSameIdempotentPayload(existingHash: string, requestedHash: string) {
+  if (existingHash !== requestedHash) {
+    throw routeError(
+      'IDEMPOTENCY_CONFLICT',
+      '同一请求标识不能用于不同内容',
+      409,
+    );
+  }
+}
+
+function normalizeJson(value: unknown): unknown {
+  if (value === null || typeof value === 'string' || typeof value === 'boolean') return value;
+  if (typeof value === 'number') {
+    if (!Number.isFinite(value)) throw new TypeError('Agent command contains a non-finite number');
+    return value;
+  }
+  if (typeof value === 'bigint') return value.toString();
+  if (value instanceof Date) return value.toISOString();
+  if (Array.isArray(value)) return value.map(normalizeJson);
+  if (typeof value === 'object') {
+    const result: Record<string, unknown> = {};
+    for (const key of Object.keys(value as Record<string, unknown>).sort()) {
+      const nested = (value as Record<string, unknown>)[key];
+      if (nested !== undefined) result[key] = normalizeJson(nested);
+    }
+    return result;
+  }
+  throw new TypeError(`Agent command contains unsupported ${typeof value}`);
+}

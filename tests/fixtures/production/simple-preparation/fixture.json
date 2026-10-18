@@ -1,0 +1,121 @@
+{
+  "id": "simple-preparation-ui-20260911",
+  "title": "简洁筹备回归测试",
+  "type": "tv_series",
+  "createdAt": 1789097257696,
+  "updatedAt": 1789097257696,
+  "logline": "验证两场筹备手动回填及局部修复。",
+  "characters": [
+    {
+      "id": "simple-ui-lin",
+      "name": "林岚",
+      "description": "钥匙交接者"
+    },
+    {
+      "id": "simple-ui-zhou",
+      "name": "周宁",
+      "description": "接钥匙后走向站台"
+    }
+  ],
+  "assets": [
+    {
+      "id": "simple-ui-key",
+      "name": "铜钥匙",
+      "type": "prop",
+      "description": "由林岚交给周宁"
+    }
+  ],
+  "productionSourceDocuments": [
+    {
+      "id": "simple-ui-source",
+      "title": "第1集",
+      "kind": "whole",
+      "order": 0,
+      "content": "车站大厅。林岚把铜钥匙交给周宁。\n林岚：去站台等我。\n周宁点头，将钥匙握在右手。\n\n周宁走向站台，铜钥匙仍握在右手。列车进站，他站在安全线外等待。",
+      "sourceHash": "3f56272aa60495319f66635e823b7953d634fc96c0aa2d7e1f1b8015886ed074",
+      "createdAt": 1789097257696
+    }
+  ],
+  "episodes": [
+    {
+      "id": "simple-ui-episode",
+      "title": "第1集",
+      "order": 1,
+      "sourceDocumentId": "simple-ui-source",
+      "scenes": [
+        {
+          "id": "simple-ui-s1",
+          "title": "车站交接",
+          "script": "车站大厅。林岚把铜钥匙交给周宁。\n林岚：去站台等我。\n周宁点头，将钥匙握在右手。",
+          "sceneNumber": "1",
+          "description": "车站大厅。林岚把铜钥匙交给周宁。\n林岚：去站台等我。\n周宁点头，将钥匙握在右手。",
+          "valueCharge": "neutral",
+          "shots": [],
+          "sourceDocumentId": "simple-ui-source",
+          "sourceEvidence": "车站大厅。林岚把铜钥匙交给周宁。\n林岚：去站台等我。\n周宁点头，将钥匙握在右手。",
+          "breakdown": {
+            "characters": [
+              "林岚",
+              "周宁"
+            ],
+            "characterIds": [
+              "simple-ui-lin",
+              "simple-ui-zhou"
+            ],
+            "location": "车站大厅",
+            "props": [
+              "铜钥匙"
+            ],
+            "sfx": [],
+            "bgm": [],
+            "vfx": [],
+            "vehicles": [],
+            "specialEquipment": []
+          },
+          "productionPreparation": {
+            "breakdown": {
+              "status": "confirmed",
+              "sourceHash": "1a9e8aa9077953d8b807058bdfbcb8c2f74e5b5de8f2696e86d2ae223f1e9418",
+              "updatedAt": 1789097257696
+            }
+          }
+        },
+        {
+          "id": "simple-ui-s2",
+          "title": "走向站台",
+          "script": "周宁走向站台，铜钥匙仍握在右手。列车进站，他站在安全线外等待。",
+          "sceneNumber": "2",
+          "description": "周宁走向站台，铜钥匙仍握在右手。列车进站，他站在安全线外等待。",
+          "valueCharge": "neutral",
+          "shots": [],
+          "sourceDocumentId": "simple-ui-source",
+          "sourceEvidence": "周宁走向站台，铜钥匙仍握在右手。列车进站，他站在安全线外等待。",
+          "breakdown": {
+            "characters": [
+              "周宁"
+            ],
+            "characterIds": [
+              "simple-ui-zhou"
+            ],
+            "location": "站台",
+            "props": [
+              "铜钥匙"
+            ],
+            "sfx": [],
+            "bgm": [],
+            "vfx": [],
+            "vehicles": [],
+            "specialEquipment": []
+          },
+          "productionPreparation": {
+            "breakdown": {
+              "status": "confirmed",
+              "sourceHash": "83a9e4a674f3790e3ef8ea81f591b7a05e60de5a6950c2cd2dd3a8d38652e29b",
+              "updatedAt": 1789097257696
+            }
+          }
+        }
+      ]
+    }
+  ]
+}

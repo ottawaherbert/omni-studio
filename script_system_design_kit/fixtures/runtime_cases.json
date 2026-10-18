@@ -1,0 +1,247 @@
+{
+  "fixture_version": "0.1",
+  "evidence_type": "synthetic_arithmetic_only",
+  "notes": [
+    "No actual TTS, table read, video, or screenplay was measured.",
+    "content_union_ms is a mathematical union across included non-placeholder intervals for this toy fixture, not a production readiness score.",
+    "Production must report coverage by track/modality and use project-specific required coverage, source evidence, and human review.",
+    "A zero target_minus_content_ms does NOT mean the story or final delivery passes.",
+    "Intervals are integer milliseconds and half-open [start_ms,end_ms)."
+  ],
+  "cases": [
+    {
+      "id": "target_300_content_128",
+      "target_ms": 300000,
+      "items": [
+        {
+          "id": "v1",
+          "track": "V1",
+          "start_ms": 0,
+          "end_ms": 128000,
+          "kind": "content",
+          "included": true
+        }
+      ],
+      "expected": {
+        "export_span_ms": 128000,
+        "content_union_ms": 128000,
+        "target_minus_content_ms": 172000
+      }
+    },
+    {
+      "id": "padding_does_not_create_content",
+      "target_ms": 300000,
+      "items": [
+        {
+          "id": "v1",
+          "track": "V1",
+          "start_ms": 0,
+          "end_ms": 128000,
+          "kind": "content",
+          "included": true
+        },
+        {
+          "id": "gap",
+          "track": "V1",
+          "start_ms": 128000,
+          "end_ms": 300000,
+          "kind": "placeholder",
+          "included": true
+        }
+      ],
+      "expected": {
+        "export_span_ms": 300000,
+        "content_union_ms": 128000,
+        "target_minus_content_ms": 172000
+      }
+    },
+    {
+      "id": "voice_over_two_visuals",
+      "target_ms": 20000,
+      "items": [
+        {
+          "id": "v1",
+          "track": "V1",
+          "start_ms": 0,
+          "end_ms": 10000,
+          "kind": "content",
+          "included": true
+        },
+        {
+          "id": "v2",
+          "track": "V1",
+          "start_ms": 10000,
+          "end_ms": 20000,
+          "kind": "content",
+          "included": true
+        },
+        {
+          "id": "a1",
+          "track": "A1",
+          "start_ms": 0,
+          "end_ms": 20000,
+          "kind": "content",
+          "included": true
+        }
+      ],
+      "expected": {
+        "export_span_ms": 20000,
+        "content_union_ms": 20000,
+        "target_minus_content_ms": 0
+      }
+    },
+    {
+      "id": "dialogue_then_reaction",
+      "target_ms": 15000,
+      "items": [
+        {
+          "id": "v1",
+          "track": "V1",
+          "start_ms": 0,
+          "end_ms": 10000,
+          "kind": "content",
+          "included": true
+        },
+        {
+          "id": "a1",
+          "track": "A1",
+          "start_ms": 0,
+          "end_ms": 10000,
+          "kind": "content",
+          "included": true
+        },
+        {
+          "id": "v2",
+          "track": "V1",
+          "start_ms": 10000,
+          "end_ms": 15000,
+          "kind": "content",
+          "included": true
+        }
+      ],
+      "expected": {
+        "export_span_ms": 15000,
+        "content_union_ms": 15000,
+        "target_minus_content_ms": 0
+      }
+    },
+    {
+      "id": "alternative_take_excluded",
+      "target_ms": 10000,
+      "items": [
+        {
+          "id": "selected",
+          "track": "V1",
+          "start_ms": 0,
+          "end_ms": 10000,
+          "kind": "content",
+          "included": true
+        },
+        {
+          "id": "alternate",
+          "track": "V1",
+          "start_ms": 0,
+          "end_ms": 30000,
+          "kind": "content",
+          "included": false
+        }
+      ],
+      "expected": {
+        "export_span_ms": 10000,
+        "content_union_ms": 10000,
+        "target_minus_content_ms": 0
+      }
+    },
+    {
+      "id": "parallel_visual_tracks",
+      "target_ms": 20000,
+      "items": [
+        {
+          "id": "background",
+          "track": "V1",
+          "start_ms": 0,
+          "end_ms": 20000,
+          "kind": "content",
+          "included": true
+        },
+        {
+          "id": "overlay",
+          "track": "V2",
+          "start_ms": 5000,
+          "end_ms": 15000,
+          "kind": "content",
+          "included": true
+        }
+      ],
+      "expected": {
+        "export_span_ms": 20000,
+        "content_union_ms": 20000,
+        "target_minus_content_ms": 0
+      }
+    },
+    {
+      "id": "middle_gap",
+      "target_ms": 30000,
+      "items": [
+        {
+          "id": "v1",
+          "track": "V1",
+          "start_ms": 0,
+          "end_ms": 10000,
+          "kind": "content",
+          "included": true
+        },
+        {
+          "id": "gap",
+          "track": "V1",
+          "start_ms": 10000,
+          "end_ms": 20000,
+          "kind": "placeholder",
+          "included": true
+        },
+        {
+          "id": "v2",
+          "track": "V1",
+          "start_ms": 20000,
+          "end_ms": 30000,
+          "kind": "content",
+          "included": true
+        }
+      ],
+      "expected": {
+        "export_span_ms": 30000,
+        "content_union_ms": 20000,
+        "target_minus_content_ms": 10000
+      }
+    },
+    {
+      "id": "marker_not_duration",
+      "target_ms": 300000,
+      "items": [
+        {
+          "id": "marker",
+          "track": "M1",
+          "start_ms": 300000,
+          "end_ms": 300000,
+          "kind": "marker",
+          "included": true
+        }
+      ],
+      "expected": {
+        "export_span_ms": 0,
+        "content_union_ms": 0,
+        "target_minus_content_ms": 300000
+      }
+    },
+    {
+      "id": "empty_timeline",
+      "target_ms": 300000,
+      "items": [],
+      "expected": {
+        "export_span_ms": 0,
+        "content_union_ms": 0,
+        "target_minus_content_ms": 300000
+      }
+    }
+  ]
+}

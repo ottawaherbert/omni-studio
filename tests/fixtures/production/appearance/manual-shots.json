@@ -1,0 +1,76 @@
+[
+  {
+    "duration": 30,
+    "shotSize": "MS",
+    "cameraAngle": "Eye-Level",
+    "cameraMovement": "Static",
+    "focalLength": "50mm",
+    "composition": "人物居中，动作完整可见",
+    "blocking": "林岚独自在画面中",
+    "continuityNote": "同一日，蓝外套换成黑外套时保留伤势和泥污",
+    "motivation": "清楚呈现外观变化",
+    "characterIdsInShot": [
+      "appearance-lin"
+    ],
+    "propIds": [],
+    "dialogueLines": [],
+    "visualAction": "林岚穿蓝外套，袖口有泥。他在镜头中摔倒，左颊出现擦伤。",
+    "appearance": {
+      "states": [
+        {
+          "assetId": "appearance-lin",
+          "timelineKey": "主线第一天",
+          "origin": "script",
+          "evidence": "他摔倒，左颊擦伤。",
+          "event": "摔倒后左颊擦伤",
+          "continuity": "new",
+          "startChanges": {
+            "clothing": "蓝外套",
+            "dirt": "袖口有泥"
+          },
+          "endChanges": {
+            "injury": "左颊擦伤"
+          },
+          "imageMoment": "start",
+          "referenceNeed": "text"
+        }
+      ]
+    }
+  },
+  {
+    "duration": 30,
+    "shotSize": "MS",
+    "cameraAngle": "Eye-Level",
+    "cameraMovement": "Static",
+    "focalLength": "50mm",
+    "composition": "人物居中，动作完整可见",
+    "blocking": "林岚独自在画面中",
+    "continuityNote": "同一日，蓝外套换成黑外套时保留伤势和泥污",
+    "motivation": "清楚呈现外观变化",
+    "characterIdsInShot": [
+      "appearance-lin"
+    ],
+    "propIds": [],
+    "dialogueLines": [],
+    "visualAction": "林岚换上黑外套，左颊伤口仍在。",
+    "appearance": {
+      "states": [
+        {
+          "assetId": "appearance-lin",
+          "timelineKey": "主线第一天",
+          "origin": "script",
+          "evidence": "随后换上黑外套，伤口仍在。",
+          "event": "换黑外套",
+          "continuity": "continue",
+          "inheritFromShotId": "previous",
+          "startChanges": {},
+          "endChanges": {
+            "clothing": "黑外套"
+          },
+          "imageMoment": "end",
+          "referenceNeed": "image"
+        }
+      ]
+    }
+  }
+]

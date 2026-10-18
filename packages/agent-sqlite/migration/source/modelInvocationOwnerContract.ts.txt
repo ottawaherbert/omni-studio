@@ -1,0 +1,209 @@
+export const MODEL_INVOCATION_OWNER_KINDS = [
+  'AGENT_TURN',
+  'AGENT_RUN',
+  'CHAPTER_GENERATION_JOB',
+  'CHAPTER_PLANNING_BATCH',
+  'CHAPTER_QUALITY_AUDIT_RUN',
+  'CHAPTER_FINALIZATION_JOB',
+  'CONTEXT_EXTRACTION_RUN',
+  'GENESIS_CREATION_JOB',
+  'EXTRACTION_JOB',
+  'IMAGE_GENERATION_JOB',
+  'AUTHOR_MODEL_TEST_RUN',
+] as const;
+
+export type ModelInvocationOwnerKind = typeof MODEL_INVOCATION_OWNER_KINDS[number];
+
+export type ModelInvocationOwnerRef = {
+  kind: ModelInvocationOwnerKind;
+  id: string;
+  expectedLeaseOwner: string;
+  expectedFencingToken: number;
+};
+
+type OwnerRecoverySpec = {
+  allowedStatuses: readonly string[];
+  exactRecovery: string;
+  taskFeedSourceKinds: readonly string[];
+  requiresLease: boolean;
+};
+
+/**
+ * Recovery metadata only. Domain workers, exact reads and TaskFeed remain the
+ * executors/projections of record; this catalog must never become a second job
+ * runtime.
+ */
+export const MODEL_INVOCATION_OWNER_REGISTRY = {
+  AGENT_TURN: {
+    allowedStatuses: ['RUNNING'],
+    exactRecovery: 'GET /api/agent/turns/:turnId',
+    taskFeedSourceKinds: [],
+    requiresLease: true,
+  },
+  AGENT_RUN: {
+    allowedStatuses: ['RUNNING'],
+    exactRecovery: 'GET /api/agent/runs/:runId',
+    taskFeedSourceKinds: ['AGENT_RUN'],
+    requiresLease: true,
+  },
+  CHAPTER_GENERATION_JOB: {
+    allowedStatuses: ['RUNNING'],
+    exactRecovery: 'GET /api/story/chapter/:chapterId/generation-jobs/:jobId',
+    taskFeedSourceKinds: ['CHAPTER_GENERATION', 'CHAPTER_CONTRACT'],
+    requiresLease: true,
+  },
+  CHAPTER_PLANNING_BATCH: {
+    allowedStatuses: ['RUNNING'],
+    exactRecovery: 'GET /api/story/chapter/plan?runId=:ownerId',
+    taskFeedSourceKinds: ['CHAPTER_PLANNING'],
+    requiresLease: true,
+  },
+  CHAPTER_QUALITY_AUDIT_RUN: {
+    allowedStatuses: ['RUNNING'],
+    exactRecovery: 'GET /api/story/chapter/:chapterId/quality-audit-runs/:runId',
+    taskFeedSourceKinds: ['CHAPTER_QUALITY_AUDIT'],
+    requiresLease: true,
+  },
+  CHAPTER_FINALIZATION_JOB: {
+    allowedStatuses: ['RUNNING'],
+    exactRecovery: 'GET /api/story/chapter/:chapterId/finalization-jobs/:jobId',
+    taskFeedSourceKinds: ['CHAPTER_FINALIZATION'],
+    requiresLease: true,
+  },
+  CONTEXT_EXTRACTION_RUN: {
+    allowedStatuses: ['RUNNING'],
+    exactRecovery: 'GET /api/story/:storyId/context/extraction-runs/:runId',
+    taskFeedSourceKinds: ['CONTEXT_EXTRACTION'],
+    requiresLease: true,
+  },
+  GENESIS_CREATION_JOB: {
+    allowedStatuses: ['RUNNING'],
+    exactRecovery: 'GET /api/story/genesis/toc/:jobId',
+    taskFeedSourceKinds: ['GENESIS_CREATION'],
+    requiresLease: true,
+  },
+  EXTRACTION_JOB: {
+    allowedStatuses: ['PROCESS'],
+    exactRecovery: 'GET /api/story/sync-status/:chapterId?jobId=:ownerId',
+    taskFeedSourceKinds: ['MEMORY_SYNC'],
+    requiresLease: true,
+  },
+  IMAGE_GENERATION_JOB: {
+    allowedStatuses: ['RUNNING'],
+    exactRecovery: 'GET /api/ai/image/generate/:jobId',
+    taskFeedSourceKinds: ['IMAGE_GENERATION'],
+    requiresLease: true,
+  },
+  AUTHOR_MODEL_TEST_RUN: {
+    allowedStatuses: ['RUNNING'],
+    exactRecovery: 'GET /api/user/model-connection/test?runId=:ownerId',
+    taskFeedSourceKinds: [],
+    requiresLease: true,
+  },
+} as const satisfies Record<ModelInvocationOwnerKind, OwnerRecoverySpec>;
+
+export type ModelInvocationOwnerSnapshot = {
+  id: string;
+  tenantId: string;
+  actorId: string;
+  status: string;
+  leaseOwner: string | null;
+  leaseUntil: Date | null;
+  fencingToken: number;
+};
+
+export const MODEL_INVOCATION_OWNER_PREFLIGHT_ERROR_CODES = [
+  'MODEL_INVOCATION_OWNER_NOT_FOUND',
+  'MODEL_INVOCATION_OWNER_TENANT_MISMATCH',
+  'MODEL_INVOCATION_OWNER_ACTOR_MISMATCH',
+  'MODEL_INVOCATION_OWNER_STATE_INVALID',
+  'MODEL_INVOCATION_OWNER_FENCED',
+  'MODEL_INVOCATION_OWNER_LEASE_EXPIRED',
+  'MODEL_INVOCATION_OWNER_RECOVERY_UNREGISTERED',
+] as const;
+
+export function isModelInvocationOwnerPreflightErrorCode(value: unknown) {
+  return (MODEL_INVOCATION_OWNER_PREFLIGHT_ERROR_CODES as readonly unknown[]).includes(value);
+}
+
+export class ModelInvocationOwnerValidationError extends Error {
+  readonly code: string;
+
+  constructor(code: string, message: string) {
+    super(`${code}: ${message}`);
+    this.name = 'ModelInvocationOwnerValidationError';
+    this.code = code;
+  }
+}
+
+export function evaluateModelInvocationOwnerCallBudget(params: {
+  hasExactReplay: boolean;
+  used: number;
+  limit: number;
+}) {
+  if (params.hasExactReplay) return 'ALLOW_EXACT_REPLAY' as const;
+  return params.used >= params.limit ? 'REJECT_NEW_INVOCATION' as const : 'ALLOW_NEW_INVOCATION' as const;
+}
+
+export function validateModelInvocationOwnerSnapshot(params: {
+  owner: ModelInvocationOwnerRef;
+  tenantId: string;
+  actorId: string;
+  snapshot: ModelInvocationOwnerSnapshot | null;
+  now?: Date;
+}) {
+  const spec = MODEL_INVOCATION_OWNER_REGISTRY[params.owner.kind];
+  const snapshot = params.snapshot;
+  if (!snapshot || snapshot.id !== params.owner.id) {
+    throw new ModelInvocationOwnerValidationError(
+      'MODEL_INVOCATION_OWNER_NOT_FOUND',
+      '模型调用对应的持久领域任务不存在',
+    );
+  }
+  if (snapshot.tenantId !== params.tenantId) {
+    throw new ModelInvocationOwnerValidationError(
+      'MODEL_INVOCATION_OWNER_TENANT_MISMATCH',
+      '模型调用与领域任务不属于同一租户',
+    );
+  }
+  if (snapshot.actorId !== params.actorId) {
+    throw new ModelInvocationOwnerValidationError(
+      'MODEL_INVOCATION_OWNER_ACTOR_MISMATCH',
+      '模型调用与领域任务不属于同一账号',
+    );
+  }
+  if (!(spec.allowedStatuses as readonly string[]).includes(snapshot.status)) {
+    throw new ModelInvocationOwnerValidationError(
+      'MODEL_INVOCATION_OWNER_STATE_INVALID',
+      `领域任务状态 ${snapshot.status} 不允许发起模型调用`,
+    );
+  }
+  if (
+    spec.requiresLease
+    && (
+      snapshot.leaseOwner !== params.owner.expectedLeaseOwner
+      || snapshot.fencingToken !== params.owner.expectedFencingToken
+    )
+  ) {
+    throw new ModelInvocationOwnerValidationError(
+      'MODEL_INVOCATION_OWNER_FENCED',
+      '领域任务的当前 Worker 或 fencing token 与调用方不一致',
+    );
+  }
+  if (
+    spec.requiresLease
+    && (!snapshot.leaseUntil || snapshot.leaseUntil <= (params.now || new Date()))
+  ) {
+    throw new ModelInvocationOwnerValidationError(
+      'MODEL_INVOCATION_OWNER_LEASE_EXPIRED',
+      '领域任务租约已经过期，禁止向模型服务商发送请求',
+    );
+  }
+  if (!spec.exactRecovery.trim()) {
+    throw new ModelInvocationOwnerValidationError(
+      'MODEL_INVOCATION_OWNER_RECOVERY_UNREGISTERED',
+      '领域任务没有登记精确恢复路径',
+    );
+  }
+  return spec;
+}

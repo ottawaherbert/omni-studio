@@ -1,0 +1,52 @@
+import { routeError } from '@/services/routeErrors';
+
+/** Abort in-flight provider work on proven lease loss or local lease expiry.
+ * A failed DB heartbeat is not proof of takeover, but cannot extend ownership.
+ * Fencing remains the authority for every durable effect.
+ */
+export function createTurnExecutionGuard(params: {
+  leaseUntil: Date;
+  leaseMs: number;
+  heartbeatMs: number;
+  renew: () => Promise<boolean>;
+  onHeartbeatError: (error: unknown) => void;
+  parentSignal?: AbortSignal | null;
+}) {
+  const controller = new AbortController();
+  let disposed = false;
+  let renewing = false;
+  let expiry: ReturnType<typeof setTimeout>;
+  const loseLease = () => controller.abort(routeError('AGENT_TURN_LEASE_LOST', '回合执行权已失效，停止当前执行', 409));
+  const armExpiry = (until: number) => {
+    clearTimeout(expiry);
+    expiry = setTimeout(loseLease, Math.max(0, until - Date.now()));
+    expiry.unref?.();
+  };
+  const parentAborted = () => controller.abort(params.parentSignal?.reason);
+  if (params.parentSignal?.aborted) parentAborted();
+  else params.parentSignal?.addEventListener('abort', parentAborted, { once: true });
+  armExpiry(params.leaseUntil.getTime());
+  const heartbeat = setInterval(() => {
+    if (renewing || disposed || controller.signal.aborted) return;
+    renewing = true;
+    // renewAgentTurnExecution timestamps before its DB call; starting here is
+    // conservative when a slow successful response arrives near expiry.
+    const requestedAt = Date.now();
+    void params.renew().then(ok => {
+      if (disposed || controller.signal.aborted) return;
+      if (!ok) loseLease();
+      else armExpiry(requestedAt + params.leaseMs);
+    }).catch(error => { if (!disposed) params.onHeartbeatError(error); })
+      .finally(() => { renewing = false; });
+  }, params.heartbeatMs);
+  heartbeat.unref?.();
+  return {
+    signal: controller.signal,
+    dispose() {
+      disposed = true;
+      clearInterval(heartbeat);
+      clearTimeout(expiry);
+      params.parentSignal?.removeEventListener('abort', parentAborted);
+    },
+  };
+}

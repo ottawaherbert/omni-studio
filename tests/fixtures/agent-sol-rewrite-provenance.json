@@ -1,0 +1,13 @@
+{
+  "simulation": true,
+  "producer": "GPT-6 Sol subagent",
+  "model": "gpt-6-sol",
+  "agent": "/root/model_fixtures",
+  "originalRequestId": "external_5fba213e-cb89-4ff6-8ca6-b5ae927644ee",
+  "originalInputHash": "81f32e93e0c6ec139a91fc132fce981b068309269ec749508e825b00736d196b",
+  "requestEvidence": "artifacts/agent-foundation-study-2026-09-26/sol-rewrite-request.json",
+  "selectedText": "林夏很紧张，不知道要不要开门。",
+  "instruction": "把选中的心理说明改成一个克制的可见动作，不增加对白或新人物，保留开门前的犹豫。只修改选中的一句。",
+  "scope": "One real frozen local-rewrite request; replay tests reuse this exact simulated return, not a new model generation.",
+  "limitation": "Proves parsing, persistence, adoption and recovery only, not real provider reliability or artistic quality."
+}

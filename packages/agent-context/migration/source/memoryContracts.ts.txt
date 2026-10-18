@@ -1,0 +1,43 @@
+import { z } from 'zod';
+
+const identifier = z.string().trim().min(1).max(128);
+
+export const createAgentMemorySchema = z.object({
+  clientId: identifier,
+  clientRequestId: identifier,
+  kind: z.enum(['AUTHOR_PREFERENCE', 'RELATIONSHIP_MEMORY', 'BOOK_COLLABORATION_MEMORY']),
+  normalizedKey: z.string().trim().toLowerCase().min(2).max(160).regex(/^[a-z0-9][a-z0-9._:-]*$/),
+  content: z.object({
+    label: z.string().trim().min(1).max(200),
+    value: z.string().trim().min(1).max(4_000),
+  }).strict(),
+  storyId: identifier.nullable().optional(),
+  threadId: identifier.nullable().optional(),
+  sourceItemIds: z.array(identifier).max(30).default([]),
+  expiresAt: z.string().datetime().nullable().optional(),
+}).strict().superRefine((value, context) => {
+  if (value.kind === 'BOOK_COLLABORATION_MEMORY' && !value.storyId) {
+    context.addIssue({ code: 'custom', path: ['storyId'], message: 'book memory requires storyId' });
+  }
+  if (value.kind !== 'BOOK_COLLABORATION_MEMORY' && value.storyId) {
+    context.addIssue({ code: 'custom', path: ['storyId'], message: 'author memory must not be story scoped' });
+  }
+});
+
+export const updateAgentMemorySchema = z.object({
+  clientId: identifier,
+  clientRequestId: identifier,
+  expectedRevision: z.number().int().positive(),
+  action: z.enum(['DISABLE', 'ENABLE', 'CORRECT', 'DELETE']),
+  content: z.object({
+    label: z.string().trim().min(1).max(200),
+    value: z.string().trim().min(1).max(4_000),
+  }).strict().nullable().optional(),
+}).strict().superRefine((value, context) => {
+  if (value.action === 'CORRECT' && !value.content) {
+    context.addIssue({ code: 'custom', path: ['content'], message: 'correction requires content' });
+  }
+});
+
+export type CreateAgentMemoryInput = z.infer<typeof createAgentMemorySchema>;
+export type UpdateAgentMemoryInput = z.infer<typeof updateAgentMemorySchema>;
