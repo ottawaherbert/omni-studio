@@ -371,6 +371,7 @@ export default function ProductionAssets() {
         onSave={revealCreatedAsset}
       />
       <PromptEditorModal
+              presentation="workspace"
         isOpen={Boolean(assetPreparation.promptRequest)}
         onClose={assetPreparation.closePrompt}
         templateId={assetPreparation.promptRequest?.templateId || "productionAssetPreparationBatch"}
@@ -382,6 +383,7 @@ export default function ProductionAssets() {
         onConfirm={assetPreparation.executePrompt}
       />
       <PromptEditorModal
+              presentation="workspace"
         isOpen={Boolean(assetBoardBatch.promptRequest)}
         onClose={assetBoardBatch.closePrompt}
         templateId={assetBoardBatch.promptRequest?.templateId || "generateImage"}

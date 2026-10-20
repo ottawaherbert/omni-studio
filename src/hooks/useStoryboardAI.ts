@@ -1276,7 +1276,6 @@ ${linkedPropAssets.map(p => {
     if (!batchScenes.length) return;
     const pendingScenes = batchScenes.filter((item) => !item.shotPlanComplete);
     if (!pendingScenes.length) {
-      setPromptModalState((previous) => ({ ...previous, isOpen: false }));
       toast.success("本段所有场次的 Shot 已通过独立质检。");
       return;
     }
@@ -1287,7 +1286,6 @@ ${linkedPropAssets.map(p => {
     }
 
     setIsGenerating(true);
-    setPromptModalState((previous) => ({ ...previous, isOpen: false }));
     setReviewCandidateState(null);
     setIsReviewCandidateOpen(false);
     let completedScenes = batchScenes.length - pendingScenes.length;
@@ -1352,6 +1350,7 @@ ${linkedPropAssets.map(p => {
         issues: [summarizeUnknownError(error).message],
       }));
       toast.error("整段分镜执行失败。", { duration: 7000 });
+      throw error;
     } finally {
       setIsGenerating(false);
     }
@@ -1365,7 +1364,6 @@ ${linkedPropAssets.map(p => {
     }
     if (workflowOptions.manualReview) {
       setIsGenerating(true);
-      setPromptModalState((previous) => ({ ...previous, isOpen: false }));
       try {
         const result = await runManualShotAgentForScene({
           scene: activeScene,
@@ -1401,13 +1399,13 @@ ${linkedPropAssets.map(p => {
           issues: [summarizeUnknownError(error).message],
         }));
         toast.error(summarizeUnknownError(error).message || "生成分镜失败。");
+        throw error;
       } finally {
         setIsGenerating(false);
       }
       return;
     }
     setIsGenerating(true);
-    setPromptModalState(prev => ({ ...prev, isOpen: false }));
     try {
       const requestSnapshot = readDirectorRequest(currentProject!, activeEpisode, activeScene);
       const responseText = await generateAIContent({
@@ -1646,6 +1644,7 @@ ${linkedPropAssets.map(p => {
     } catch (error) {
       console.error("Storyboard shot generation failed:", summarizeUnknownError(error));
       toast.error(summarizeUnknownError(error).message || "生成分镜失败。");
+      throw error;
     } finally {
       setIsGenerating(false);
     }
@@ -2259,7 +2258,6 @@ ${linkedPropAssets.map(p => {
     if (!shot) return;
     setIsGenerating(true);
     setGeneratingShotPrompt({ shotId, kind: promptKind });
-    setPromptModalState((previous) => ({ ...previous, isOpen: false }));
     try {
       const updatedTarget = await requestSingleShotPrompt(shot, prompt, promptKind);
       const updatedShots = (activeScene.shots || []).map((item) =>
@@ -2286,6 +2284,7 @@ ${linkedPropAssets.map(p => {
     } catch (error) {
       console.error("Single-shot prompt generation failed:", summarizeUnknownError(error));
       toast.error(error instanceof Error ? error.message : "当前镜头提示词生成失败。");
+      throw error;
     } finally {
       setGeneratingShotPrompt(null);
       setIsGenerating(false);
@@ -2342,7 +2341,6 @@ ${linkedPropAssets.map(p => {
       ? !item.imagePromptComplete
       : !item.videoPromptComplete);
     if (!pendingScenes.length) {
-      setPromptModalState((previous) => ({ ...previous, isOpen: false }));
       toast.success(`本段所有场次的${promptKind === "image" ? "图片" : "视频"}提示词已通过独立质检。`);
       return;
     }
@@ -2355,7 +2353,6 @@ ${linkedPropAssets.map(p => {
     }
 
     setIsGenerating(true);
-    setPromptModalState((previous) => ({ ...previous, isOpen: false }));
     setReviewCandidateState(null);
     setIsReviewCandidateOpen(false);
     let completedScenes = batchScenes.length - pendingScenes.length;
@@ -2418,6 +2415,7 @@ ${linkedPropAssets.map(p => {
         issues: [summarizeUnknownError(error).message],
       }));
       toast.error(`整段${promptKind === "image" ? "图片" : "视频"}提示词执行失败。`, { duration: 7000 });
+      throw error;
     } finally {
       setIsGenerating(false);
     }
@@ -2438,7 +2436,6 @@ ${linkedPropAssets.map(p => {
     }
     if (workflowOptions.manualReview) {
       setIsGenerating(true);
-      setPromptModalState((previous) => ({ ...previous, isOpen: false }));
       try {
         const result = await runManualVisualPromptAgentForScene({
           promptKind,
@@ -2479,13 +2476,13 @@ ${linkedPropAssets.map(p => {
           issues: [summarizeUnknownError(error).message],
         }));
         toast.error(`生成${promptKind === "image" ? "图片" : "视频"}提示词失败。`);
+        throw error;
       } finally {
         setIsGenerating(false);
       }
       return;
     }
     setIsGenerating(true);
-    setPromptModalState(prev => ({ ...prev, isOpen: false }));
     try {
       const responseText = await generateAIContent({
         taskType: 'storyboardGen',
@@ -2509,6 +2506,7 @@ ${linkedPropAssets.map(p => {
     } catch (error) {
       console.error("Storyboard prompt generation failed:", summarizeUnknownError(error));
       toast.error(`生成${promptKind === "image" ? "图片" : "视频"}提示词失败。`);
+      throw error;
     } finally {
       setIsGenerating(false);
     }

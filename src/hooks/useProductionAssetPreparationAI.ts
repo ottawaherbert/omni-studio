@@ -401,7 +401,6 @@ export const useProductionAssetPreparationAI = ({
     metadata?: PromptEditorConfirmMetadata,
   ) => {
     if (!project || !context || stage === "generating" || stage === "qa" || stage === "adopting") return;
-    setPromptRequest(null);
     setStage("generating");
     try {
       const response = await generateAIContent({
@@ -416,6 +415,7 @@ export const useProductionAssetPreparationAI = ({
       console.error("Production asset preparation failed:", summary.message);
       setStage("failed");
       toast.error(summary.message || "整批资产筹备失败");
+      throw error;
     }
   };
 

@@ -16,6 +16,8 @@ export interface SkillCategoryDTO {
 }
 
 export interface SkillDTO {
+  purposes?: string[];
+  applicability?: import("./skillMetadata").SkillApplicability;
   kind?: CreativeSkillKind;
   revision?: number;
   profile?: CreativeSkillProfile;

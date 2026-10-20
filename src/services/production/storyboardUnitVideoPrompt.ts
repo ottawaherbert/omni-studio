@@ -1,3 +1,4 @@
+import { buildVideoContinuityContext } from "../../../packages/production/src/services/production/videoContinuityContext";
 import type {
   ManualStoryboardBoard,
   ManualStoryboardBoardWorkflow,
@@ -8,16 +9,11 @@ import { manualStoryboardHash } from "./manualStoryboard";
 
 const compact = (value: unknown) => String(value || "").replace(/\s+/g, " ").trim();
 
-const orderedUnitShots = (workflow: Pick<ManualStoryboardBoardWorkflow, "shotId" | "shotIds" | "board">, shots: Shot[]) => {
-  const ids = workflow.shotIds?.length
-    ? workflow.shotIds
-    : workflow.board?.shotIds?.length
-      ? workflow.board.shotIds
-      : [workflow.shotId];
-  return ids
-    .map((id) => shots.find((shot) => shot.id === id))
-    .filter((shot): shot is Shot => Boolean(shot));
-};
+const unitShotIds = (workflow: Pick<ManualStoryboardBoardWorkflow, "shotId" | "shotIds" | "board">) =>
+  workflow.shotIds?.length ? workflow.shotIds : workflow.board?.shotIds?.length ? workflow.board.shotIds : [workflow.shotId];
+
+const orderedUnitShots = (workflow: Pick<ManualStoryboardBoardWorkflow, "shotId" | "shotIds" | "board">, shots: Shot[]) =>
+  unitShotIds(workflow).map(id => shots.find(shot => shot.id === id)).filter((shot): shot is Shot => Boolean(shot));
 
 const unitPromptShotValue = (shot: Shot, board?: ManualStoryboardBoard) => {
   const panels = (board?.panels || []).filter((panel) => panel.shotId === shot.id);
@@ -56,6 +52,7 @@ export const buildStoryboardUnitVideoPromptSourceHash = ({
   workflow: Pick<ManualStoryboardBoardWorkflow, "shotId" | "shotIds" | "board">;
   shots: Shot[];
 }) => manualStoryboardHash({
+  continuity: buildVideoContinuityContext({ sceneId: "current_scene", shots, unitShotIds: unitShotIds(workflow) }),
   startState: compact(workflow.board?.startState),
   endState: compact(workflow.board?.endState),
   shots: orderedUnitShots(workflow, shots).map((shot) => unitPromptShotValue(shot, workflow.board)),
@@ -103,6 +100,7 @@ export const buildStoryboardUnitVideoPromptText = ({
     ].filter(Boolean).join("\n");
   });
   return [
+    buildVideoContinuityContext({ sceneId: "current_scene", shots, unitShotIds: unitShotIds(workflow) }),
     `视频单元时长约 ${cursor.toFixed(1)} 秒，按以下镜头顺序连续执行。`,
     workflow.board?.startState ? `起始状态：${compact(workflow.board.startState)}` : "",
     ...shotBlocks,

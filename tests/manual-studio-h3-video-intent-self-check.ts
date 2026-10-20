@@ -495,3 +495,37 @@ assert.equal(localH3Adapter.capabilities.referenceAudios, false, "the local imag
 assert.equal(localH3Adapter.capabilities.dialogueVoiceReference, false);
 
 console.log("Manual Studio H3 video intent self-check passed.");
+
+// Exercise the actual studio intent -> adapter -> provider request boundary.
+const { buildVideoContinuityContext } = await import('../packages/production/src/services/production/videoContinuityContext');
+const { buildMiniMaxH3VideoRequest } = await import('../src/services/production/minimaxH3Adapter');
+const { buildLegacyGenericVideoRequest, GENERIC_I2V_ADAPTER_ID } = await import('../packages/production/src/services/production/adapters/genericVideoAdapter');
+const previousShot = { ...shot, id: 'previous-local', visualAction: '上一镜将钥匙放在左桌角', continuityNote: '作者有意越轴', blocking: '人物看向画右' };
+const followingShot = { ...shot, id: 'following-local', visualAction: '下一镜接起同一把钥匙', blocking: '人物反打看向画左' };
+const continuityScene = { ...scene, shots: [previousShot, shot, followingShot] };
+const continuityInput = { project, episode, scene: continuityScene, shot, target, boards, adapterId: MINIMAX_H3_REF2VA_ADAPTER_ID, generationMode: 'multimodal_reference', audioMode: 'provider_native' as const, directorIntent: '保留作者明确的越轴', sourceHash: 'continuity-source' };
+const continuityIntent = buildManualStudioVideoIntent(continuityInput);
+const continuityPlan = referenceAdapter.compile({ intent: continuityIntent, modelConfigId: 'h3' });
+const continuityRequest = buildMiniMaxH3VideoRequest(continuityIntent, continuityPlan);
+const requestText = (continuityRequest.content[0] as { text: string }).text;
+assert.match(requestText, /上一镜将钥匙放在左桌角/);
+assert.match(requestText, /下一镜接起同一把钥匙/);
+assert.match(requestText, /作者有意越轴/);
+assert.match(requestText, /first and last pose and sound bed loop cleanly/);
+assert.doesNotMatch(requestText, /60%/);
+assert.deepEqual(continuityIntent.referenceBindings, referenceIntent.referenceBindings, 'neighbour text must not add media');
+assert.notEqual(continuityIntent.sourceHash, buildManualStudioVideoIntent({ ...continuityInput, scene: { ...continuityScene, shots: [{ ...previousShot, visualAction: '变更的承接动作' }, shot, followingShot] } }).sourceHash);
+assert.equal(buildVideoContinuityContext({ sceneId: 'empty', shots: [], unitShotIds: [shot.id] }), '');
+assert.equal(buildVideoContinuityContext({ sceneId: 'foreign', shots: [previousShot], unitShotIds: [shot.id] }), '');
+const boundaryContext = buildVideoContinuityContext({ sceneId: scene.id, shots: [shot], unitShotIds: [shot.id] });
+assert.match(boundaryContext, /无本场前镜头/); assert.match(boundaryContext, /无本场后镜头/);
+const multiContext = buildVideoContinuityContext({ sceneId: scene.id, shots: [previousShot, shot, followingShot], unitShotIds: [previousShot.id, shot.id] });
+assert.match(multiContext, /previous-local → shot-1/); assert.match(multiContext, /后一镜头.*following-local/);
+const genericIntent = buildManualStudioVideoIntent({ ...continuityInput, adapterId: GENERIC_I2V_ADAPTER_ID, generationMode: 'first_frame', audioMode: 'post_dub', target: { ...target, selectedVoiceReferenceIds: [], includeStoryboardReference: false }, boards: [], startFrameUrl: 'https://example.test/selected-start.png' });
+const genericAdapter = resolveVideoModelAdapter({ channelType: 'test', modelId: 'test', configuredAdapterId: GENERIC_I2V_ADAPTER_ID });
+const genericPlan = genericAdapter.compile({ intent: genericIntent, modelConfigId: 'generic' });
+const genericRequest = buildLegacyGenericVideoRequest(genericIntent, genericPlan);
+assert.match(genericRequest.prompt, /上一镜将钥匙放在左桌角/);
+assert.match(genericRequest.prompt, /seamless idle loop/);
+assert.equal(genericRequest.imageUrl, 'https://example.test/selected-start.png');
+console.log('Studio continuity provider request regression passed.');

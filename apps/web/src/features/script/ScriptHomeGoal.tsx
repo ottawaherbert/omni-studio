@@ -1,3 +1,4 @@
+import { skillApplicabilityHint } from "../../../../../packages/domain/src/skillMetadata";
 import { useScriptExecutionChannel } from './useScriptExecutionChannel';
 import { isPlanningStage, stageLabels, type ScriptStage } from '../../../../../packages/script/src/agentStages';
 import { useEffect, useRef, useState } from 'react';
@@ -136,7 +137,7 @@ export function ScriptHomeGoal({goalId,onOpen,skills}:{goalId:string;onOpen:(pro
       <label className="block">创作目标<textarea aria-label="修改创作目标" value={objective} onChange={event=>setObjective(event.target.value)} className="w-full bg-bg-primary p-2 rounded-lg"/></label>
       {isTestMode&&<label className="block">执行方式<select aria-label="修改执行方式" value={channel} onChange={event=>setChannel(event.target.value as 'api'|'external')} className="ml-2 bg-bg-primary"><option value="api">使用已配置模型</option><option value="external">复制提示词，手动回填</option></select></label>}
       <label className="block">每集最多新增场数<input aria-label="每集最多新增场数" type="number" min={1} max={1000} value={maxScenes} onChange={event=>setMaxScenes(Number(event.target.value))} className="ml-2 w-20 bg-bg-primary p-1"/></label>
-      <fieldset><legend>本次使用的 Skill</legend><div className="flex flex-wrap gap-2">{skills.map(skill=><label key={skill.id}><input type="checkbox" checked={skillIds.includes(skill.id)} onChange={()=>setSkillIds(ids=>ids.includes(skill.id)?ids.filter(id=>id!==skill.id):[...ids,skill.id])}/> {skill.title}</label>)}</div></fieldset>
+      <fieldset><legend>本次使用的 Skill</legend><div className="flex flex-wrap gap-2">{skills.map(skill=><label key={skill.id}><input type="checkbox" checked={skillIds.includes(skill.id)} onChange={()=>setSkillIds(ids=>ids.includes(skill.id)?ids.filter(id=>id!==skill.id):[...ids,skill.id])}/> {skill.title} <small>{skillApplicabilityHint(skill, {task:"writing"})}</small></label>)}</div></fieldset>
       <button disabled={busy||Boolean(pending)} onClick={()=>void reviseGoal()}>保存修订并继续</button>
     </details>}
     <details><summary>阅读当前工作稿</summary><pre className="whitespace-pre-wrap font-sans leading-relaxed max-h-96 overflow-auto py-3">{draftText(workspace.document)}</pre></details>

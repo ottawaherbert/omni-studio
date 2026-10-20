@@ -32,7 +32,7 @@ export interface CreativeSkillReference {
   label: string;
   purpose: string;
 }
-export type CreativeSkillSnapshot = Pick<SkillDTO, "id" | "title" | "content" | "kind" | "revision" | "profile" | "references" | "referenceWork">;
+export type CreativeSkillSnapshot = Pick<SkillDTO, "purposes" | "applicability" | "id" | "title" | "content" | "kind" | "revision" | "profile" | "references" | "referenceWork">;
 export interface CreativeSkillBinding {
   mode: "inherit" | "replace" | "adjust" | "off";
   /** Direct visual instruction; new visual settings do not reference a Skill. */
@@ -70,6 +70,7 @@ export interface ResolvedCreativeRole {
 }
 export const snapshotCreativeSkill = (skill: SkillDTO): CreativeSkillSnapshot => structuredClone({
   id: skill.id, title: skill.title, content: skill.content,
+  purposes: skill.purposes, applicability: skill.applicability,
   kind: skill.kind || "general", revision: skill.revision || 1,
   profile: skill.profile, references: skill.references, referenceWork: skill.referenceWork,
 });

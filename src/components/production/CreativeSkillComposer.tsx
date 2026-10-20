@@ -1,3 +1,4 @@
+import { SKILL_PURPOSE_LABELS, SKILL_TASK_LABELS, SKILL_FORMAT_LABELS } from "../../clients/skillMetadataClient";
 import { useEffect, useRef, useState } from "react";
 import { Copy, Loader2, Wand2 } from "lucide-react";
 import { Modal } from "../ui/Modal";
@@ -25,6 +26,8 @@ export function CreativeSkillComposer({ kind: initialKind, initial, initialCateg
   const [kind, setKind] = useState<"director" | "general">(initial?.kind === "director" ? "director" : initialKind);
   const [title, setTitle] = useState(initial?.title || "");
   const [referenceWork, setReferenceWork] = useState<SkillReferenceWork>(initial?.referenceWork || { title: "" });
+  const [purposes, setPurposes] = useState(initial?.purposes || []);
+  const [applicability, setApplicability] = useState(initial?.applicability || {});
   const [content, setContent] = useState(initial?.content || "");
   const [analysisNotes, setAnalysisNotes] = useState(initial?.analysisNotes || "");
   const [analysisReference, setAnalysisReference] = useState(referenceKey(initial?.referenceWork || { title: "" }));
@@ -46,7 +49,7 @@ export function CreativeSkillComposer({ kind: initialKind, initial, initialCateg
   const legacy = kind === "director" && !!initial && !isDirectorProfileV2(initial.profile?.director);
   const referenceChanged = Boolean(profile.methods.length || initial?.referenceWork?.title.trim()) && acceptedReference !== referenceKey(referenceWork);
   const activeAnalysisNotes = analysisReference === referenceKey(referenceWork) ? analysisNotes : "";
-  const formSnapshot = JSON.stringify({ kind, title, categoryId, content, referenceWork, profile, analysisNotes, candidate, generalPending });
+  const formSnapshot = JSON.stringify({ purposes, applicability, kind, title, categoryId, content, referenceWork, profile, analysisNotes, candidate, generalPending });
   const originalSnapshot = useRef(formSnapshot);
   const close = () => {
     if (busy) return;
@@ -87,7 +90,7 @@ export function CreativeSkillComposer({ kind: initialKind, initial, initialCateg
       if (director) validateDirectorProfile(director);
       const text = director ? directorProfileText(director) : content.trim();
       if (!text) throw new Error("请先填写规则。");
-      const payload: Partial<SkillDTO> = { title: title.trim() || creativeSkillDraftTitle(kind, referenceWork), content: text, kind, categoryId: categoryId || "", analysisNotes: activeAnalysisNotes, analysisBasis, profile: director ? { director } : legacy && content === initial?.content ? initial?.profile || {} : {}, references: initial?.references || [], referenceWork: kind === "director" && referenceWork.title.trim() ? { ...referenceWork, title: referenceWork.title.trim() } : null, source: draftSource };
+      const payload: Partial<SkillDTO> = { purposes, applicability, title: title.trim() || creativeSkillDraftTitle(kind, referenceWork), content: text, kind, categoryId: categoryId || "", analysisNotes: activeAnalysisNotes, analysisBasis, profile: director ? { director } : legacy && content === initial?.content ? initial?.profile || {} : {}, references: initial?.references || [], referenceWork: kind === "director" && referenceWork.title.trim() ? { ...referenceWork, title: referenceWork.title.trim() } : null, source: draftSource };
       const saved = initial && !initial.builtin ? await skillClient.updateSkill(initial.id, payload) : await skillClient.createSkill(payload);
       useSkillStore.setState(state => ({ skills: [...state.skills.filter(skill => skill.id !== saved.id), saved] }));
       onSaved(saved);
@@ -104,6 +107,10 @@ export function CreativeSkillComposer({ kind: initialKind, initial, initialCateg
       </div>
       <p className="text-sm leading-6 text-text-secondary">{kind === "general" ? "通用指令可在各模块的 AI 任务中按需选用。分类只用于整理，不限定使用范围。" : "制作导演方法按表演、摄影、美术、声音等工作分类，供制作流程分别使用。"}</p>
       <label className="block text-xs text-text-secondary">分类<select aria-label="Skill 分类" className={fieldClass + " mt-1"} value={categoryId} disabled={!!busy} onChange={e => setCategoryId(e.target.value)}><option value="">未分类</option>{categories.map(category => <option key={category.id} value={category.id}>{category.name}</option>)}</select></label>
+      <fieldset className="space-y-2"><legend className="text-xs text-text-secondary">用途（选填，可多选）</legend><div className="flex flex-wrap gap-3">{[...new Set([...Object.keys(SKILL_PURPOSE_LABELS), ...purposes])].map(value => <label key={value} className="inline-flex items-center gap-1.5 text-sm"><input type="checkbox" checked={purposes.includes(value)} disabled={!!busy} onChange={() => setPurposes(current => current.includes(value) ? current.filter(item => item !== value) : [...current, value])} />{SKILL_PURPOSE_LABELS[value] || value}</label>)}</div></fieldset>
+      <fieldset className="space-y-2"><legend className="text-xs text-text-secondary">适用任务（选填，未选表示未限定）</legend><div className="flex flex-wrap gap-3">{[...new Set([...Object.keys(SKILL_TASK_LABELS), ...(applicability.tasks || [])])].map(value => <label key={value} className="inline-flex items-center gap-1.5 text-sm"><input type="checkbox" checked={applicability.tasks?.includes(value) || false} disabled={!!busy} onChange={() => setApplicability(current => ({ ...current, tasks: current.tasks?.includes(value) ? current.tasks.filter(item => item !== value) : [...(current.tasks || []), value] }))} />{SKILL_TASK_LABELS[value] || value}</label>)}</div></fieldset>
+      <fieldset className="space-y-2"><legend className="text-xs text-text-secondary">适用作品形态（选填，未选表示未限定）</legend><div className="flex flex-wrap gap-3">{[...new Set([...Object.keys(SKILL_FORMAT_LABELS), ...(applicability.projectFormats || [])])].map(value => <label key={value} className="inline-flex items-center gap-1.5 text-sm"><input type="checkbox" checked={applicability.projectFormats?.includes(value) || false} disabled={!!busy} onChange={() => setApplicability(current => ({ ...current, projectFormats: current.projectFormats?.includes(value) ? current.projectFormats.filter(item => item !== value) : [...(current.projectFormats || []), value] }))} />{SKILL_FORMAT_LABELS[value] || value}</label>)}</div></fieldset>
+      <label className="block text-xs text-text-secondary">适用说明（选填）<input aria-label="Skill 适用说明" className={fieldClass + " mt-1"} value={applicability.note || ''} onChange={e => setApplicability(current => ({ ...current, note: e.target.value }))} disabled={!!busy} /></label>
       {kind === "general" ? <>
         <label className="block text-xs text-text-secondary">规则与要求<textarea aria-label="Skill 规则与要求" placeholder="写清适用情况、具体做法和需要避免的问题。" className={fieldClass + " mt-1 min-h-56"} value={content} onChange={e => setContent(e.target.value)} disabled={!!busy} /></label>
         <SkillDraftAssistant disabled={!!busy} content={content} categoryName={categories.find(category => category.id === categoryId)?.name || ""} onBusyChange={value => setBusy(value ? "生成草稿中" : "")} onPendingChange={setGeneralPending} onApply={draft => {

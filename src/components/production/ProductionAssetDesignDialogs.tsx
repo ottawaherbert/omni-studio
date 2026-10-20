@@ -6,6 +6,7 @@ export function ProductionAssetDesignDialogs({ flow }: { flow: ReturnType<typeof
   const profile = flow.profile;
   return <>
     <PromptEditorModal
+              presentation="workspace"
       isOpen={Boolean(profile.promptRequest)} onClose={profile.closePrompt} onCancel={flow.cancel}
       templateId={profile.promptRequest?.templateId || 'productionAssetVisualDesign'}
       variables={profile.promptRequest?.variables || {}} title={`${profile.promptRequest?.title || '设计形象'} · ${flow.progress}`}

@@ -1,3 +1,4 @@
+import { skillApplicabilityHint } from "../../../../../packages/domain/src/skillMetadata";
 import { useScriptExecutionChannel } from './useScriptExecutionChannel';
 import { SCRIPT_STAGES, stageLabels, stageDescriptions, type ScriptStage } from '../../../../../packages/script/src/agentStages';
 import { ScriptHomeBlueprint } from './ScriptHomeBlueprint';
@@ -576,7 +577,7 @@ export function ScriptLibrary({projects,error,onOpen,onCreate,onDeleteProject,on
                             </div>
                             <div className="min-w-0 flex-1">
                               <div className="text-xs font-medium text-text-primary truncate">{sk.title}</div>
-                              <div className="text-[10px] text-text-muted line-clamp-1 mt-0.5">{sk.content}</div>
+                              <div className="text-[10px] text-text-muted line-clamp-1 mt-0.5">{sk.content}</div><div className="text-[10px] text-text-muted">{skillApplicabilityHint(sk, {task:"writing"})}</div>
                             </div>
                           </div>
                         );

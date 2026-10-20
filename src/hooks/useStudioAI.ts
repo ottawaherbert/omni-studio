@@ -26,6 +26,7 @@ import {
 import { summarizeUnknownError } from "../utils/logging";
 import { manualStoryboardHash } from "../clients/productionStoryboardWorkflowClient";
 import {
+  buildVideoContinuityContext,
   createImageGenerationReference,
   type CompiledImageGenerationRequest,
   type ImageGenerationReference,
@@ -435,7 +436,6 @@ export function useStudioAI() {
     if (!request) return;
     const imageModelId = useAIConfigStore.getState().routing.imageGen;
     setIsGeneratingImage(true);
-    setPromptModalState(prev => ({ ...prev, isOpen: false }));
     try {
       if (!isRequestCurrent(request)) return;
       const activeScene = resolveStudioScene(activeEpisode, activeSceneId, currentProject);
@@ -675,6 +675,7 @@ export function useStudioAI() {
     } catch (error) {
       console.error("Studio image generation failed:", summarizeUnknownError(error));
       if (isRequestCurrent(request)) toast.error("生成图片失败，请重试。");
+      throw error;
     } finally {
       if (finishRequest(request)) setIsGeneratingImage(false);
     }
@@ -706,7 +707,7 @@ export function useStudioAI() {
       sceneId: requestScope.sceneId,
       templateId: 'generateVideo',
       variables: {
-        videoPrompt: [selectedShot.videoPrompt, appearancePrompt(selectedShot, "video")].filter(Boolean).join("\n\n"),
+        videoPrompt: [selectedShot.videoPrompt, buildVideoContinuityContext({ sceneId: activeSceneId, shots: resolveStudioScene(activeEpisode, activeSceneId, currentProject)?.shots || [], unitShotIds: [selectedShot.id] }), appearancePrompt(selectedShot, "video")].filter(Boolean).join("\n\n"),
       },
       onConfirm: (finalPrompt) => handleGenerateVideo(
         finalPrompt,
@@ -738,7 +739,6 @@ export function useStudioAI() {
     if (!request) return;
     const videoModelId = useAIConfigStore.getState().routing.videoGen;
     setIsGeneratingVideo(true);
-    setPromptModalState(prev => ({ ...prev, isOpen: false }));
     try {
       if (!isRequestCurrent(request)) return;
       let startingImageUrl = selectedShot.imageUrl;
@@ -779,7 +779,8 @@ export function useStudioAI() {
         shot: selectedShot,
         episode: activeEpisode, scene: stateScene,
       });
-      const providerPrompt = [finalPrompt, visualStyleProjection.rendered.instruction].filter(Boolean).join("\n\n");
+      const continuityContext = stateScene ? buildVideoContinuityContext({ sceneId: stateScene.id, shots: stateScene.shots || [], unitShotIds: [selectedShot.id] }) : "";
+      const providerPrompt = [finalPrompt, continuityContext && !finalPrompt.includes(continuityContext) ? continuityContext : "", visualStyleProjection.rendered.instruction].filter(Boolean).join("\n\n");
       let providerPromptAudit: VideoProviderPromptAudit | undefined;
       const videoUrl = await generateAIVideo({
         prompt: providerPrompt,
@@ -900,6 +901,7 @@ export function useStudioAI() {
       const summary = summarizeUnknownError(error);
       console.error("Studio video generation failed:", summary);
       if (isRequestCurrent(request)) toast.error(summary.message);
+      throw error;
     } finally {
       if (finishRequest(request)) setIsGeneratingVideo(false);
     }

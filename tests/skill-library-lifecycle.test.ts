@@ -30,8 +30,10 @@ test('Skill lifecycle: create, AI review, classify, edit, use, delete', async t 
     const category = (await request('/categories', 'POST', { name: '视听方法' })).category;
     let manual: any, ai: any, director: any;
     await t.test('manual content and quoted names survive save/reload, duplicate IDs cannot overwrite', async () => {
-      manual = (await request('', 'POST', { title: '动作 "接点" \\ 检查', content: '不要添加原有故事中不存在的动作。\n核对前后镜头。', categoryId: category.id, source: 'manual' })).skill;
+      manual = (await request('', 'POST', { title: '动作 "接点" \\ 检查', content: '不要添加原有故事中不存在的动作。\n核对前后镜头。', purposes: ["technique"], applicability: { tasks: ["video"], projectFormats: ["movie"], note: "核对动作接点" }, categoryId: category.id, source: 'manual' })).skill;
       assert.equal((await request('')).skills[0].title, manual.title);
+      assert.deepEqual((await request('')).skills[0].purposes, ["technique"]);
+      assert.deepEqual((await request('')).skills[0].applicability, manual.applicability);
       await request('', 'POST', { ...manual, content: '重复写入' }, 400);
       assert.equal((await request('')).skills[0].content, manual.content);
       await request('', 'POST', { title: '', content: 'x' }, 400);

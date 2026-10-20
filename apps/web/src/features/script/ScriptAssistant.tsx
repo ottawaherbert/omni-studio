@@ -1,3 +1,4 @@
+import { skillApplicabilityHint } from "../../../../../packages/domain/src/skillMetadata";
 import { useScriptSkills } from './useScriptSkills';
 import { useSettingsStore } from '../../clients/stateClient';
 import { availableMethods, buildScriptTaskContext, OPERATION_LABELS, INPUT_LABELS, methodUsage } from '../../../../../packages/script/src/methods';
@@ -138,7 +139,7 @@ export function ScriptAssistant({ project, unit, scene, dirty, onSave, onApplied
       {pendingOperation==='text_rewrite'&&<blockquote className="whitespace-pre-wrap border-l-2 pl-3 select-text">{initialSelection?.text}</blockquote>}
       {pendingOperation&&['character','fact'].includes(pendingOperation)&&<label>新增到<select value={scopeId} onChange={event=>setScopeId(event.target.value)}>{scopeOptions(project).filter(scope=>[project.id,unit.id,unit.scopeId,unit.seasonId].includes(scope.id)).map(scope=><option key={scope.id} value={scope.id}>{scope.label}</option>)}</select></label>}
       {pendingOperation&&<details><summary>写作方法（可选）{taskMethodIds.length?` · 已选 ${taskMethodIds.length} 项`:''}</summary>
-        <div className="sw-methods">{availableMethods(skillProject,pendingOperation).map(m=><label key={m.id}><input type="checkbox" disabled={working||(dirty&&pendingOperation!=='consult')} checked={taskMethodIds.includes(m.id)} onChange={()=>setTaskMethodIds(ids=>ids.includes(m.id)?ids.filter(id=>id!==m.id):[...ids,m.id])}/>{m.title} · v{m.version}</label>)}</div>
+        <div className="sw-methods">{availableMethods(skillProject,pendingOperation).map(m=><label key={m.id}><input type="checkbox" disabled={working||(dirty&&pendingOperation!=='consult')} checked={taskMethodIds.includes(m.id)} onChange={()=>setTaskMethodIds(ids=>ids.includes(m.id)?ids.filter(id=>id!==m.id):[...ids,m.id])}/>{m.title} · v{m.version}<small className="sw-muted"> · {skillApplicabilityHint(m, {task:"writing", projectFormat:project.profile.workType})}</small></label>)}</div>
         <p className="sw-muted">{availableMethods(skillProject,pendingOperation).length?'仅使用勾选的方法。':'没有为本次工作选择方法，也可以直接开始。'}</p>
         <a href="/skills" target="_blank" rel="noreferrer">打开全局技能库</a>{skillsError&&<p role="alert">{skillsError}</p>}
         <p className="sw-muted">附加资料：{[...new Set(methods.filter(m=>taskMethodIds.includes(m.id)).flatMap(m=>methodUsage(m).inputs))].map(input=>INPUT_LABELS[input]).join('、')||'无'}</p>

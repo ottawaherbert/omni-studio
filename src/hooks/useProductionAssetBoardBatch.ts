@@ -302,7 +302,6 @@ export const useProductionAssetBoardBatch = ({
     const failedBoardNames: string[] = [];
     let failureReason: string | undefined;
     let consecutiveFailures = 0;
-    setPromptRequest(null);
     setCurrentProgress({ stage: "generating", completed: 0, total: targetIds.size, failedBoardNames: [] });
 
     try {
@@ -322,7 +321,7 @@ export const useProductionAssetBoardBatch = ({
         failureReason: summary.message,
       });
       toast.error("图片生成渠道尚未就绪，资产板任务未开始，也没有留下部分结果。");
-      return;
+      throw error;
     }
 
     for (const targetId of targetIds) {
@@ -580,6 +579,7 @@ export const useProductionAssetBoardBatch = ({
     setCurrentProgress({ stage, completed, total: targetIds.size, failedBoardNames, failureReason });
     if (isGenerationOperationCurrent(operation) && failedBoardNames.length) {
       toast.error(`${failedBoardNames.length} 张资产板生成失败，可沿已确认计划继续重试。`);
+      throw new Error(failureReason || "资产板生成失败");
     }
     } finally {
       finishGenerationOperation(operation);

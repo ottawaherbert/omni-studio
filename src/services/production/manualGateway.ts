@@ -21,6 +21,7 @@ export interface ManualPromptGatewayInput {
   userIntent?: string;
   selectedContextIds?: string[];
   selectedSkillIds?: string[];
+  selectedSkillSnapshots?: import("../../../packages/domain/src/skill").SkillDTO[];
   missingVariables?: string[];
   templateConflicts?: string[];
 }
@@ -155,6 +156,7 @@ export const runManualPromptGatewayReview = async (
       userIntent: input.userIntent,
       selectedContextIds: input.selectedContextIds || [],
       selectedSkillIds: input.selectedSkillIds || [],
+      selectedSkillSnapshots: input.selectedSkillSnapshots || [],
     },
     producer: () => ({
       finalPrompt: input.finalPrompt,

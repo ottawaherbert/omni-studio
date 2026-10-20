@@ -1,3 +1,4 @@
+import { ProductionPreparationAdvisories } from "../components/production/ProductionPreparationAdvisories";
 import { productionPreparationHref } from "../utils/productionNavigation";
 import { ProductionCreativeControls } from "../components/production/ProductionCreativeControls";
 import { DirectorPlanSummary } from "../components/production/DirectorPlanSummary";
@@ -988,12 +989,12 @@ export default function Storyboard({ workspaceMode = "linear" }: StoryboardProps
     <motion.div
       initial={{ opacity: 0 }}
       animate={{ opacity: 1 }}
-      className="mx-auto w-full max-w-7xl flex flex-1 min-h-0 overflow-hidden h-full px-3 pb-4 pt-3 md:px-8 md:pb-8 md:pt-4 flex-col md:flex-row relative bg-bg-primary"
+      className="storyboard-workspace mx-auto w-full max-w-7xl flex flex-1 min-h-0 overflow-hidden h-full px-3 pb-4 pt-3 md:px-8 md:pb-8 md:pt-4 flex-col md:flex-row relative bg-bg-primary"
     >
-      <div className={cn("flex flex-1 min-h-0 overflow-hidden h-full w-full", isSidebarOpen ? "md:gap-6" : "")}>
+      <div className={cn("storyboard-columns flex flex-1 min-h-0 overflow-hidden h-full w-full", isSidebarOpen ? "md:gap-6" : "")}>
         {!isInteractiveNodeWorkspace && (
           <div className={cn(
-            "hidden transition-all duration-300 ease-in-out shrink-0 overflow-hidden h-full md:block",
+            "storyboard-scene-rail hidden transition-all duration-300 ease-in-out shrink-0 overflow-hidden h-full md:block",
             isSidebarOpen ? "w-72 opacity-100" : "w-0 opacity-0 pointer-events-none"
           )}>
             <div className="flex h-full w-full flex-col border border-border-soft/20 bg-bg-surface rounded-2xl shadow-sm overflow-hidden">
@@ -1025,7 +1026,7 @@ export default function Storyboard({ workspaceMode = "linear" }: StoryboardProps
               type="button"
               onClick={() => setIsSidebarOpen(!isSidebarOpen)}
               className={cn(
-                "absolute top-6 z-30 hidden h-6 w-6 items-center justify-center rounded-full border border-border-soft/60 bg-bg-surface text-text-muted shadow-md transition-all hover:bg-bg-surface-hover hover:text-text-primary active:scale-95 cursor-pointer md:flex",
+                "storyboard-rail-toggle absolute top-6 z-30 hidden h-6 w-6 items-center justify-center rounded-full border border-border-soft/60 bg-bg-surface text-text-muted shadow-md transition-all hover:bg-bg-surface-hover hover:text-text-primary active:scale-95 cursor-pointer md:flex",
                 isSidebarOpen ? "-left-3" : "-left-3 rotate-180"
               )}
             >
@@ -1044,10 +1045,11 @@ export default function Storyboard({ workspaceMode = "linear" }: StoryboardProps
             </div>
           </div>
         )}
+        <ProductionPreparationAdvisories gate={productionPreparationGate} sceneTitle={activeScene?.title} />
         {activeScene ? (
-          <div className="flex-1 flex flex-col p-4 md:p-10 w-full overflow-y-auto custom-scrollbar">
+          <div className="storyboard-content flex-1 flex flex-col p-4 md:p-10 w-full overflow-y-auto custom-scrollbar">
             {!isInteractiveNodeWorkspace && (
-              <label className="mb-4 block md:hidden">
+              <label className="storyboard-scene-picker mb-4 block md:hidden">
                 <span className="sr-only">切换场次</span>
                 <select
                   aria-label="切换场次"
@@ -1485,6 +1487,7 @@ export default function Storyboard({ workspaceMode = "linear" }: StoryboardProps
         <Suspense fallback={null}>
           {promptModalState.isOpen && (
             <PromptEditorModal
+              presentation="workspace"
               isOpen
               onClose={() => setPromptModalState(prev => ({ ...prev, isOpen: false }))}
               templateId={promptModalState.templateId}
@@ -1510,6 +1513,7 @@ export default function Storyboard({ workspaceMode = "linear" }: StoryboardProps
           )}
           {boardBatchAgent.promptRequest && (
             <PromptEditorModal
+              presentation="workspace"
               isOpen
               onClose={boardBatchAgent.closePrompt}
               templateId={boardBatchAgent.promptRequest.templateId}
@@ -1524,6 +1528,7 @@ export default function Storyboard({ workspaceMode = "linear" }: StoryboardProps
           )}
           {isVisualRefinementPromptOpen && (
             <PromptEditorModal
+              presentation="workspace"
               isOpen
               onClose={() => setIsVisualRefinementPromptOpen(false)}
               templateId="interactiveVisualRefinement"

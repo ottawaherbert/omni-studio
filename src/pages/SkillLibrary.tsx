@@ -1,3 +1,4 @@
+import { SKILL_PURPOSE_LABELS, SKILL_TASK_LABELS } from "../clients/skillMetadataClient";
 import { useEffect, useMemo, useState } from "react";
 import { Copy, FolderCog, Loader2, Pencil, Plus, Search, Trash2, Wand2 } from "lucide-react";
 import toast from "react-hot-toast";
@@ -14,6 +15,8 @@ const kindLabel = (skill: SkillDTO) => skill.kind === "director" ? "制作导演
 
 export default function SkillLibrary() {
   const { skills, categories, isLoading, error, fetchSkills, deleteSkill } = useSkillStore();
+  const [purpose, setPurpose] = useState("all");
+  const [taskScope, setTaskScope] = useState("all");
   const [kind, setKind] = useState("all");
   const [category, setCategory] = useState("all");
   const [query, setQuery] = useState("");
@@ -30,11 +33,13 @@ export default function SkillLibrary() {
   const categoryNames = useMemo(() => new Map(categories.map(item => [item.id, item.name])), [categories]);
   const available = skills.filter(skill => skill.kind !== "visual_style");
   const filtered = available.filter(skill =>
-    (kind === "all" || (skill.kind || "general") === kind)
+    (purpose === "all" || (purpose === "unmarked" ? !skill.purposes?.length : skill.purposes?.includes(purpose)))
+    && (taskScope === "all" || (taskScope === "unmarked" ? !skill.applicability?.tasks?.length : skill.applicability?.tasks?.includes(taskScope)))
+    && (kind === "all" || (skill.kind || "general") === kind)
     && (category === "all" || (category === "uncategorized" ? !categoryNames.has(skill.categoryId || "") : skill.categoryId === category))
     && `${skill.title}\n${skill.content}`.toLocaleLowerCase().includes(query.trim().toLocaleLowerCase()),
   ).sort((a, b) => b.updatedAt - a.updatedAt);
-  const reset = () => { setKind("all"); setCategory("all"); setQuery(""); };
+  const reset = () => { setPurpose("all"); setTaskScope("all"); setKind("all"); setCategory("all"); setQuery(""); };
   const remove = async (skill: SkillDTO) => {
     if (!window.confirm(`删除「${skill.title}」？已有任务和作品中保存的 Skill 快照会保留。`)) return;
     setDeleting(true);
@@ -63,7 +68,11 @@ export default function SkillLibrary() {
         <label className="min-w-0 space-y-1.5 text-xs text-text-secondary"><span>分类</span><select aria-label="筛选技能分类" className={control + " w-full"} value={category} onChange={e => setCategory(e.target.value)}><option value="all">全部分类</option><option value="uncategorized">未分类</option>{categories.map(item => <option key={item.id} value={item.id}>{item.name}</option>)}</select></label>
         <button aria-label="管理分类" title="管理分类" className={control + " justify-self-start hover:bg-bg-surface-hover"} onClick={() => setManageCategories(true)}><FolderCog className="h-5 w-5" /></button>
       </div>
-      <div className="flex flex-wrap items-center justify-between gap-2 text-xs text-text-secondary"><span aria-live="polite">{filtered.length} / {available.length} 个技能 · 最近更新优先</span>{(kind !== "all" || category !== "all" || query) && <button onClick={reset} className="underline underline-offset-4">清除筛选</button>}</div>
+      <div className="flex flex-wrap gap-3">
+        <label className="text-xs text-text-secondary">用途<select aria-label="筛选技能用途" className={control + " ml-2"} value={purpose} onChange={e => setPurpose(e.target.value)}><option value="all">全部用途</option><option value="unmarked">未标注用途</option>{[...new Set([...Object.keys(SKILL_PURPOSE_LABELS), ...available.flatMap(skill => skill.purposes || [])])].map(value => <option key={value} value={value}>{SKILL_PURPOSE_LABELS[value] || value}</option>)}</select></label>
+        <label className="text-xs text-text-secondary">适用任务<select aria-label="筛选技能适用任务" className={control + " ml-2"} value={taskScope} onChange={e => setTaskScope(e.target.value)}><option value="all">全部任务</option><option value="unmarked">未限定任务</option>{[...new Set([...Object.keys(SKILL_TASK_LABELS), ...available.flatMap(skill => skill.applicability?.tasks || [])])].map(value => <option key={value} value={value}>{SKILL_TASK_LABELS[value] || value}</option>)}</select></label>
+      </div>
+      <div className="flex flex-wrap items-center justify-between gap-2 text-xs text-text-secondary"><span aria-live="polite">{filtered.length} / {available.length} 个技能 · 最近更新优先</span>{(purpose !== "all" || taskScope !== "all" || kind !== "all" || category !== "all" || query) && <button onClick={reset} className="underline underline-offset-4">清除筛选</button>}</div>
     </section>
 
     {error && <div role="alert" className="flex flex-wrap items-center gap-3 rounded-lg border border-red-400/40 p-3 text-sm text-red-500"><span>{error}</span><button className="underline" onClick={() => void fetchSkills(true)}>重试</button></div>}
@@ -71,6 +80,7 @@ export default function SkillLibrary() {
       {filtered.map(skill => <button key={skill.id} aria-label={`查看技能：${skill.title}`} onClick={() => setPreview(skill)} className="group flex min-w-0 flex-col gap-3 rounded-lg border border-border-soft bg-bg-surface p-5 text-left transition-colors hover:border-text-muted focus-visible:outline focus-visible:outline-2 focus-visible:outline-gold">
         <div className="flex w-full items-start justify-between gap-3"><h2 className="break-words text-base font-semibold">{skill.title}</h2><Wand2 className="mt-0.5 h-4 w-4 shrink-0 text-text-muted" /></div>
         <p className="text-xs text-text-secondary">{kindLabel(skill)} · {categoryNames.get(skill.categoryId || "") || "未分类"}</p>
+        <p className="text-xs text-text-muted">用途：{skill.purposes?.map(value => SKILL_PURPOSE_LABELS[value] || value).join('、') || '未标注'} · 任务：{skill.applicability?.tasks?.map(value => SKILL_TASK_LABELS[value] || value).join('、') || '未限定'}</p>
         <p className="line-clamp-3 break-words text-sm leading-6 text-text-secondary">{skill.content}</p>
         <p className="mt-auto pt-1 text-xs text-text-muted">{skill.source === "ai" ? "AI 辅助创建" : "人工创建"}{skill.builtin ? " · 内置" : ""}</p>
       </button>)}

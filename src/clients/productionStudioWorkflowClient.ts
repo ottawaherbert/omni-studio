@@ -16,3 +16,5 @@ export * from "../services/providers/imageModelCapabilities";
 export * from "../services/providers/videoGenerationTask";
 
 export * from "../services/production/externalVideoPrompt";
+
+export { buildVideoContinuityContext } from "../../packages/production/src/services/production/videoContinuityContext";

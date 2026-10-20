@@ -1,3 +1,4 @@
+import { validateSkillMetadata, type SkillApplicability } from "../../domain/src/skillMetadata";
 import {validateOutlineGuides, type OutlineGuide} from './outlineGuides';
 export const SCHEMA_VERSION = 'script.v1' as const;
 export const ORGANIZATIONS = ['standalone', 'episodic'] as const;
@@ -53,7 +54,7 @@ export const SCRIPT_OPERATIONS = ['scene','rewrite','text_rewrite','consult','co
 export type ScriptOperation = typeof SCRIPT_OPERATIONS[number];
 export const METHOD_INPUTS = ['structure','continuity'] as const;
 export interface MethodUsage { operations:ScriptOperation[]; inputs:typeof METHOD_INPUTS[number][]; note:string }
-export interface MethodBinding { id: string; title: string; version: string; content: string; usage?:MethodUsage }
+export interface MethodBinding { purposes?: string[]; applicability?: import("../../domain/src/skillMetadata").SkillApplicability; id: string; title: string; version: string; content: string; usage?:MethodUsage }
 export interface ContinuityChange { id:string; sceneId:string; value:string; reason:string; sourceHash:string }
 export interface Season { id:string; title:string; arc:string }
 export interface Storyline { id:string; scopeId:string; lane:'A'|'B'|'C'; title:string; premise:string; resolution:string }
@@ -227,6 +228,7 @@ export function parseScriptProject(value: unknown): ScriptProject {
   (value.facts as unknown[]).forEach((f,i)=>{const p=`facts[${i}]`; object(f,p); id(f.id,`${p}.id`); unique(f.id); id(f.scopeId,`${p}.scopeId`); text(f.text,`${p}.text`); choice(f.status,['draft','approved'],`${p}.status`);});
   (value.methods as unknown[]).forEach((m,i)=>{
     const p=`methods[${i}]`; object(m,p); text(m.id,`${p}.id`,true); unique(String(m.id)); fields(m,['title','version','content'],p);
+    validateSkillMetadata({ purposes: m.purposes as string[] | undefined, applicability: m.applicability as SkillApplicability | undefined });
     if(m.usage!==undefined){
       object(m.usage,`${p}.usage`);array(m.usage.operations,`${p}.usage.operations`);array(m.usage.inputs,`${p}.usage.inputs`);text(m.usage.note,`${p}.usage.note`);
       m.usage.operations.forEach(v=>choice(v,SCRIPT_OPERATIONS,`${p}.usage.operations`));m.usage.inputs.forEach(v=>choice(v,METHOD_INPUTS,`${p}.usage.inputs`));

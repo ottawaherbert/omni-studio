@@ -333,12 +333,11 @@ export const useProductionAssetProfileAI = ({
     if (!project || !target || isGenerating) return;
     const requestKey = targetKey;
     const task = promptRequest?.task || "extract";
-    if (task === 'appearance' && promptRequest?.designSourceKey !== designSourceKey(project, target)) { setRequestError('形象依据已更新，请重新打开设计'); toast.error('形象依据已更新，请重新打开设计'); return; }
+    if (task === 'appearance' && promptRequest?.designSourceKey !== designSourceKey(project, target)) { setRequestError('形象依据已更新，请重新打开设计'); toast.error('形象依据已更新，请重新打开设计'); throw new Error('形象依据已更新，请重新打开设计'); }
     const selectedIds = metadata?.selectedContextIds ?? promptRequest?.defaultSelectedContextIds ?? [];
     const sourceLabels = promptRequest?.contextOptions.filter(option => selectedIds.includes(option.id)).map(option => option.label) || [];
     setRequestError("");
     setIsGenerating(true);
-    setPromptRequest(null);
     try {
       const isCharacter = Boolean(character);
       const fields = task === "appearance" ? [isCharacter ? "visualIdentity" : "description"] : isCharacter ? characterProductionFields : assetFields;
@@ -467,6 +466,7 @@ export const useProductionAssetProfileAI = ({
     } catch (error) {
       console.error("Production asset profile generation failed:", summarizeUnknownError(error));
       if (targetKeyRef.current === requestKey) { const message = error instanceof Error ? error.message : "档案生成失败"; setRequestError(message); toast.error(message); }
+      throw error;
     } finally {
       setIsGenerating(false);
     }

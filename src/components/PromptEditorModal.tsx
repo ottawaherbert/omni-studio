@@ -1,3 +1,4 @@
+import { skillApplicabilityHint, skillTaskForPrompt, SKILL_PURPOSE_LABELS } from "../clients/skillMetadataClient";
 import { isGeneralSkill } from "../clients/creativeDirectionClient";
 import { ManualAIResultField } from "./ManualAIResultField";
 import { withManualAIResult } from "../../apps/web/src/clients/manualAIClient";
@@ -9,7 +10,7 @@ import { X, Save, RotateCcw, Code, CheckSquare, Wand2, Layers, Eye, Send, FileTe
 import { Link } from 'react-router-dom';
 import { usePromptStore } from '../clients/stateClient';
 import { useProjectStore } from '../clients/stateClient';
-import { useSkillStore } from '../clients/stateClient';
+import { useSkillStore, useSettingsStore } from '../clients/stateClient';
 import {
   loadProductionPromptTemplate,
   productionTemplateMetadataRegistry,
@@ -106,6 +107,9 @@ export interface VideoGenerationPromptConfiguration {
 }
 
 export interface PromptEditorModalProps {
+  presentation?: "modal" | "workspace";
+  /** Stable target identity within the current project / episode / scene. */
+  draftKey?: string;
   manualResultKind?: "text" | "image" | "video" | "audio";
   requireManualResult?: boolean;
   externalReferences?: { url: string; label: string }[];
@@ -133,6 +137,7 @@ export interface PromptEditorModalProps {
 export interface PromptEditorConfirmMetadata {
   selectedSkillIds: string[];
   selectedSkillTitles: string[];
+  selectedSkillSnapshots?: import("../clients/domainTypes").SkillDTO[];
   selectedContextIds: string[];
   selectedImageReferenceIds?: string[];
   templateId: string;
@@ -176,8 +181,29 @@ const modelReferenceLabels = (value: string) => Array.from(new Set(
   [...value.matchAll(/<(?:Subject|Picture|Video|Audio) \d+>/g)].map((match) => match[0]),
 ));
 
-export default function PromptEditorModal({
+const workspaceDrafts = new Map<string, Record<string, any>>();
+const workspacePending = new Set<string>();
+
+export default function PromptEditorModal(props: PromptEditorModalProps) {
+  const { currentProject, activeEpisode } = useProjectStore();
+  const context = JSON.stringify([currentProject?.id, props.activeEpisodeId || activeEpisode?.id, props.activeSceneId]);
+  const previousContext = useRef(context);
+  const changedContext = previousContext.current !== context;
+  useEffect(() => {
+    if (props.presentation === "workspace" && changedContext && props.isOpen) props.onClose();
+    previousContext.current = context;
+  }, [context, changedContext, props.isOpen, props.onClose]);
+  if (props.presentation === "workspace" && changedContext && props.isOpen) return null;
+  const sessionKey = JSON.stringify([context, props.templateId, props.title, props.draftKey || JSON.stringify(props.variables)]);
+  return props.presentation === 'workspace'
+    ? props.isOpen ? <PromptEditorSession key={sessionKey} {...props} sessionKey={sessionKey} /> : null
+    : <PromptEditorSession {...props} />;
+}
+
+function PromptEditorSession({
   isOpen,
+  presentation = "modal",
+  sessionKey,
   onClose,
   onCancel,
   templateId,
@@ -198,7 +224,15 @@ export default function PromptEditorModal({
   manualResultKind,
   requireManualResult = false,
   externalReferences,
-}: PromptEditorModalProps) {
+}: PromptEditorModalProps & { sessionKey?: string }) {
+  const isTestMode = useSettingsStore(state => state.isTestMode);
+  const externalCopyOnly = requireManualResult && !isTestMode;
+  const initialDraft = useRef(sessionKey ? workspaceDrafts.get(sessionKey) : undefined).current;
+  const draftSnapshot = useRef<Record<string, any>>({});
+  const submitted = useRef(false);
+  const mounted = useRef(true);
+  const submitLock = useRef(false);
+  const generatedPrompt = useRef(initialDraft?.generatedPrompt || '');
   const { templates, updateTemplate, resetTemplate } = usePromptStore();
   const { currentProject, activeEpisode } = useProjectStore();
   const { skills, categories, fetchSkills } = useSkillStore();
@@ -257,9 +291,16 @@ export default function PromptEditorModal({
   const [versionCount, setVersionCount] = useState<number>(1);
   const [isSkillDropdownOpen, setIsSkillDropdownOpen] = useState(false);
   const [skillSearch, setSkillSearch] = useState('');
+  const [skillPurposeFilter, setSkillPurposeFilter] = useState('all');
   const [skillCategoryFilter, setSkillCategoryFilter] = useState('all');
   const [isSkillRecommendationOpen, setIsSkillRecommendationOpen] = useState(false);
-  const [isSubmitting, setIsSubmitting] = useState(false);
+  const [isSubmitting, setIsSubmitting] = useState(Boolean(sessionKey && workspacePending.has(sessionKey)));
+  useEffect(() => {
+    if (!sessionKey) return;
+    const refresh = () => setIsSubmitting(workspacePending.has(sessionKey));
+    window.addEventListener("omni:prompt-submission", refresh);
+    return () => window.removeEventListener("omni:prompt-submission", refresh);
+  }, [sessionKey]);
   const [isHandedOffToTask, setIsHandedOffToTask] = useState(false);
   const [autoConfirmStarted, setAutoConfirmStarted] = useState(false);
   const [videoModelConfigId, setVideoModelConfigId] = useState(videoGeneration?.selectedModelConfigId || '');
@@ -296,7 +337,7 @@ export default function PromptEditorModal({
       || (skillCategoryFilter === '__uncategorized' ? !skill.categoryId : skill.categoryId === skillCategoryFilter);
     const textMatched = !normalizedSkillSearch
       || [skill.title, skill.content, skill.categoryId, categoryName].some((value) => String(value || '').toLowerCase().includes(normalizedSkillSearch));
-    return isGeneralSkill(skill) && categoryMatched && textMatched;
+    return isGeneralSkill(skill) && categoryMatched && textMatched && (skillPurposeFilter === "all" || skill.purposes?.includes(skillPurposeFilter));
   });
   
   const templateConflicts: string[] = [];
@@ -321,10 +362,10 @@ export default function PromptEditorModal({
   useEffect(() => {
     let active = true;
     if (isOpen) {
-      loadProductionPromptTemplate(templateId, templateObj).then((loaded) => {
-        if (active) {
-          setCurrentTemplate(loaded.template);
-        }
+      if (initialDraft) {
+        setCurrentTemplate(initialDraft.currentTemplate);
+      } else loadProductionPromptTemplate(templateId, templateObj).then((loaded) => {
+        if (active) setCurrentTemplate(loaded.template);
       });
       setSelectedContextIds(defaultSelectedContextIds);
       setSelectedImageReferenceIds(
@@ -334,6 +375,7 @@ export default function PromptEditorModal({
       setSelectedSkillIds([]);
       setSkillSearch('');
       setSkillCategoryFilter('all');
+      setSkillPurposeFilter('all');
       setUserIntent('');
       setVersionCount(1);
       setActiveTab(imageReferences !== undefined ? 'modelPrompt' : 'preview');
@@ -355,11 +397,60 @@ export default function PromptEditorModal({
     return () => {
       active = false;
     };
-  }, [isOpen, templateId, templateObj, defaultSelectedContextIds, defaultSelectedImageReferenceIds, contextOptions, imageReferences, videoGeneration]);
+      // Configuration objects may be recreated by the canvas on every render.
+      // A workspace session is keyed by its explicit task and source context.
+  }, [isOpen, templateId]);
 
   useEffect(() => {
-    if (isOpen) {
-      setCurrentPrompt(replaceVariables(currentTemplate, variables, selectedContextIds, selectedSkillIds, userIntent, versionCount));
+    if (initialDraft) {
+      modelPromptBaselineRef.current = initialDraft.modelPromptBaseline || "";
+      setCurrentPrompt(initialDraft.currentPrompt);
+      setCurrentTemplate(initialDraft.currentTemplate);
+      setSelectedContextIds(initialDraft.selectedContextIds);
+      setSelectedImageReferenceIds(initialDraft.selectedImageReferenceIds);
+      setLocalContextOptions(initialDraft.localContextOptions);
+      setSelectedSkillIds(initialDraft.selectedSkillIds);
+      setUserIntent(initialDraft.userIntent);
+      setVersionCount(initialDraft.versionCount);
+      setActiveTab(initialDraft.activeTab);
+      setManualResult(initialDraft.manualResult);
+      setVideoModelConfigId(initialDraft.videoModelConfigId);
+      setVideoGenerationWayId(initialDraft.videoGenerationWayId);
+      setVideoResolution(initialDraft.videoResolution);
+      setVideoAudioMode(initialDraft.videoAudioMode);
+      setCurrentModelPrompt(initialDraft.currentModelPrompt);
+      setModelPromptEdited(initialDraft.modelPromptEdited);
+      setModelPromptSource(initialDraft.modelPromptSource);
+      setPromptAuthoringModelLabel(initialDraft.promptAuthoringModelLabel);
+    }
+  }, []);
+
+  draftSnapshot.current = { currentPrompt, currentTemplate, selectedContextIds, selectedImageReferenceIds, localContextOptions, selectedSkillIds, userIntent, versionCount, activeTab, manualResult, videoModelConfigId, videoGenerationWayId, videoResolution, videoAudioMode, currentModelPrompt, modelPromptEdited, modelPromptSource, promptAuthoringModelLabel, generatedPrompt: generatedPrompt.current, modelPromptBaseline: modelPromptBaselineRef.current };
+  useEffect(() => {
+    mounted.current = true;
+    return () => {
+      mounted.current = false;
+      if (sessionKey && !submitted.current) {
+        workspaceDrafts.set(sessionKey, draftSnapshot.current);
+        if (workspaceDrafts.size > 40) workspaceDrafts.delete(workspaceDrafts.keys().next().value!);
+      }
+    };
+  }, [sessionKey]);
+  useEffect(() => {
+    if (!isOpen) return;
+    const escape = (event: KeyboardEvent) => {
+      if (event.key === 'Escape' && !isSkillRecommendationOpen) { event.preventDefault(); (onCancel || onClose)(); }
+    };
+    document.addEventListener('keydown', escape);
+    return () => document.removeEventListener('keydown', escape);
+  }, [isOpen, onClose, onCancel, isSkillRecommendationOpen]);
+
+  useEffect(() => {
+    if (!isOpen || !currentTemplate) return;
+    const next = replaceVariables(currentTemplate, variables, selectedContextIds, selectedSkillIds, userIntent, versionCount);
+    if (next !== generatedPrompt.current) {
+      generatedPrompt.current = next;
+      setCurrentPrompt(next);
     }
   }, [currentTemplate, variables, selectedContextIds, selectedSkillIds, userIntent, versionCount, isOpen, localContextOptions, skills]);
 
@@ -380,7 +471,7 @@ export default function PromptEditorModal({
   };
 
   useEffect(() => {
-    if (!isOpen || !videoGeneration || !videoModelConfigId || !videoGenerationWayId) return;
+    if (!isOpen || !currentTemplate || !videoGeneration || !videoModelConfigId || !videoGenerationWayId) return;
     let next: VideoGenerationPromptDetail;
     try {
       next = videoGeneration.buildPreview({
@@ -418,7 +509,7 @@ export default function PromptEditorModal({
     } else if (!modelPromptEdited) {
       setCurrentModelPrompt(next.modelPrompt);
     }
-  }, [currentPrompt, isOpen, modelPromptEdited, userIntent, effectiveVideoAudioMode, videoGeneration, videoGenerationWayId, videoModelConfigId, videoResolution]);
+  }, [currentTemplate, currentPrompt, isOpen, modelPromptEdited, userIntent, effectiveVideoAudioMode, videoGeneration, videoGenerationWayId, videoModelConfigId, videoResolution]);
 
   const handleOptimizeModelPrompt = async () => {
     if (!videoGeneration?.optimizeModelPrompt || !videoPreview || isOptimizingModelPrompt) return;
@@ -646,7 +737,7 @@ export default function PromptEditorModal({
   };
 
   const handleGenerateContent = async () => {
-    if (isSubmitting || resultUploading) return;
+    if (externalCopyOnly || submitLock.current || isSubmitting || resultUploading || (sessionKey && workspacePending.has(sessionKey))) return;
     if (requireManualResult && !hasManualAIResult(manualResult)) { toast.error("请先上传外部生成结果，再确认采用。"); return; }
     const missingRuntimeVariables = requiredRuntimeVariables.filter((key) => !currentPrompt.includes(`{{${key}}}`));
     if (missingRuntimeVariables.length > 0) {
@@ -672,9 +763,11 @@ export default function PromptEditorModal({
         return;
       }
     }
+    submitLock.current = true;
+    if (sessionKey) workspacePending.add(sessionKey);
     setIsSubmitting(true);
     setSubmissionError('');
-    setIsHandedOffToTask(true);
+    if (presentation === "modal") setIsHandedOffToTask(true);
     const effectiveSelectedContextIds = hasSelectedContext ? selectedContextIds : [];
     const effectiveSelectedSkillIds = hasSkills ? selectedSkills.map(skill => skill.id) : [];
     try {
@@ -691,9 +784,11 @@ export default function PromptEditorModal({
         userIntent,
         selectedContextIds: effectiveSelectedContextIds,
         selectedSkillIds: effectiveSelectedSkillIds,
+        selectedSkillSnapshots: hasSkills ? structuredClone(selectedSkills) : [],
         missingVariables: missingVars,
         templateConflicts,
       });
+      if (!mounted.current) return;
       const hasBlockingIssue = gateway.qaVerdicts.some((verdict) => verdict.blocking);
       if (hasBlockingIssue) {
         setIsHandedOffToTask(false);
@@ -703,6 +798,7 @@ export default function PromptEditorModal({
       try {
         await withManualAIResult(currentPrompt, manualResult, () => onConfirm(currentPrompt, userIntent, {
           selectedSkillIds: effectiveSelectedSkillIds,
+          selectedSkillSnapshots: hasSkills ? structuredClone(selectedSkills) : [],
           selectedSkillTitles: hasSkills ? selectedSkills.map((skill) => skill.title || '未命名 Skill') : [],
           selectedContextIds: effectiveSelectedContextIds,
           selectedImageReferenceIds,
@@ -732,18 +828,22 @@ export default function PromptEditorModal({
             },
           } : {}),
         }));
-        onClose();
+        if (sessionKey) workspaceDrafts.delete(sessionKey);
+        submitted.current = true;
+        if (mounted.current) onClose();
       } catch (error) {
         setIsHandedOffToTask(false);
         console.error('Prompt task execution failed:', error);
         setSubmissionError(error instanceof Error ? error.message : '任务执行失败');
-        toast.error(error instanceof Error ? error.message : '任务执行失败');
+        if (presentation === 'modal') toast.error(error instanceof Error ? error.message : '任务执行失败');
       }
     } catch (error) {
       setIsHandedOffToTask(false);
       console.error('Manual prompt gateway review failed:', error);
       toast.error(error instanceof Error ? error.message : '提示词检查失败');
     } finally {
+      submitLock.current = false;
+      if (sessionKey) { workspacePending.delete(sessionKey); window.dispatchEvent(new Event("omni:prompt-submission")); }
       setIsSubmitting(false);
     }
   };
@@ -762,16 +862,19 @@ export default function PromptEditorModal({
           initial={{ opacity: 0 }}
           animate={{ opacity: 1 }}
           exit={{ opacity: 0 }}
-          className="fixed inset-0 z-[9999] flex items-center justify-center p-2 sm:p-6 bg-black/50 backdrop-blur-sm"
+          role={presentation === 'workspace' ? 'region' : 'dialog'}
+          aria-label={title}
+          aria-modal={presentation === 'modal' ? true : undefined}
+          className={presentation === 'workspace' ? 'prompt-workspace z-[90]' : 'fixed inset-0 z-[9999] flex items-center justify-center p-2 sm:p-6 bg-black/50 backdrop-blur-sm'}
         >
           <motion.div
             initial={{ opacity: 0, scale: 0.97, y: 10 }}
             animate={{ opacity: 1, scale: 1, y: 0 }}
             exit={{ opacity: 0, scale: 0.97, y: 10 }}
-            className="bg-white dark:bg-neutral-950 rounded-2xl shadow-2xl border border-gray-200 dark:border-neutral-800 w-full max-w-6xl flex flex-col h-[92vh] sm:h-[85vh] overflow-hidden"
+            className="prompt-editor-surface bg-white dark:bg-neutral-950 rounded-2xl shadow-2xl border border-gray-200 dark:border-neutral-800 w-full max-w-6xl flex flex-col h-[92vh] sm:h-[85vh] overflow-hidden"
           >
              {/* Header - Slimmed down & efficient */}
-             <div className="shrink-0 px-4 sm:px-6 py-3 sm:py-4 border-b border-gray-100 dark:border-neutral-900 bg-white dark:bg-neutral-950 flex items-center justify-between gap-3">
+             <div className="prompt-editor-header shrink-0 px-4 sm:px-6 py-3 sm:py-4 border-b border-gray-100 dark:border-neutral-900 bg-white dark:bg-neutral-950 flex items-center justify-between gap-3">
                 <div className="flex min-w-0 items-center gap-3">
                   <div className="w-8 h-8 shrink-0 rounded-lg bg-violet-100 dark:bg-violet-900/30 text-violet-600 flex items-center justify-center">
                     <Wand2 className="w-4 h-4" />
@@ -784,8 +887,9 @@ export default function PromptEditorModal({
                 </div>
                 
                 <div className="flex items-center gap-4">
+                  {presentation === 'workspace' && <span className="whitespace-nowrap text-xs text-text-muted">关闭保留草稿</span>}
                   {/* Status Indicator */}
-                  <div className="hidden sm:flex items-center gap-2 px-3 py-1.5 bg-emerald-50 dark:bg-emerald-900/10 rounded-full border border-emerald-100 dark:border-emerald-900/20">
+                  <div className="prompt-editor-ready hidden sm:flex items-center gap-2 px-3 py-1.5 bg-emerald-50 dark:bg-emerald-900/10 rounded-full border border-emerald-100 dark:border-emerald-900/20">
                      <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse"></span>
                      <span className="text-[10px] font-bold text-emerald-600 dark:text-emerald-400 uppercase tracking-widest">AI 就绪</span>
                   </div>
@@ -796,19 +900,19 @@ export default function PromptEditorModal({
              </div>
 
              {/* Content Layout - Maximize Text Area Space */}
-             <div className="flex min-h-0 flex-1 flex-col overflow-hidden lg:flex-row">
+             <div className="prompt-editor-content flex min-h-0 flex-1 flex-col overflow-hidden lg:flex-row">
                {/* Left Sidebar - Configuration */}
-               <div className="flex max-h-[42%] w-full shrink-0 flex-col border-b border-gray-100 bg-gray-50/50 dark:border-neutral-900 dark:bg-neutral-950/50 lg:max-h-none lg:w-[300px] lg:border-b-0 lg:border-r">
+               <div className="prompt-editor-configuration flex max-h-[42%] w-full shrink-0 flex-col border-b border-gray-100 bg-gray-50/50 dark:border-neutral-900 dark:bg-neutral-950/50 lg:max-h-none lg:w-[300px] lg:border-b-0 lg:border-r">
                   <button
                     type="button"
                     aria-expanded={mobileConfigurationOpen}
                     onClick={() => setMobileConfigurationOpen(open => !open)}
-                    className="flex shrink-0 items-center justify-between gap-3 px-4 py-3 text-xs font-medium text-gray-600 dark:text-neutral-300 lg:hidden"
+                    className="prompt-editor-configuration-toggle flex shrink-0 items-center justify-between gap-3 px-4 py-3 text-xs font-medium text-gray-600 dark:text-neutral-300 lg:hidden"
                   >
                     <span>{videoGeneration || imageReferences?.length ? '生成设置与参考资料' : '补充要求与参考资料'}</span>
                     <ChevronDown className={`h-4 w-4 transition-transform ${mobileConfigurationOpen ? 'rotate-180' : ''}`} />
                   </button>
-                  <div className={`${mobileConfigurationOpen ? 'block' : 'hidden'} min-h-0 flex-1 overflow-y-auto custom-scrollbar p-4 sm:p-5 space-y-5 sm:space-y-6 lg:block`}>
+                  <div className={`prompt-editor-configuration-fields ${mobileConfigurationOpen ? 'block' : 'hidden'} min-h-0 flex-1 overflow-y-auto custom-scrollbar p-4 sm:p-5 space-y-5 sm:space-y-6 lg:block`}>
 
                     {videoGeneration && selectedVideoModelOption && (
                       <div className="space-y-3 border-b border-gray-200 pb-5 dark:border-neutral-800">
@@ -1041,7 +1145,7 @@ export default function PromptEditorModal({
                       </button>
                       {selectedSkills.length > 0 && (
                         <div className="rounded-xl border border-transparent bg-bg-surface-soft p-2 text-[11px] font-bold leading-5 text-text-secondary">
-                          已选：{selectedSkills.map((skill) => skill.title || '未命名 Skill').join('、')}
+                          已选：{selectedSkills.map((skill) => `${skill.title || '未命名 Skill'}（${skillApplicabilityHint(skill, { task: skillTaskForPrompt(templateId, metadata?.stageType), projectFormat: currentProject?.type })}）`).join('、')}
                         </div>
                       )}
                       <button
@@ -1082,6 +1186,7 @@ export default function PromptEditorModal({
                                 <option value="__uncategorized">未分类</option>
                                 {categories.map((category) => <option key={category.id} value={category.id}>{category.name}</option>)}
                               </select>
+                              <select aria-label="筛选 Skill 用途" value={skillPurposeFilter} onChange={event => setSkillPurposeFilter(event.target.value)} className="w-full rounded-lg border border-border-soft bg-bg-surface px-3 py-2 text-xs"><option value="all">全部用途</option>{[...new Set(generalSkills.flatMap(skill => skill.purposes || []))].map(value => <option key={value} value={value}>{SKILL_PURPOSE_LABELS[value] || value}</option>)}</select>
                               {generalSkills.length === 0 ? (
                                 <div className="rounded-lg border border-dashed border-gray-200 p-3 text-[11px] font-bold leading-5 text-gray-400 dark:border-neutral-800">
                                   暂无通用 Skill。
@@ -1110,6 +1215,7 @@ export default function PromptEditorModal({
                                         </div>
                                         <div className="flex-1 min-w-0">
                                           <div className="text-[11px] font-bold truncate leading-tight">{skill.title}</div>
+                                          <div className="mt-1 text-[10px] leading-4 text-text-muted">{skill.purposes?.map(value => SKILL_PURPOSE_LABELS[value] || value).join('、') || '未标注用途'} · {skillApplicabilityHint(skill, { task: skillTaskForPrompt(templateId, metadata?.stageType), projectFormat: currentProject?.type })}</div>
                                         </div>
                                       </button>
                                     );
@@ -1477,16 +1583,16 @@ export default function PromptEditorModal({
                  onClick={onCancel || onClose}
                  className="px-4 sm:px-6 py-2.5 rounded-xl text-[13px] font-bold text-gray-500 hover:bg-gray-100 dark:hover:bg-neutral-800 hover:text-gray-900 dark:hover:text-white transition-colors"
                >
-                 取消
+                 {presentation === "workspace" ? "收起" : "取消"}
                </button>
-               <button
+               {!externalCopyOnly && <button
                  onClick={handleGenerateContent}
                  disabled={isSubmitting || resultUploading}
                   className="px-5 sm:px-8 py-2.5 rounded-xl text-[13px] font-black btn-primary active:scale-95 flex items-center gap-2 transition-all disabled:opacity-60 disabled:cursor-not-allowed disabled:active:scale-100"
                >
                  <Send className="w-4 h-4" />
                  {isSubmitting ? '确认中...' : hasManualAIResult(manualResult) ? '确认使用手动结果' : '确认并执行'}
-               </button>
+               </button>}
              </div>
           </motion.div>
         </motion.div>

@@ -422,7 +422,7 @@ export default function Layout() {
         {isDirectorProductionRoute && currentProject && <ProductionWorkflowGuide pathname={location.pathname} href={productionWorkspaceHref} />}
 
         {/* Content Page Window */}
-        <main className={`flex-1 overflow-y-auto min-w-0 bg-bg-primary text-text-primary custom-scrollbar ${isDirectorProductionRoute ? "[scrollbar-gutter:stable]" : ""}`}>
+        <main data-production-canvas className={`flex-1 overflow-y-auto min-w-0 bg-bg-primary text-text-primary custom-scrollbar ${isDirectorProductionRoute ? "[scrollbar-gutter:stable]" : ""}`}>
           <Outlet />
         </main>
       </div>

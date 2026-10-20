@@ -45,7 +45,11 @@ export const ManualAIResultField = ({ prompt, value, onChange, kind, projectId, 
     } catch (error) { if (generation.current === token) setMessage((error as Error).message); }
     finally { if (generation.current === token) { setUploading(false); } if (inputRef.current) inputRef.current.value = ""; }
   };
-  if (!isTestMode) return null;
+  if (!isTestMode) return manualOnly ? <div className="shrink-0 border-t border-border-soft px-4 py-3 text-xs">
+    <button type="button" onClick={copy} className="flex items-center gap-1.5 text-text-secondary hover:text-text-primary"><Copy className="h-3.5 w-3.5" />复制完整提示词</button>
+    <p className="mt-2 text-text-muted">完成外部制作后，收起此面板，通过摄影棚的“导入视频”添加结果。</p>
+    {message && <p role="status" className="mt-2 text-text-secondary">{message}</p>}
+  </div> : null;
   return <div className="shrink-0 border-t border-gray-200 px-4 py-3 text-xs dark:border-neutral-800" data-manual-ai-result="true">
     <div className="flex flex-wrap items-center gap-3">
       <button type="button" onClick={copy} className="flex items-center gap-1.5 text-text-secondary hover:text-text-primary"><Copy className="h-3.5 w-3.5" />复制完整提示词</button>

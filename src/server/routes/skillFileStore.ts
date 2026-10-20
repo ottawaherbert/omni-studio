@@ -1,3 +1,4 @@
+import { validateSkillMetadata } from "../../../packages/domain/src/skillMetadata";
 import { validateCreativeSkill, isDirectorProfileV2, directorProfileText } from "../../../packages/domain/src/creativeDirection";
 import fs from "fs/promises";
 import { randomUUID } from "node:crypto";
@@ -86,6 +87,7 @@ const readableLegacyContent = (metadata: Record<string, any>, description: strin
 
 export const normalizeSkill = (skill: Partial<SkillDTO>, fallback: Partial<SkillDTO> = {}): SkillDTO => {
   validateCreativeSkill(skill);
+  validateSkillMetadata(skill);
   const timestamp = now();
   const title = clean(skill.title || fallback.title || "未命名 Skill");
   const content = isDirectorProfileV2(skill.profile?.director) ? directorProfileText(skill.profile.director) : clean(skill.content || fallback.content || "");
@@ -93,6 +95,8 @@ export const normalizeSkill = (skill: Partial<SkillDTO>, fallback: Partial<Skill
   return {
     id,
     title,
+    purposes: skill.purposes ?? fallback.purposes,
+    applicability: skill.applicability ?? fallback.applicability,
     kind: skill.kind || fallback.kind || "general",
     revision: Number(skill.revision || fallback.revision) || 1,
     profile: skill.profile,
@@ -147,7 +151,7 @@ const parseCreativeMetadata = (value?: string): Partial<SkillDTO> => {
 const skillToFileContent = (skill: SkillDTO) => `---
 id: ${frontmatterValue(skill.id)}
 title: ${frontmatterValue(skill.title)}
-creativeMetadata: ${JSON.stringify({ kind: skill.kind || "general", revision: skill.revision || 1, profile: skill.profile, references: skill.references || [], referenceWork: skill.referenceWork, analysisNotes: skill.analysisNotes, analysisBasis: skill.analysisBasis })}
+creativeMetadata: ${JSON.stringify({ purposes: skill.purposes, applicability: skill.applicability, kind: skill.kind || "general", revision: skill.revision || 1, profile: skill.profile, references: skill.references || [], referenceWork: skill.referenceWork, analysisNotes: skill.analysisNotes, analysisBasis: skill.analysisBasis })}
 ${skill.categoryId ? `categoryId: ${frontmatterValue(skill.categoryId)}\n` : ""}source: ${skill.source}
 createdAt: ${skill.createdAt}
 updatedAt: ${skill.updatedAt}
@@ -178,7 +182,7 @@ export class SkillInputError extends Error {}
 const validateSkillContent = (input: Partial<SkillDTO>) => {
   if (typeof input.title !== "string" || !input.title.trim()) throw new SkillInputError("请填写技能名称。");
   if (!isDirectorProfileV2(input.profile?.director) && (typeof input.content !== "string" || !input.content.trim())) throw new SkillInputError("请填写技能规则与要求。");
-  try { validateCreativeSkill(input); } catch (err) { throw new SkillInputError((err as Error).message); }
+  try { validateCreativeSkill(input); validateSkillMetadata(input); } catch (err) { throw new SkillInputError((err as Error).message); }
 };
 
 export const createSkillFile = async (skillsDir: string, input: Partial<SkillDTO>) => {

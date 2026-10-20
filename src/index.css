@@ -450,3 +450,30 @@ html.light .jimeng-search {
   width: 14px !important;
   height: 14px !important;
 }
+
+/* Reserve canvas space; adapt the canvas to its remaining width, not the viewport. */
+body:has(.prompt-workspace) { --prompt-workspace-width: clamp(380px, 34vw, 520px); }
+.prompt-workspace { position: fixed; top: 64px; right: 0; bottom: 0; width: var(--prompt-workspace-width); }
+.prompt-workspace .prompt-editor-surface { height: 100%; max-width: none; border-radius: 0; }
+.prompt-workspace .prompt-editor-content { flex-direction: column; }
+.prompt-workspace .prompt-editor-configuration { width: 100%; max-height: 42%; border-right: 0; border-bottom: 1px solid var(--border-soft); }
+.prompt-workspace .prompt-editor-configuration-toggle { display: flex; }
+.prompt-workspace .prompt-editor-configuration-fields.hidden { display: none; }
+.prompt-workspace .prompt-editor-ready { display: none; }
+body:has(.prompt-workspace) [data-production-canvas] {
+  margin-right: var(--prompt-workspace-width);
+  container: production-canvas / inline-size;
+}
+@container production-canvas (max-width: 920px) {
+  .storyboard-workspace { padding: 12px; }
+  .storyboard-columns { gap: 0; }
+  .storyboard-scene-rail, .storyboard-rail-toggle { display: none; }
+  .storyboard-scene-picker { display: block; }
+  .storyboard-content { padding: 16px; }
+}
+@media (max-width: 1023px) {
+  .prompt-workspace { top: auto; height: 60dvh; width: 100%; }
+  body:has(.prompt-workspace) [data-production-canvas] { margin-right: 0; margin-bottom: 60dvh; }
+  .prompt-workspace .prompt-editor-header { padding: 8px 12px; }
+  .prompt-workspace .prompt-editor-header h2 { font-size: 13px; }
+}

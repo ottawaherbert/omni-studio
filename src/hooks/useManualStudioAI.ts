@@ -952,7 +952,7 @@ export function useManualStudioAI({ project, episode, scene, assets, generationR
     if (request.appearanceHash && request.appearanceHash !== manualStoryboardHash(projectionShots.map(s => s.appearance))) throw new Error("外观状态已修改，请重新打开生成面板核对提示词和参考图。");
     const appearanceContext = await legacyProjectClient.getStoryboardTeamContext(latestProject.id, latestEpisode.id, latestScene.id);
     try { requireAppearanceReady(latestProject, latestScene, projectionShots, appearanceSourceShots(latestEpisode, appearanceContext.productionTeamContext), isImage ? 'image' : 'video'); }
-    catch (error) { toast.error(error instanceof Error ? error.message : '外观状态已变化'); return; }
+    catch (error) { throw error; }
     const visualProjectionTargets = visualProjectionContext.targets;
     const currentImageVisualStyleProjection = isImage
       ? buildImageVisualStyleProjection({
@@ -981,7 +981,6 @@ export function useManualStudioAI({ project, episode, scene, assets, generationR
     if (request.draftPreview) setIsGeneratingDraftImage(true);
     else if (isImage) setIsGeneratingImage(true);
     else setIsGeneratingVideo(true);
-    setPromptRequest(null);
     try {
       const now = Date.now();
       let activeTake = latestShot.takes?.find((item) => item.id === latestShot.activeTakeId);
@@ -1473,6 +1472,7 @@ export function useManualStudioAI({ project, episode, scene, assets, generationR
     } catch (error) {
       console.error("Manual Studio generation failed:", JSON.stringify(summarizeUnknownError(error)));
       toast.error(error instanceof Error ? error.message : "摄影棚生成失败。");
+      throw error;
     } finally {
       if (requestEpochRef.current === requestEpoch) {
         if (request.draftPreview) setIsGeneratingDraftImage(false);

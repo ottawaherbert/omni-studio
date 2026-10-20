@@ -8,7 +8,7 @@ export const OPERATION_LABELS:Record<ScriptOperation,string>={story_outline:'当
 export const INPUT_LABELS={structure:'结构辅助记录',continuity:'连续性辅助记录'};
 export const DEFAULT_METHOD_USAGE:MethodUsage={operations:[...SCRIPT_OPERATIONS],inputs:[],note:''};
 export const methodUsage=(method:MethodBinding):MethodUsage=>method.usage||DEFAULT_METHOD_USAGE;
-export const methodFromSkill=(skill:SkillDTO):MethodBinding=>({id:`skill:${skill.id}`,title:skill.title,version:String(skill.revision||skill.updatedAt),content:skill.content});
+export const methodFromSkill=(skill:SkillDTO):MethodBinding=>({id:`skill:${skill.id}`,title:skill.title,version:String(skill.revision||skill.updatedAt),content:skill.content,...(skill.purposes?{purposes:structuredClone(skill.purposes)}:{}),...(skill.applicability?{applicability:structuredClone(skill.applicability)}:{})});
 export function selectSharedMethods(skills:SkillDTO[],ids:unknown):MethodBinding[]{
   if(!Array.isArray(ids)||ids.length>100||ids.some(id=>typeof id!=='string'))throw new Error('本次 Skill 选择需要最多 100 个标识');
   const methods=ids.map(id=>{

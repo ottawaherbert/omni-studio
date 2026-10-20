@@ -887,7 +887,6 @@ export const useStoryboardBoardBatchAgent = ({
     const requestedSceneIds = new Set(promptRequest.scope.sceneIds);
     const sourceScenes = requestKind === "scene" ? scenes : pendingScenes;
     const targets = sourceScenes.filter((item) => requestedSceneIds.has(item.scene.id) && item.boardDraftReady);
-    setPromptRequest(null);
     const totalScenes = targets.length;
     let completedScenes = 0;
     let structureOnlySceneCount = 0;
@@ -906,7 +905,7 @@ export const useStoryboardBoardBatchAgent = ({
       await Promise.all(requiredTasks);
     } catch (error) {
       setProgress({ phase: "needs_decision", label: "故事板 Agent 尚不能安全执行，未开始生成图片", attempt: 0, maxAttempts: STORYBOARD_BOARD_AGENT_MAX_REPAIRS + 1, completedScenes, totalScenes, issues: [summarizeUnknownError(error).message] });
-      return;
+      throw error;
     }
 
     for (const context of targets) {
@@ -1506,7 +1505,7 @@ export const useStoryboardBoardBatchAgent = ({
       } catch (error) {
         console.error("Storyboard board batch agent failed:", summarizeUnknownError(error));
         setProgress({ phase: "failed", label: "故事板 Agent 执行失败，已保留之前完成的场次", sceneId: context.scene.id, sceneTitle: context.scene.title, attempt: 1, maxAttempts: STORYBOARD_BOARD_AGENT_MAX_REPAIRS + 1, completedScenes, totalScenes, issues: [summarizeUnknownError(error).message] });
-        return;
+        throw error;
       }
     }
     if (manualReviewBoardPageCount > 0) {

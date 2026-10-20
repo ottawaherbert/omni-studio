@@ -1051,6 +1051,8 @@ try {
     "returning from asset governance to one preparation scene must not invalidate the accepted semantic batch",
   );
 
+  // Other assertions above saved newer revisions; this scoped save uses the current base.
+  scopedEpisode.productionRevision = dbHelpers.getEpisodeById("project-scoped-read", "episode-1").productionRevision;
   scopedEpisode.scenes[0].description = "Updated first scene";
   dbHelpers.updateEpisode("project-scoped-read", "episode-1", scopedEpisode);
   const savedEpisode = dbHelpers.getEpisodeById("project-scoped-read", "episode-1");

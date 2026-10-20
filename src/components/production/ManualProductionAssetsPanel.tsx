@@ -620,6 +620,7 @@ export function ManualProductionAssetsPanel({
       onConfirm={assetImages.generateReferenceImage}
     />
     <PromptEditorModal
+              presentation="workspace"
       isOpen={Boolean(assetVariants.promptRequest)}
       onClose={() => assetVariants.setPromptRequest(null)}
       templateId={assetVariants.promptRequest?.templateId || "productionAssetVariant"}

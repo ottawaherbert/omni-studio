@@ -77,6 +77,10 @@ export const buildProductionPreparationGate = ({
     ...(unconfirmedAssetCount
       ? [`${unconfirmedAssetCount} 个资产身份尚未确认；不影响继续，可按需处理。`]
       : []),
+    ...(coordinationSourceChanged ? ["部门统筹所依据的资产包有更新；原确认仍保留，请复核本场统筹。"] : []),
+    ...(!breakdownReady ? ["本场尚无已确认拆解，可继续草拟并按需补充。"] : []),
+    ...filmTeam.coverage.filter(row => row.outputStatus !== "missing" && row.readiness !== "ready").map(row => `${row.name}已有资料待复核：${row.reasons.join("；") || "来源有变化"}。`),
+    ...(!continuityReady ? ["本场连续性检查存在待补项，请核对筹备页记录。"] : []),
     ...(assetPackSourceChanged ? ["资产内容有更新；已保留本场资产包确认，可按需复核。"] : []),
   ];
 

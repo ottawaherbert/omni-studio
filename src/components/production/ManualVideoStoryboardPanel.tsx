@@ -426,6 +426,7 @@ export function ManualVideoStoryboardPanel(props: ManualVideoStoryboardPanelProp
       </section>
 
       <PromptEditorModal
+              presentation="workspace"
         isOpen={Boolean(promptRequest)}
         onClose={() => setPromptRequest(null)}
         templateId={promptRequest?.templateId || "storyboard.strategy.select"}

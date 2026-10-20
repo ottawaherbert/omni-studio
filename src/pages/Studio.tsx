@@ -1,3 +1,4 @@
+import { ProductionPreparationAdvisories } from "../components/production/ProductionPreparationAdvisories";
 import { productionPreparationHref } from "../utils/productionNavigation";
 import { appearanceImageIsAfterChange, appearanceBoards } from "../clients/productionStoryboardWorkflowClient";
 import { sceneVideoClips } from '../utils/sceneVideoClips';
@@ -1302,6 +1303,7 @@ export default function Studio({ workspaceMode = "linear" }: StudioProps) {
             }} className="h-7 shrink-0 border border-amber-500/30 bg-amber-500/10 px-3 text-xs font-bold text-amber-400 hover:bg-amber-500/20 rounded-lg transition-all cursor-pointer">返回剧本与场次</button>
           </div>
         )}
+        <ProductionPreparationAdvisories gate={productionPreparationGate} sceneTitle={activeScene?.title} />
         {/* Top Half */}
         <div
           aria-busy={isSceneDetailPending}
@@ -1720,6 +1722,7 @@ export default function Studio({ workspaceMode = "linear" }: StudioProps) {
 
         {!isDirectorProductionRoute && promptModalState.isOpen && (
           <PromptEditorModal
+              presentation="workspace"
             isOpen
             onClose={() => setPromptModalState(prev => ({ ...prev, isOpen: false }))}
             templateId={promptModalState.templateId}
@@ -1734,6 +1737,7 @@ export default function Studio({ workspaceMode = "linear" }: StudioProps) {
 
         {isDirectorProductionRoute && manualStudioAI.promptRequest && (
           <PromptEditorModal
+              presentation="workspace"
             isOpen
             onClose={() => manualStudioAI.setPromptRequest(null)}
             templateId={manualStudioAI.promptRequest.templateId || "generateImage"}

@@ -1,3 +1,4 @@
+import { buildVideoContinuityContext } from "../../../packages/production/src/services/production/videoContinuityContext";
 import { resolveProductionCreativeVisual, creativeExecutionManifest, hasShotVisualDirection, renderProductionCreativeContext, type ProductionCreativeScope } from "../../../packages/production/src/services/production/creativeDirection";
 import { appearancePrompt, appearanceSummary } from "./productionAppearance";
 import type { Episode, ManualStoryboardBoard, Project, Scene, Shot, StoryboardVisualReferenceMode } from "../../types/project";
@@ -551,7 +552,9 @@ export const buildManualStudioVideoIntent = ({
   const audioPolicy = audioPolicyFor(referenceBindings, audioMode, target, generationMode);
   const interactiveContext = resolveManualStudioInteractiveContext(project, scene, target);
   const creativeIntent = (scene.shots || []).filter(s => (target.shotIds?.length ? target.shotIds : [shot.id]).includes(s.id)).map(s => `镜头 ${s.id}：\n${renderProductionCreativeContext(project, { episode, scene, shot: s }, "video", false) + ((target.shotIds?.length || 1) > 1 && hasShotVisualDirection(project, s) ? "\n本镜视觉规范：\n" + buildManualStudioProjectVisualStyleProjection(project, { creativeScope: { episode, scene, shot: s }, targets: visualProjectionTargetsForVideo(project, s, boards), shotOverride: s.visualOverride }).rendered.instruction : "")}`).join("\n\n");
+  const continuityContext = buildVideoContinuityContext({ sceneId: scene.id, shots: scene.shots || [], unitShotIds: target.shotIds?.length ? target.shotIds : [shot.id] });
   const intentSourceHash = manualStoryboardHash({
+    continuityContext,
     creativeIntent,
     sourceHash,
     adapterId,
@@ -585,7 +588,7 @@ export const buildManualStudioVideoIntent = ({
     aspectRatio: project.aspectRatio || "16:9",
     startState: target.startState || timelineBeats[0]?.continuityIn || "沿用当前故事板起始状态",
     endState: target.endState || timelineBeats[timelineBeats.length - 1]?.continuityOut || "完成当前视频单元动作",
-    directorIntent: [creativeIntent, directorIntent.trim() || target.videoPrompt.trim(), ...(scene.shots || []).filter(s => (target.shotIds?.length ? target.shotIds : [shot.id]).includes(s.id)).map(s => appearancePrompt(s, "video"))].filter(Boolean).join("\n\n"),
+    directorIntent: [creativeIntent, continuityContext, directorIntent.trim() || target.videoPrompt.trim(), ...(scene.shots || []).filter(s => (target.shotIds?.length ? target.shotIds : [shot.id]).includes(s.id)).map(s => appearancePrompt(s, "video"))].filter(Boolean).join("\n\n"),
     ...(visualStyleContract ? { visualStyleContract } : {}),
     visualStyleCompileManifest: visualStyle.rendered.manifest,
     timelineBeats,

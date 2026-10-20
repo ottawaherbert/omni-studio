@@ -1,3 +1,4 @@
+import { interactiveDescription } from "../interactiveVideoInstructions";
 import type { VideoGenerationIntent } from "../videoGenerationIntent";
 import {
   assertFinalVideoPromptPreservesVisualStyleContract,
@@ -72,6 +73,7 @@ export const compileGenericVideoAdapterPlan = ({
   });
   const adapterPrompt = [
     intent.directorIntent.trim(),
+    interactiveDescription(intent),
     intent.visualStyleContract?.trim()
       ? `<project_visual_style>\n${intent.visualStyleContract.trim()}\n</project_visual_style>`
       : "",

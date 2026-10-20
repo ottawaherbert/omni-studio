@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import fs from "node:fs";
+import { buildStoryboardShotGridSourceHash } from "../src/services/production/storyboardCompositeBoard";
 
 import {
   buildEpisodeFilmCoverage,
@@ -87,7 +88,8 @@ assert.equal(stalePrompt.storedText, promptRecord.text, "the obsolete author tex
 assert.notEqual(buildShotUpstreamPromptHash(promptShots[0]), buildStoryboardUnitUpstreamPromptHash({ workflow: { ...promptWorkflow, unitVideoPrompt: promptRecord }, shots: promptShots }));
 
 assert.deepEqual(buildSceneVideoExportItems(scene), [
-  { videoUrl: activeTake.videoUrl, durationSeconds: 7 },
+  { videoUrl: activeTake.videoUrl, durationSeconds: 4 },
+  { videoUrl: activeTake.videoUrl, durationSeconds: 3, sourceStartSeconds: 4 },
   { videoUrl: "https://cdn.example.com/shot-3.mp4", durationSeconds: 5 },
 ]);
 assert.deepEqual(buildEpisodeFilmCoverage({ scenes: [scene] } as any), {
@@ -159,6 +161,10 @@ const storyboardScene = {
     }],
   },
 } as any;
+// Legacy combined takes need current grid provenance before downstream reuse.
+const exportBoard = storyboardScene.manualStoryboard.boards[0].board;
+const exportPage = exportBoard.visualPages[0];
+exportPage.visualTakes[0].videoReferenceSourceHash = buildStoryboardShotGridSourceHash({ board: exportBoard, page: exportPage, shots: storyboardScene.shots });
 assert.deepEqual(buildSceneStoryboardExportItems(storyboardScene), [{
   imageUrl: "https://cdn.example.com/clean-grid.jpg",
   durationSeconds: 7,
