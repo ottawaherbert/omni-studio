@@ -2,18 +2,18 @@ import { useState } from "react";
 import { Modal } from "../ui/Modal";
 import type { SceneDirectorPlan, Shot } from "../../clients/domainTypes";
 
-export function DirectorPlanSummary({ plan, shots, status, candidate = false, onRedesign, onChange, disabled = false }: {
-  plan?: SceneDirectorPlan; shots: Shot[]; status?: string; candidate?: boolean; onRedesign?: () => void; onChange?: (plan: SceneDirectorPlan) => void | Promise<void>; disabled?: boolean;
+export function DirectorPlanSummary({ plan, shots, status, candidate = false, onRedesign, onChange, onCreate, disabled = false }: {
+  onCreate?: (brief: { intent: string; rhythm: string }) => void | Promise<void>; plan?: SceneDirectorPlan; shots: Shot[]; status?: string; candidate?: boolean; onRedesign?: () => void; onChange?: (plan: SceneDirectorPlan) => void | Promise<void>; disabled?: boolean;
 }) {
-  const [draft, setDraft] = useState<SceneDirectorPlan>();
+  const [draft, setDraft] = useState<Pick<SceneDirectorPlan, "intent" | "rhythm" | "applications" | "exceptions">>();
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState("");
-  if (!plan && !shots.length) return null;
+  if (!plan && !shots.length && !onCreate) return null;
   const shotNumber = (id: string) => { const index = shots.findIndex(shot => shot.id === id); return index < 0 ? "已移除" : String(index + 1); };
   return <section className="my-3 min-w-0 border-b border-border-soft/30 pb-3 text-xs" aria-label="本场导演方案">
     <div className="flex flex-wrap items-center justify-between gap-2">
-      <span className="font-semibold text-text-primary">本场拍法{plan ? ` · ${plan.skillTitle}${plan.skillRevision ? ` v${plan.skillRevision}` : ""}` : " · 当前镜头"}{candidate ? " · 候选" : ""}</span>
-      <div className="flex flex-wrap gap-3">{plan && onChange && <button type="button" className="text-gold hover:underline" disabled={disabled} onClick={() => { setDraft(structuredClone(plan)); setError(""); }}>编辑本场方案</button>}{onRedesign && <button type="button" disabled={disabled} onClick={onRedesign} className="text-gold hover:underline disabled:opacity-50">重新设计本场</button>}</div>
+      <span className="font-semibold text-text-primary">本场拍法{plan ? ` · ${plan.skillTitle}` : shots.length ? " · 当前镜头" : " · 场面筹备"}{candidate ? " · 候选" : ""}</span>
+      <div className="flex flex-wrap gap-3">{!plan && onCreate && <button type="button" className="text-gold hover:underline" disabled={disabled} onClick={() => { setDraft({ intent: "", rhythm: "", applications: [], exceptions: [] }); setError(""); }}>编写本场方案</button>}{plan && onChange && <button type="button" className="text-gold hover:underline" disabled={disabled} onClick={() => { setDraft(structuredClone(plan)); setError(""); }}>编辑本场方案</button>}{onRedesign && <button type="button" disabled={disabled} onClick={onRedesign} className="text-gold hover:underline disabled:opacity-50">重新设计本场</button>}</div>
     </div>
     {status === "director_changed" && <p className="mt-2 leading-5 text-amber-600 dark:text-amber-400">导演选择已更新，现有镜头继续采用原拍法。重新设计并采用候选后使用新导演。</p>}
     {status === "source_changed" && <p className="mt-2 leading-5 text-amber-600 dark:text-amber-400">剧本、形象或画风依据有变化，请核对本场拍法。</p>}
@@ -35,8 +35,8 @@ export function DirectorPlanSummary({ plan, shots, status, candidate = false, on
         </div>)}
         <p className="text-text-muted">方案说明拍摄意图。声音事件随分镜排入待制作音轨；画面、声音和剪辑效果以实际素材为准。</p>
       </div>
-    </details> : <p className="mt-2 leading-5 text-text-muted">现有镜头可直接编辑和继续制作，不需要选择导演 Skill。</p>}
-    {draft && <Modal isOpen title="编辑本场方案" size="lg" onClose={() => { if (!saving) setDraft(undefined); }} closeOnBackdrop={false} footer={<div className="flex gap-3"><button disabled={saving} onClick={() => setDraft(undefined)}>取消</button><button className="rounded-md bg-gold px-3 py-2 font-bold text-black disabled:opacity-50" disabled={saving || !draft.intent.trim()} onClick={async () => { setSaving(true); try { await onChange?.(draft); setDraft(undefined); } catch (e) { setError(String(e)); } finally { setSaving(false); } }}>保存方案</button></div>}>
+    </details> : <p className="mt-2 leading-5 text-text-muted">可先记录观看重点与节奏，后续制作沿用本场方案。</p>}
+    {draft && <Modal isOpen title="编辑本场方案" size="lg" onClose={() => { if (!saving) setDraft(undefined); }} closeOnBackdrop={false} footer={<div className="flex gap-3"><button disabled={saving} onClick={() => setDraft(undefined)}>取消</button><button className="rounded-md bg-gold px-3 py-2 font-bold text-black disabled:opacity-50" disabled={saving || !draft.intent.trim()} onClick={async () => { setSaving(true); try { if (plan) await onChange?.({ ...plan, ...draft }); else await onCreate?.({ intent: draft.intent, rhythm: draft.rhythm }); setDraft(undefined); } catch (e) { setError(String(e)); } finally { setSaving(false); } }}>保存方案</button></div>}>
       <div className="space-y-3 text-xs text-text-secondary">
         <p>这里修改本场表达意图和方法取舍；具体拍法请在各镜头中编辑。已有素材保留。</p>
         <label className="block">观看重点<textarea className="mt-1 min-h-20 w-full rounded-md border border-border-soft bg-bg-primary p-2" value={draft.intent} onChange={e => setDraft({ ...draft, intent: e.target.value })} /></label>

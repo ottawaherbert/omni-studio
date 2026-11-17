@@ -1,6 +1,9 @@
+import type {ScriptOperation} from './schema';
 import { CONVERSATION_CONTRACT } from './conversation';
 
-export const SCRIPT_TASK_CONTRACTS = {
+export const SCRIPT_TASK_CONTRACTS: Record<ScriptOperation,string> = {
+  story_outline: '仅替换 outlineTarget 指定故事的大纲，先阅读其 text 与本范围资料，不修改其他故事、季、全剧大纲或正文。JSON: {"summary":"修改理由","outline":"本故事完整大纲"}。',
+  season_outline: '仅替换 outlineTarget 指定季的大纲，先阅读其 text 与本季资料，保留其他季、故事、全剧大纲和分集正文。JSON: {"summary":"修改理由","outline":"本季完整大纲"}。',
   text_rewrite: '仅改写 selectedText 指定的原文范围，不输出未选中的上下文。保留剧本格式（对白使用姓名独占一行，下一行写对白）。JSON: {"summary":"修改理由","replacement":"替换选中文字"}。',
   consult: CONVERSATION_CONTRACT,
   concept: '提供可选的故事前提表达，尊重已有方向，不强制危机或反派。JSON: {"summary":"建议依据","suggestions":[{"title":"方案名","content":"故事前提"}]}。1–5 个方案，只替换前提字段。',
@@ -16,5 +19,7 @@ export const SCRIPT_TASK_CONTRACTS = {
   board_plan: '根据全剧大纲提出各单元分场；只填入空白单元，保留已有内容。JSON: {"summary":"规划理由","units":[{"unitIndex":1,"title":"标题","summary":"剧情摘要","scenes":[{"title":"场景","purpose":"这一场发生什么"}]}]}。',
   ending: '提出可选的本单元结尾安排。JSON: {"summary":"建议依据","choices":[{"title":"方案","content":"具体结尾事件"}]}。',
   scene_turn: '提出可选的本场推进方向，不改正文。JSON: {"summary":"建议依据","choices":[{"title":"方案","content":"本场具体事件","extra":{"purpose":"发生什么","entryState":"可选入场状态","exitState":"可选结束变化"}}]}。',
-  review: '依据作者要求及本次所选 Skill 审阅当前场。其他场的分场信息只作衔接背景，不声称检查了未读取的正文。问题必须引用目标场景 ID，给出原文依据、不确定性与建议；无问题可填空数组。只读审阅，不打总分、不宣称创作质量通过。JSON: {"summary":"本场观察","findings":[{"sceneId":"目标场景 ID","issue":"原文依据与问题","suggestion":"修改建议"}]}。',
+  review: '依据作者要求及本次所选 Skill 审阅 reviewSceneIds 指定的正文。bodyCoverage 明确本批读取范围，其他场只作背景，不声称检查了未读取的正文。问题必须引用本批场景 ID，给出原文依据、不确定性与建议；无问题可填空数组。只读审阅，不打总分、不宣称创作质量通过。JSON: {"summary":"本次所选场景的观察","findings":[{"sceneId":"目标场景 ID","issue":"原文依据与问题","suggestion":"修改建议"}]}。',
 };
+
+export const OUTLINE_RANGE_CONTRACT = '仅替换 outlineTarget.selectedRange 的原文。范围外全文仅供参考，不能输出进 content；不修改目录、场序、场景关联或所属单元。JSON: {"summary":"修改理由","content":"本次区间的完整替换文本","nodes":null,"beats":[{"id":"本次已有节拍ID","localKey":"beat1","title":"节拍标题","change":"修改后的具体变化","quotes":["content 中能唯一定位的原文"],"unitIds":["沿用原有单元ID"]}]}。选中哪些节拍就完整返回哪些，保留编号和所属单元，不新增或删除；未选择节拍时 beats 为 null。';

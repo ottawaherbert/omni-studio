@@ -1,3 +1,5 @@
+import { assertAudioProductionRequest } from './audioProductionPolicy';
+import { GenerationError } from '../../../packages/domain/src/generation';
 import type { Express } from 'express';
 import fs from 'node:fs/promises';
 import path from 'node:path';
@@ -22,7 +24,8 @@ export function registerSpeechRoutes(app: Express, { mediaAssetsDir }: { mediaAs
       const target = new URL(channel.baseUrl.replace(/\/+$/, '') + '/audio/speech');
       const loopback = ['localhost', '127.0.0.1', '[::1]'].includes(target.hostname);
       if (target.username || target.password || target.search || target.hash || (target.protocol !== 'https:' && !(loopback && target.protocol === 'http:'))) throw new Error('音频接口需使用 HTTPS；本机服务可使用 HTTP。');
-      const projectId = input.projectId || 'voice-previews';
+      assertAudioProductionRequest(input, mediaAssetsDir);
+      const projectId = input.target?.projectId || input.projectId || 'voice-previews';
       if (!/^[A-Za-z0-9_-][A-Za-z0-9._-]{0,127}$/.test(projectId)) throw new Error('项目标识无效。');
       const body = speechProviderBody(model.modelId, input);
       const key = model.apiKeyOverride || channel.apiKey || (channel.type === 'openai' && !loopback ? process.env.OPENAI_API_KEY : '') || '';
@@ -55,7 +58,7 @@ export function registerSpeechRoutes(app: Express, { mediaAssetsDir }: { mediaAs
       await fs.writeFile(path.join(directory, name), audio);
       res.json({ url: `/media/${projectId}/${name}` });
     } catch (error) {
-      if (!disconnected.signal.aborted) res.status(400).json({ error: error instanceof Error ? error.message : '语音生成失败' });
+      if (!disconnected.signal.aborted) res.status(error instanceof GenerationError ? error.statusCode : 400).json({ ...(error instanceof GenerationError ? { code: error.code } : {}), error: error instanceof Error ? error.message : '语音生成失败' });
     } finally {
       req.off('aborted', cancelOnClose);
       res.off('close', cancelOnClose);

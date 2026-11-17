@@ -1,10 +1,11 @@
+import {outlineTaskContext,type OutlineTaskScope} from './outlineTask';
 import { SCRIPT_OPERATIONS, type MethodBinding, type MethodUsage, type ScriptOperation, type ScriptProject, type DeliveryUnit } from './schema';
 import { writingContext, unitCharacters, unitFacts } from './continuity';
 import type { SkillDTO } from '../../domain/src/skill';
 import { scopedBrief } from './outlines';
 import { buildRequiredWritingContext } from './writingContext';
 
-export const OPERATION_LABELS:Record<ScriptOperation,string>={story_outline:'当前故事大纲建议',season_outline:'本季大纲建议',scene:'写作 / 改写本场',text_rewrite:'润色选中文字',consult:'讨论当前故事',concept:'故事前提建议',theme:'主题与问题建议',character:'新人物建议',fact:'故事设定建议',rewrite:'改写选中段落',outline:'故事总纲建议',unit_outline:'本单元大纲建议',unit_outlines:'规划各单元大纲',plan:'补充本单元分场',board_plan:'全剧分场建议',ending:'结尾安排建议',scene_turn:'场景变化建议',review:'审阅当前场'};
+export const OPERATION_LABELS:Record<ScriptOperation,string>={story_outline:'当前故事大纲建议',season_outline:'本季大纲建议',scene:'写作 / 改写本场',text_rewrite:'润色选中文字',consult:'分析当前内容',concept:'故事前提建议',theme:'主题与问题建议',character:'新人物建议',fact:'故事设定建议',rewrite:'改写选中段落',outline:'故事总纲建议',unit_outline:'本单元大纲建议',unit_outlines:'规划各单元大纲',plan:'补充本单元分场',board_plan:'全剧分场建议',ending:'结尾安排建议',scene_turn:'场景变化建议',review:'审阅所选场景'};
 export const INPUT_LABELS={structure:'结构辅助记录',continuity:'连续性辅助记录'};
 export const DEFAULT_METHOD_USAGE:MethodUsage={operations:[...SCRIPT_OPERATIONS],inputs:[],note:''};
 export const methodUsage=(method:MethodBinding):MethodUsage=>method.usage||DEFAULT_METHOD_USAGE;
@@ -33,7 +34,9 @@ export function selectTaskMethods(project:ScriptProject,operation:ScriptOperatio
   });
 }
 
-export function buildScriptTaskContext(project:ScriptProject,unit:DeliveryUnit,operation:ScriptOperation,ids:string[],targetSceneId?:string,reviewSceneIds?:string[]){
+export function buildScriptTaskContext(project:ScriptProject,unit:DeliveryUnit,operation:ScriptOperation,ids:string[],targetSceneId?:string,reviewSceneIds?:string[],target:OutlineTaskScope & {scopeId?:string;seasonId?:string}={}){
+  const outlineTarget=['outline','unit_outline','story_outline','season_outline'].includes(operation)?outlineTaskContext(project,{...target,operation,unitId:unit.id,scopeId:target.scopeId??unit.scopeId,seasonId:target.seasonId??unit.seasonId}):undefined;
+  const planningOptions={includeProjectOutline:operation==='outline',...(outlineTarget&&outlineTarget.owner.kind!=='unit'?{outlineScopeIds:[outlineTarget.owner.id]}:{})};
   const methods=selectTaskMethods(project,operation,ids);
   const inputs=[...new Set(methods.flatMap(m=>methodUsage(m).inputs))];
   const all=operation==='outline'&&project.profile.continuity!=='anthology';
@@ -54,14 +57,15 @@ export function buildScriptTaskContext(project:ScriptProject,unit:DeliveryUnit,o
   };
   // Project settings and the operation's content range are essential; optional methods cannot enlarge the write scope.
   const context:{
-    title:string;profile:ScriptProject['profile'];brief:ReturnType<typeof scopedBrief>;requiredContext:ReturnType<typeof buildRequiredWritingContext>;
+    outlineTarget?:ReturnType<typeof outlineTaskContext>;reviewSceneIds?:string[];title:string;profile:ScriptProject['profile'];brief:ReturnType<typeof scopedBrief>;requiredContext:ReturnType<typeof buildRequiredWritingContext>;
     characters:ScriptProject['characters'];facts:ScriptProject['facts'];
     unit:unknown;otherUnits:unknown[];bodyCoverage:unknown;unregisteredSpeakerNames:string[];seasons?:unknown;storylines?:unknown;continuity?:unknown;
   }={
+    ...(outlineTarget?{outlineTarget}:{}),...(reviewScope?{reviewSceneIds}:{}),
     title:project.title,
     // Only active writing fields enter prompts; archived metadata stays in stored versions.
-    profile:((p)=>({organization:p.organization,continuity:p.continuity,workType:p.workType,genres:p.genres,language:p.language,plannedUnits:p.plannedUnits,targetDurationMs:p.targetDurationMs,toleranceMs:p.toleranceMs,includeCredits:p.includeCredits,aspectRatio:p.aspectRatio,productionMode:p.productionMode}))(project.profile),brief:scopedBrief(project,[unit.id],{includeProjectOutline:operation==='outline'}),
-    requiredContext:buildRequiredWritingContext(project,{unitIds:[unit.id],sceneId:targetSceneId,operation,includeProjectOutline:operation==='outline'}),
+    profile:((p)=>({organization:p.organization,continuity:p.continuity,workType:p.workType,genres:p.genres,language:p.language,plannedUnits:p.plannedUnits,targetDurationMs:p.targetDurationMs,toleranceMs:p.toleranceMs,includeCredits:p.includeCredits,aspectRatio:p.aspectRatio,productionMode:p.productionMode}))(project.profile),brief:scopedBrief(project,[unit.id],planningOptions),
+    requiredContext:buildRequiredWritingContext(project,{unitIds:[unit.id],sceneId:targetSceneId,operation,...planningOptions,...(reviewScope?{readSceneIds:reviewSceneIds}:{})}),
     characters:(all?project.characters:unitCharacters(project,unit)).map(({id,name,bio,scopeId,desire,need,contradiction,arc,voice})=>({id,name,bio,scopeId,desire,need,contradiction,arc,voice})),facts:(all?project.facts:unitFacts(project,unit)).map(({id,text,scopeId,status})=>({id,text,scopeId,status})),
     unit:{index:project.units.findIndex(u=>u.id===unit.id)+1,id:unit.id,title:unit.title,summary:unit.summary,endingHook:unit.endingHook,scopeId:unit.scopeId,seasonId:unit.seasonId,targetDurationMs:unit.targetDurationMs,
       scenes:unit.scenes.map(sceneContext)},

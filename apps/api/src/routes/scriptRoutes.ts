@@ -47,22 +47,9 @@ export function registerScriptRoutes(app:Express,repository:ScriptRepository,res
   app.get('/api/scripts/:id/jobs',(req,res)=>{try{get(req.params.id);res.json({jobs:req.query.operation==='board'?repository.listBoardSuggestionJobs(req.params.id):req.query.operation==='board_plan'?repository.listBoardPlanJobs(req.params.id):repository.listJobs(req.params.id,{unitId:typeof req.query.unitId==='string'?req.query.unitId:undefined,sceneId:typeof req.query.sceneId==='string'?req.query.sceneId:undefined,operation:typeof req.query.operation==='string'?req.query.operation:undefined,status:typeof req.query.status==='string'?req.query.status:undefined,standalone:req.query.standalone==='true',before:typeof req.query.before==='string'?req.query.before:undefined,limit:req.query.limit===undefined?undefined:Number(req.query.limit)})});}catch(e){error(res,e);}});
   app.get('/api/scripts/:id/jobs/:jobId',(req,res)=>{try{get(req.params.id);res.json({job:repository.getJob(req.params.id,req.params.jobId)});}catch(e){error(res,e);}});
   app.get('/api/scripts/:id/jobs/:jobId/input',(req,res)=>{try{get(req.params.id);res.json({project:repository.getJobInput(req.params.id,req.params.jobId)});}catch(e){error(res,e);}});
-  app.get('/api/scripts/:id/agent-runs',(req,res)=>{try{get(req.params.id);res.json({runs:repository.listAgentRuns(req.params.id)});}catch(e){error(res,e);}});
-  app.post('/api/scripts/:id/agent-runs',async(req,res)=>{try{get(req.params.id);const methods=await taskMethods(req.body);res.status(201).json({run:repository.createAgentRun(req.params.id,{...req.body,methodIds:methods.map(m=>m.id)},methods)});}catch(e){error(res,e);}});
-  app.get('/api/scripts/:id/agent-runs/:runId/draft',(req,res)=>{try{get(req.params.id);res.json({project:repository.getAgentDraft(req.params.id,req.params.runId)});}catch(e){error(res,e);}});
-  app.get('/api/scripts/:id/agent-runs/:runId/reviews',(req,res)=>{try{get(req.params.id);res.json({jobs:repository.listAgentReviewJobs(req.params.id,req.params.runId)});}catch(e){error(res,e);}});
-  app.get('/api/scripts/:id/agent-runs/:runId/jobs',(req,res)=>{try{get(req.params.id);res.json({jobs:repository.listAgentJobs(req.params.id,req.params.runId)});}catch(e){error(res,e);}});
-  app.get('/api/scripts/:id/agent-runs/:runId/input',(req,res)=>{try{get(req.params.id);res.json({project:repository.getAgentRunInput(req.params.id,req.params.runId)});}catch(e){error(res,e);}});
-  app.post('/api/scripts/:id/agent-runs/:runId/publish',(req,res)=>{try{get(req.params.id);res.json(repository.publishAgentRun(req.params.id,req.params.runId,req.body.expectedVersion,req.body.expectedPublishedRevision));}catch(e){error(res,e);}});
-  app.post('/api/scripts/:id/agent-runs/:runId/synchronize',(req,res)=>{try{res.json(repository.synchronizeAgentRun(req.params.id,req.params.runId,req.body.expectedVersion,req.body.expectedPublishedRevision));}catch(e){error(res,e);}});
-  app.post('/api/scripts/:id/agent-runs/:runId/steps',(req,res)=>{try{res.status(201).json(repository.createAgentStep(req.params.id,req.params.runId,req.body.expectedVersion,req.body.job));}catch(e){error(res,e);}});
-  app.post('/api/scripts/:id/agent-runs/:runId/jobs/:jobId/claim',(req,res)=>{try{res.json(repository.claimAgentExecution(req.params.id,req.params.runId,req.params.jobId,req.body.owner,req.body.replaceExpired));}catch(e){error(res,e);}});
-  app.post('/api/scripts/:id/jobs/:jobId/renew',(req,res)=>{try{res.json({job:repository.renewAgentExecution(req.params.id,req.params.jobId,req.body.executionId)});}catch(e){error(res,e);}});
-  app.post('/api/scripts/:id/agent-runs/:runId/transition',(req,res)=>{try{get(req.params.id);res.json({run:repository.transitionAgentRun(req.params.id,req.params.runId,req.body)});}catch(e){error(res,e);}});
   app.post('/api/scripts/:id/jobs',async(req,res)=>{try{
     get(req.params.id);
-    // Existing Agent steps must use the run's frozen methods, even after library changes.
-    if(req.body.agentRunId)return res.status(201).json({job:repository.createJob(req.params.id,req.body)});
+    if(req.body.agentRunId)return res.status(410).json({error:'内部助手已移除，请建立独立写作任务。'});
     const methods=await taskMethods(req.body);
     res.status(201).json({job:repository.createJob(req.params.id,{...req.body,methodIds:methods.map(m=>m.id)},methods)});
   }catch(e){error(res,e);}});

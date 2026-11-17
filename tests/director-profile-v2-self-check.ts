@@ -91,7 +91,9 @@ assert.ok(voice.includes('低声落句') && !voice.includes('右侧窗框') && !
 // Disabling the optional plugin preserves decisions already adopted with the shots.
 const off = { ...project, creativeDirection: { director: { mode: 'off' as const } } };
 assert.ok(renderProductionCreativeContext(off, scope, 'image').includes('右侧窗框'));
-assert.equal(normalizeDirectorPlan({ project: off, episode, scene, rawShots: [{}], shots }).plan, undefined);
+const retainedBrief=normalizeDirectorPlan({ project: off, episode, scene, rawShots: [{}], shots }).plan;
+assert.equal(retainedBrief?.intent,scene.manualStoryboard!.directorPlan!.intent);
+assert.deepEqual(retainedBrief?.applications,[],'an inherited brief does not claim newly applied plugin methods');
 const manualScene = { ...scene, manualStoryboard: undefined };
 assert.ok(renderProductionCreativeContext(off, { ...scope, scene: manualScene, dialogueLineIndex: 0 }, 'performance').includes('低声落句'), 'author instructions execute without a plugin or director plan');
 assert.equal(renderProductionCreativeContext({ characters: [], assets: [] }, {}, 'planning'), '');

@@ -5,7 +5,6 @@ import { buildStoryboardBatchSceneReadModel, buildStoryboardTeamPromptContext } 
 import { buildProductionPreparationGate } from '../src/services/production/productionPreparationGate';
 import { buildProductionPreparationCurrentTask, productionPreparationTabs, resolveProductionSceneTab } from '../src/features/production/preparation/productionPreparationViewModel';
 import { upgradeDirectProductionTemplate } from '../src/config/prompts/directProductionContract';
-import { assistantCapabilityRegistry } from '../src/services/assistant/capabilities';
 
 const fixture = JSON.parse(readFileSync('tests/fixtures/production/simple-preparation/fixture.json', 'utf8')) as Project;
 const episode = structuredClone(fixture.episodes[0]) as Episode;
@@ -39,7 +38,6 @@ assert.equal(buildProductionPreparationCurrentTask({ scene, filmTeam: model.film
 assert.deepEqual(productionPreparationTabs.map(tab => tab.id), ['overview', 'breakdown', 'assets']);
 for (const legacyTab of ['departments', 'review']) assert.equal(resolveProductionSceneTab(legacyTab, scene, episode), 'assets');
 for (const tab of ['assets', 'breakdown', 'departments', 'review']) assert.equal(resolveProductionSceneTab(tab), 'overview', 'empty units must remain on the source overview');
-assert.equal(assistantCapabilityRegistry.some(item => item.id === 'production.auto_prepare_unit' || item.id === 'production.adopt_preparation_batch'), false, 'assistant cannot reintroduce the removed report workflow');
 const customPrompt = '作者自定义风格：黑白默片。\n【已确认的制片筹备结果】\n{{productionTeamContext}}';
 const upgraded = upgradeDirectProductionTemplate(customPrompt);
 assert.ok(upgraded.includes('作者自定义风格：黑白默片。'));

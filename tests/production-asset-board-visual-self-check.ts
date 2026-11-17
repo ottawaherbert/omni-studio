@@ -89,8 +89,8 @@ const sceneBoard = plan.sceneBoards[0];
 assert.ok(sceneBoard.layoutContract.requiredViews.some((item) => item.includes("俯视")));
 assert.ok(sceneBoard.layoutContract.requiredViews.some((item) => item.includes("机位")));
 const propBoard = plan.propBoards[0];
-assert.ok(propBoard.layoutContract.requiredViews.includes("顶视"));
-assert.ok(propBoard.layoutContract.requiredStudies.some((item) => item.includes("手持")));
+assert.ok(propBoard.layoutContract.requiredViews.some(item => item.includes("剧情操作")));
+assert.ok(propBoard.layoutContract.requiredStudies.some(item => item.includes("不固定六面")));
 const variantBoard = plan.variantBoards.find((item) => item.assetType === "character")!;
 assert.match(variantBoard.layoutContract.contractId, /variant\.character/);
 assert.ok(variantBoard.layoutContract.forbiddenContent.includes("前后对比"));
@@ -104,25 +104,33 @@ const executionPrompt = buildProductionAssetBoardExecutionPrompt(project, charac
 assert.match(executionPrompt, /输出一张复合参考图/);
 assert.doesNotMatch(executionPrompt, /16:9|9:16|横向构图|竖向构图/);
 assert.match(executionPrompt, /正面全身、侧面全身、背面全身/);
-assert.match(executionPrompt, /至少 8 格表情与眼神矩阵/);
+assert.match(executionPrompt, /不设固定数量/);
+assert.doesNotMatch(executionPrompt, /至少 8 格|至少 3 个轮廓/);
 assert.doesNotMatch(executionPrompt, /普通角色参考表/);
 
 const cleanCharacterPrompt = buildProductionAssetBoardExecutionPrompt(project, characterBoard, "clean_reference");
 assert.doesNotMatch(cleanCharacterPrompt, /asset-reference\./);
-assert.match(cleanCharacterPrompt, /严格 90 度侧面全身视图/);
-assert.match(cleanCharacterPrompt, /正面上半身身份特写/);
+assert.match(cleanCharacterPrompt, /严格90度侧面身体全身图/);
+assert.match(cleanCharacterPrompt, /颈部以上省略头部/);
 assert.match(cleanCharacterPrompt, /不添加标题栏、页脚、注释区/);
 assert.match(cleanCharacterPrompt, /铭文、编号、招牌、印刷内容和屏幕文字，保持原文/);
 assert.doesNotMatch(cleanCharacterPrompt, /表情与眼神矩阵/);
+const propProductionPrompt = buildProductionAssetBoardExecutionPrompt(project, propBoard, "production_board");
+assert.match(propProductionPrompt, /仅在合同要求的持握\/比例研究小区允许局部中性手部/);
+assert.match(propProductionPrompt, /不能出现完整演员/);
+const propCleanPrompt = buildProductionAssetBoardExecutionPrompt(project, propBoard, "clean_reference");
+assert.doesNotMatch(propCleanPrompt, /允许局部中性手部/);
+assert.match(propCleanPrompt, /手/);
 
 // Copy/manual preview and API generation must use the same current style, even for saved briefs.
 const styledProject = structuredClone(project);
+styledProject.characters[0].characterReferenceLayouts = {body_face:{prompt:"作者保存的去头身体要求"}};
 styledProject.visualStyleLock = { ...project.visualStyleLock!, stylePrompt: "宫崎骏风格" };
 for (const mode of ["clean_reference", "production_board"] as const) {
   const board = { ...characterBoard, cleanPrompt: "作者保存的纯净三视图要求" };
   const preview = buildProductionAssetBoardPromptPreview(styledProject, board, mode);
   assert.match(preview, /【风格提示词】\n宫崎骏风格/);
-  if (mode === "clean_reference") assert.match(preview, /作者保存的纯净三视图要求/);
+  if (mode === "clean_reference") {assert.match(preview, /作者保存的去头身体要求/);assert.match(preview,/颈部以上省略头部/);assert.doesNotMatch(preview,/作者保存的纯净三视图要求/);}
   const compiled = compileImageGenerationRequest({
     promptCore: productionAssetBoardPromptCore(preview, styledProject, board), aspectRatio: "16:9",
     visualStyleProjection: buildProductionAssetImageVisualStyleProjection({ project: styledProject, asset: board }),
@@ -133,6 +141,7 @@ for (const mode of ["clean_reference", "production_board"] as const) {
 }
 const updatedProfileProject = structuredClone(styledProject);
 updatedProfileProject.characters[0].visualIdentity = "作者新确认的短发，银色发夹";
+updatedProfileProject.characters[0].characterReferenceLayouts = {body_face:{prompt:"作者手写：保持四栏纯净版式"}};
 const savedBeforeProfileEdit = { ...characterBoard, cleanPrompt: productionAssetBoardPromptCore(buildProductionAssetBoardPromptPreview(styledProject, { ...characterBoard, cleanPrompt: "作者手写：保持四栏纯净版式" }, "clean_reference"), styledProject, characterBoard) };
 const afterProfileEdit = buildProductionAssetBoardPromptPreview(updatedProfileProject, savedBeforeProfileEdit, "clean_reference");
 assert.match(afterProfileEdit, /作者手写：保持四栏纯净版式/);
@@ -157,8 +166,9 @@ assert.match(cleanScenePrompt, /不做拼贴、不分栏/);
 
 const cleanPropPrompt = buildProductionAssetBoardExecutionPrompt(project, propBoard, "clean_reference");
 assert.doesNotMatch(cleanPropPrompt, /asset-reference\./);
-assert.match(cleanPropPrompt, /三分之四英雄视角/);
-assert.match(cleanPropPrompt, /同中心线/);
+assert.match(cleanPropPrompt, /主视图/);
+assert.match(cleanPropPrompt, /不固定四栏/);
+assert.match(cleanPropPrompt, /整体视图同尺度/);
 for (const promptCore of [cleanCharacterPrompt, cleanScenePrompt, cleanPropPrompt]) {
   assert.doesNotThrow(() => compileImageGenerationRequest({ promptCore, aspectRatio: "16:9" }));
 }
@@ -173,7 +183,7 @@ assert.doesNotMatch(qaPrompt, /16:9|9:16/);
 assert.match(qaPrompt, /普通肖像、单张气氛图、剧情截图/);
 assert.match(qaPrompt, /必需视图/);
 const cleanQaPrompt = buildProductionAssetBoardVisualQAPrompt({ project, board: characterBoard, referenceMode: "clean_reference" });
-assert.match(cleanQaPrompt, /纯净三视图/);
+assert.match(cleanQaPrompt, /去头身体三视图＋脸部特写/);
 assert.match(cleanQaPrompt, /没有额外资料标题、标尺、色板文字/);
 assert.match(cleanQaPrompt, /不得因它可读而要求删除/);
 assert.match(cleanQaPrompt, /左眉尾细疤/, "asset QA must receive the actual canonical identity facts, not only generic layout rules");
@@ -271,8 +281,8 @@ const replacedPending = stageProductionAssetBoardReferenceCandidate({
 });
 assert.deepEqual(
   replacedPending.manualProductionAssets.pendingReferences?.map((candidate) => candidate.id),
-  ["candidate-character-v2"],
-  "one board/reference slot must expose only its newest pending candidate",
+  ["candidate-character-v1", "candidate-character-v2"],
+  "new candidates must retain older pending versions for comparison",
 );
 const projectWithPending = { ...project, ...pendingUpdates } as Project;
 const manualExecution = {
@@ -303,6 +313,8 @@ assert.equal(manualAdopted.manualProductionAssets.references?.[0]?.modelId, "man
 const adoptedPending = adoptProductionAssetBoardReferenceCandidate({
   project: projectWithPending,
   candidateId: "candidate-character-v1",
+  adoptedBy: "external_agent",
+  review: { mode: "manual", status: "approved", reviewer: "external_agent", notes: "逐视图检查同一角色与全部研究区。", reviewedAt: 12 },
   adoptedAt: 12,
 });
 assert.equal(adoptedPending.characters[0].boardImageUrl, "data:image/png;base64,pending-character-board");
@@ -311,6 +323,9 @@ assert.equal(adoptedPending.manualProductionAssets.references?.[0]?.candidateId,
 assert.equal(adoptedPending.manualProductionAssets.references?.[0]?.generatedAt, 11);
 assert.equal(adoptedPending.manualProductionAssets.references?.[0]?.adoptedAt, 12);
 assert.equal(adoptedPending.manualProductionAssets.references?.[0]?.sourceReview?.status, "current");
+assert.equal(adoptedPending.manualProductionAssets.references?.[0]?.adoptedBy, "external_agent");
+assert.equal(adoptedPending.manualProductionAssets.references?.[0]?.review?.status, "approved");
+assert.equal(adoptedPending.manualProductionAssets.references?.[0]?.review?.reviewer, "external_agent");
 
 const identityChangedProject = {
   ...projectWithPending,
@@ -436,7 +451,7 @@ assert.equal(updatedCharacter?.boardImageUrl, "data:image/png;base64,character-b
 assert.equal(updatedCharacter?.cleanReferenceImageUrl, "data:image/png;base64,clean-character-reference");
 assert.equal(updatedCharacter?.multiViewUrl, "data:image/png;base64,clean-character-reference", "legacy model-reference consumers should receive the clean view");
 assert.equal(cleanUpdates.manualProductionAssets.references?.length, 2, "production and clean references must keep separate audits");
-assert.equal(cleanUpdates.manualProductionAssets.references?.find((item) => item.referenceMode === "clean_reference")?.layoutContractId, "asset-reference.character.clean-turnaround.v1");
+assert.equal(cleanUpdates.manualProductionAssets.references?.find((item) => item.referenceMode === "clean_reference")?.layoutContractId, "asset-reference.character.body-face.v1");
 const updatedPlan = buildVideoStoryboardAssetBoardPlan({ ...projectWithProductionBoard, ...cleanUpdates } as Project);
 const updatedBoard = updatedPlan.characterBoards.find((item) => item.assetId === characterBoard.assetId);
 assert.equal(updatedBoard?.productionReferenceImageUrl, "data:image/png;base64,character-board");
@@ -676,7 +691,7 @@ for (const relativePath of [
   "src/hooks/useManualProductionAssetImages.ts",
 ]) {
   const source = fs.readFileSync(path.join(process.cwd(), relativePath), "utf8");
-  assert.match(source, /buildProductionAssetImageVisualStyleProjection\(\{/);
+  if (source.includes("generateAIImage(")) assert.match(source, /buildProductionAssetImageVisualStyleProjection\(\{/);
   for (const imageCall of source.split("generateAIImage(").slice(1)) {
     assert.match(
       imageCall.slice(0, imageCall.indexOf("onPromptCompiled")),

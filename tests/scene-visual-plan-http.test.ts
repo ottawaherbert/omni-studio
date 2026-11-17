@@ -1,0 +1,40 @@
+import assert from 'node:assert/strict';
+import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
+import express from 'express';
+import { emptySceneVisualPlan } from '../src/services/production/sceneVisualPlan';
+const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'omni-scene-plan-http-'));
+process.env.OMNI_DB_PATH = path.join(dir, 'test.db');
+const { db, dbHelpers } = await import('../src/server/db');
+const { registerLegacyProjectRoutes } = await import('../src/server/routes/legacyProjectRoutes');
+const app = express();app.use(express.json());registerLegacyProjectRoutes(app);
+const server = app.listen(0, '127.0.0.1');
+await new Promise<void>(resolve => server.once('listening', resolve));
+const base = `http://127.0.0.1:${(server.address() as import('node:net').AddressInfo).port}`;
+const route = '/api/projects/visual-plan-test/episodes/episode';
+const request = async (suffix = '', body?: unknown) => {
+  const result = await fetch(base + route + suffix, { method: body ? 'PUT' : 'GET', headers: {'Content-Type':'application/json'}, ...(body ? {body:JSON.stringify(body)} : {}) });
+  return { status: result.status, body: await result.json() };
+};
+try {
+  dbHelpers.saveProject({ id:'visual-plan-test', title:'隔离流程验证', type:'movie', episodes:[{id:'episode', title:'测试集', scenes:[{id:'scene', title:'测试场', shots:[{id:'shot',duration:6,videoUrl:'/media/keep.mp4'}], manualStoryboard:{schemaVersion:'manual-storyboard.v1',boards:[],updatedAt:1}}]}] });
+  const original = (await request()).body;
+  const edit = structuredClone(original);
+  edit.scenes[0].visualPlan = { ...emptySceneVisualPlan(), geography:'左门右窗', breakAfterShotIds:[], overview:{ imageUrl:'/media/overview.png',width:1920,height:1080,columns:1,rows:1,shotIds:['shot'] } };
+  edit.scenes[0].manualStoryboard.unitHistory = [{at:2,boards:[{id:'old-unit',shotId:'shot', takes:[{id:'keep-take',videoUrl:'/media/keep.mp4',createdAt:1}],updatedAt:1}]}];
+  const saved = await request('', edit);
+  assert.equal(saved.status, 200);
+  const partial = await request('?view=storyboard&sceneId=scene');
+  assert.equal(partial.body.scenes[0].visualPlan.geography, '左门右窗');
+  assert.equal(partial.body.scenes[0].manualStoryboard.unitHistory[0].boards[0].takes[0].videoUrl, '/media/keep.mp4');
+  partial.body.scenes[0].visualPlan.exitState = '门已打开';
+  assert.equal((await request('', partial.body)).status, 200);
+  assert.equal((await request('', original)).status, 409);
+  const final = (await request()).body;
+  assert.equal(final.scenes[0].shots[0].videoUrl, '/media/keep.mp4');
+  assert.equal(final.scenes[0].visualPlan.overview.imageUrl, '/media/overview.png');
+  assert.equal(final.scenes[0].visualPlan.exitState, '门已打开');
+  assert.equal(final.scenes[0].manualStoryboard.unitHistory.length, 1);
+  console.log('Scene plan HTTP round trip, partial view merge, media history and stale-write protection passed.');
+} finally { await new Promise<void>(resolve => server.close(() => resolve())); db.close(); fs.rmSync(dir,{recursive:true,force:true}); }

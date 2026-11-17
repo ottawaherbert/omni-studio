@@ -477,7 +477,13 @@ assert.ok(pageSource.includes("ManualStoryboardReviewModal"));
 assert.equal(pageSource.includes("ManualStoryboardStatusBar"), false);
 assert.equal(pageSource.includes("ManualStoryboardQAControls"), false);
 assert.equal(pageSource.includes("分镜与提示词检查"), false);
-assert.equal(pageSource.includes("rebaseManualStoryboardAfterAuthorEdit"), false, "the page must not silently confirm downstream prompt layers");
+// Adding an empty shot already rebases the workspace without confirming layers.
+// Check those flags rather than rejecting the safe rebase call by name.
+for (const [, args] of pageSource.matchAll(/rebaseManualStoryboardAfterAuthorEdit\(\{([\s\S]*?)\}\)/g)) {
+  for (const field of ["confirmShotPlan", "confirmImagePrompts", "confirmVideoPrompts"]) {
+    assert.match(args, new RegExp(`${field}:\\s*false`), "the page must not silently confirm downstream layers");
+  }
+}
 assert.ok(
   pageSource.includes("if (hasActiveStoryboardGeneration)"),
   "batch deletion must refuse to race an in-flight storyboard generation",

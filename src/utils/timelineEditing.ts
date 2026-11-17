@@ -12,7 +12,7 @@ export const splitTimelineAudio = (track: AudioTrack, offset: number, id: string
   if (!(offset > 0 && offset < track.duration)) throw new Error('分割点必须在音轨内部。');
   return [
     { ...track, duration: offset },
-    { ...track, id, startTime: track.startTime + offset, duration: track.duration - offset, sourceStartSeconds: (track.sourceStartSeconds || 0) + offset, shotId: undefined },
+    { ...track, id, startTime: track.startTime + offset, duration: track.duration - offset, sourceStartSeconds: (track.sourceStartSeconds || 0) + offset, shotId: undefined, ...(track.clipAnchor ? { clipAnchor: { ...track.clipAnchor, offsetSeconds: track.clipAnchor.offsetSeconds + offset } } : {}) },
   ];
 };
 

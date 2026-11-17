@@ -9,14 +9,12 @@ const clientSource = read("apps/web/src/clients/skillClient.ts");
 const routeSource = read("src/server/routes/skillRoutes.ts");
 const skillDraftSource = read("src/components/SkillDraftAssistant.tsx");
 const genericPromptEditorSource = read("src/components/PromptEditorModal.tsx");
-const imagePromptSource = read("src/components/ImagePromptModal.tsx");
 const skillForgeSource = read("src/components/SkillForge.tsx");
 const skillOverrideSource = read("src/components/SkillOverrideModal.tsx");
 
 const promptBuilderSource = read("src/lib/promptBuilder.ts");
 const studioAISource = read("src/hooks/useStudioAI.ts");
 const gameEditorHelpersSource = read("src/utils/gameEditorHelpers.ts");
-const bibleAISource = read("src/hooks/useBibleAI.ts");
 
 const shotAnalysisSource = read("src/pages/ShotAnalysis.tsx");
 const universalSkillTextSource = read("src/utils/universalSkillText.ts");
@@ -66,8 +64,6 @@ assert.equal(genericPromptEditorSource.includes("风格与类型指令"), false,
 assert.equal(genericPromptEditorSource.includes("project_creative_styles"), false, "generic PromptEditorModal must not inject old project creative style XML");
 assert.equal(skillDtoSource.includes("promptModifiers"), false, "universal SkillDTO must not expose old structured prompt modifiers");
 assert.equal(skillDtoSource.includes("formatCompatibility"), false, "universal SkillDTO must not expose old format compatibility");
-assert.equal(imagePromptSource.includes("promptModifiers?.imageAppendedTags"), false, "ImagePromptModal must inject universal Skill content, not old image appended tags");
-assert.equal(imagePromptSource.includes("极高优先级指令"), false, "ImagePromptModal must not turn Skills into hidden override directives");
 assert.equal(skillForgeSource.includes("StyleSkill"), false, "Settings SkillForge must not keep the old StyleSkill editor");
 assert.equal(skillForgeSource.includes("generateAIContent"), false, "Settings SkillForge must not keep old structured AI Skill generation");
 assert.equal(skillOverrideSource.includes("useVideoAnalysisStore"), false, "Scene Skill override must not mix video-analysis DNA into universal Skills");
@@ -90,7 +86,6 @@ assert.equal(studioAISource.includes("promptModifiers?.imageAppendedTags"), fals
 assert.equal(studioAISource.includes("promptModifiers?.videoAppendedTags"), false, "Studio video generation must consume universal Skill text");
 assert.equal(gameEditorHelpersSource.includes("skill.narrative"), false, "Game editor bible must not split Skill narrative fields");
 assert.equal(gameEditorHelpersSource.includes("skill.promptModifiers"), false, "Game editor bible must not split Skill prompt modifiers");
-assert.equal(bibleAISource.includes("sourceType === 'video-analysis'"), false, "Bible AI must not treat video-analysis StyleSkill as character Skill");
 
 assert.equal(universalSkillTextSource.includes("record.name"), false, "Universal Skill text helper must not read legacy name");
 assert.equal(universalSkillTextSource.includes("record.description"), false, "Universal Skill text helper must not read legacy description");

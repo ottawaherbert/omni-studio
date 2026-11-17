@@ -20,7 +20,6 @@ import toast from 'react-hot-toast';
 import {
   applyStateEffects,
   buildInteractiveStoryUnits,
-  bindingScriptSceneRefs,
   createInitialStateContext,
   evaluatePredicate,
   hasNodeCapability,
@@ -37,6 +36,7 @@ import {
   type RuntimeStateContext,
 } from '../clients/interactiveProductionClient';
 import { InteractivePlayerServices } from '../components/interactive/InteractivePlayerServices';
+import { runtimeBuildHasSourceChanges } from '../domains/interactive/runtime/runtimeBuildSourceReview';
 
 const dramaticFunctionLabels = {
   exposition: '故事开始',
@@ -177,13 +177,7 @@ export default function InteractivePlaytestPlayer() {
   const savePolicy = playerRules?.savePolicy || 'manual_save';
   const failStatePolicy = playerRules?.failStatePolicy || 'retry';
   const timedChoiceOption = playerRules?.accessibilitySettings.timedChoiceOption || 'standard';
-  const isHistoricalBuild = Boolean(runtimeBuild && aggregate && (
-    runtimeBuild.graphVersionId !== aggregate.graph.id
-    || runtimeBuild.stateSchemaVersionId !== aggregate.stateSchema.id
-    || JSON.stringify(runtimeBuild.experienceSpecSnapshot) !== JSON.stringify(aggregate.experienceSpec.data)
-    || runtimeBuild.nodeManifests.some((manifest) => JSON.stringify(bindingScriptSceneRefs(manifest)) !== JSON.stringify(bindingScriptSceneRefs(aggregate.bindings.find((binding) => binding.nodeId === manifest.nodeId && binding.slot === 'main'))))
-    || aggregate.bindings.some((binding) => binding.sourceReview?.status === 'review_recommended')
-  ));
+  const isHistoricalBuild = Boolean(runtimeBuild && aggregate && runtimeBuildHasSourceChanges(runtimeBuild, aggregate));
 
   const requiredContentNodes = useMemo(
     () => aggregate?.graph.nodes.filter(nodeRequiresMainContent) || [],
@@ -765,7 +759,7 @@ export default function InteractivePlaytestPlayer() {
       </header>
 
       {!standalone && (isHistoricalBuild || (runtimeBuild?.kind === 'structure_preview' && canCreateFormalBuild)) && <section className="relative z-30 flex shrink-0 flex-wrap items-center justify-between gap-3 border-b border-amber-500/30 bg-bg-surface px-6 py-3 text-xs text-text-primary">
-        <p>当前显示已保存的试玩快照。可使用最新故事、规则与已确认剧本重新开始。</p>
+        <p>当前显示已保存的试玩快照。可使用最新故事、规则与已确认剧本和画面重新开始。</p>
         <button type="button" disabled={isCreatingBuild} onClick={() => void createPreviewBuild()} className="shrink-0 rounded-xl border border-border-soft/40 px-3 py-2 font-bold text-gold disabled:opacity-40">{isCreatingBuild ? '正在准备当前内容…' : '用当前内容重新准备'}</button>
       </section>}
 

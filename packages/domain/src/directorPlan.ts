@@ -1,4 +1,5 @@
-/** Director decisions are adopted with the shots, never a second screenplay. */
+import type { BeatDirection, ProductionRequirement } from "./productionCollaboration";
+/** Scene decisions may precede shots; screenplay and shot facts keep their own owners. */
 export interface SceneDirectorPlan {
   schemaVersion: "scene-director.v1";
   id: string;
@@ -8,6 +9,9 @@ export interface SceneDirectorPlan {
   skillTitle: string;
   skillRevision?: number;
   assetIds: string[];
+  requirements?: ProductionRequirement[];
+  beatDirections?: BeatDirection[];
+  assumptions?: string[];
   intent: string;
   rhythm: string;
   applications: Array<{

@@ -1,22 +1,21 @@
 import {AddEpisodeDialog} from './components/AddEpisodeDialog';
 import {previewNextEpisode,applyEpisodePreview} from '../../../../../packages/script/src/episodeDevelopment';
-import {ScriptAnalysisContext,ScriptAnalysisOutlet,type ScriptAnalysisEntry,type AnalysisSceneSource} from './components/ScriptAnalysisView';
-import type {AnalysisEvidenceLocation} from './components/StructureAnalysisCard';
+import type {SceneEvidenceSource as AnalysisSceneSource,AnalysisEvidenceLocation} from './scriptEvidence';
 import {bodyEvidenceSelection} from './scriptAnalysisNavigation';
 import {ScenePlanningView} from './components/ScenePlanningView';
 import React, { useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { useSearchParams, useLocation, useNavigate } from 'react-router-dom';
-import { 
+import {
   ArrowLeft, LayoutGrid, Edit3, Radar, Download,
   Layers, X, ChevronDown, Check, Sparkles, AlertCircle, Clock, Compass, BookOpen
 } from 'lucide-react';
 import { Modal } from '../../../../../src/components/ui/Modal';
 import { scriptClient } from '../../clients/scriptClient';
-import { 
-  type ScriptProject, 
-  type ProjectProfile, 
-  type DeliveryUnit, 
-  type Scene 
+import {
+  type ScriptProject,
+  type ProjectProfile,
+  type DeliveryUnit,
+  type Scene
 } from '../../../../../packages/script/src/schema';
 import { newScene, newUnit, registerDialogueSpeaker, removeScriptScene } from '../../../../../packages/script/src/project';
 import { ScriptExportActions, downloadLocalScript } from './components/ScriptExportActions';
@@ -30,8 +29,7 @@ import { ScriptProjectLibraryPage } from './ScriptProjectLibraryPage';
 import { ScriptReadThrough } from './components/ScriptReadThrough';
 import { ScreenplayEditor } from './components/ScreenplayEditor';
 import { ScriptWorkDirectory,ScriptDirectoryContext } from './components/ScriptWorkDirectory';
-import { ScriptDiscussion } from './components/ScriptDiscussion';
-import { assistantShortcuts, resolveAssistantUnit, type AssistantRequest } from './scriptAssistantShortcuts';
+import { writingTaskShortcuts, resolveTaskUnit, type WritingTaskRequest } from './scriptTaskShortcuts';
 import { StoryGridBoard } from './components/StoryGridBoard';
 import { EpisodeBeatView } from './components/EpisodeBeatView';
 import { ContinuityRadarModal } from './components/ContinuityRadarModal';
@@ -39,11 +37,7 @@ import { StoryBibleView } from './components/StoryBibleView';
 import { WorkflowReviewNotice } from './components/WorkflowReviewNotice';
 import { StoryOutlineView } from './components/StoryOutlineView';
 import { ScriptTiming } from './ScriptTiming';
-import { ScriptAssistant } from './ScriptAssistant';
-import type {ScriptAgentStrategy} from '../../../../../packages/script/src/agent';
-import { scriptConversationClient } from '../../clients/scriptConversationClient';
-import { ScriptDurablePanel } from './ScriptDurablePanel';
-import type { AgentDraftOperation } from '../../../../../packages/script/src/agentScope';
+import { ScriptTaskPanel } from './ScriptTaskPanel';
 import type { ReviewSource,TextSelection, ReviewSceneHandler } from '../../../../../packages/script/src/proposals';
 import type { ScriptOperation } from '../../../../../packages/script/src/schema';
 import { acknowledgeLegacyScriptRecovery, ownsScriptRecoveryLease, readLegacyScriptRecoveries, readScriptRecovery, putScriptRecovery, removeAllScriptDrafts, removeScriptRecoveryIfSame, scriptRecoveryKey, scriptRecoveryWriterKey, ScriptRecoveryConflict, type ScriptDraftSnapshot } from './scriptDraftCache';
@@ -55,10 +49,6 @@ import './script.css';
 import toast from 'react-hot-toast';
 import { APP_BEFORE_NAVIGATE_EVENT } from '../../../../../src/utils/navigationGuard';
 
-const durableStep:Partial<Record<ScriptOperation,AgentDraftOperation>>={
-  scene:'scene_body',rewrite:'replace_blocks',text_rewrite:'replace_selection',concept:'concept',theme:'theme',
-  character:'add_character',fact:'add_fact',outline:'project_outline',unit_outline:'unit_outline',plan:'plan_scenes',
-};
 
 export default function ScriptWorkspace() {
   const location = useLocation();
@@ -118,14 +108,9 @@ export default function ScriptWorkspace() {
   const [blueprintTab, setBlueprintTab] = useState<'blueprint' | 'characters' | 'world'>('blueprint');
   const [activeUnitId, setActiveUnitId] = useState('');
   const [activeSceneId, setActiveSceneId] = useState('');
-  const [analysisEntry,setAnalysisEntry]=useState<ScriptAnalysisEntry|null>(null);
-  const analysisReturnFocus=useRef<HTMLElement|null>(null);
-  const analysisReturnAssistant=useRef(false);
-  const analysisOrigin=useRef<string|undefined>(undefined);
   const [sceneFocus,setSceneFocus]=useState<{sceneId:string;field?:string;quote?:string}>();
   const [bodyFocus,setBodyFocus]=useState<{sceneId:string;source?:AnalysisSceneSource}>();
-  const closeAnalysis=()=>{setAnalysisEntry(null);if(analysisReturnAssistant.current)setAssistantOpen(true);analysisReturnAssistant.current=false;requestAnimationFrame(()=>analysisReturnFocus.current?.isConnected&&analysisReturnFocus.current.focus({preventScroll:true}));};
-  useEffect(()=>{setAnalysisEntry(null);setBodyFocus(undefined);setSceneFocus(undefined);},[projectId]);
+  useEffect(()=>{setBodyFocus(undefined);setSceneFocus(undefined);},[projectId]);
   const [outlineFocus,setOutlineFocus]=useState<{owner:import('../../../../../packages/script/src/outlineGuides').OutlineOwner;start:number;end:number;nodeId?:string}>();
   const [outlineChoice,setOutlineChoice]=useState<'current'|'story'|'project'|'season'|'legacy'>('current'),[outlineTab,setOutlineTab]=useState<'outline'|'beats'|'structure'>('outline');
   const [outlineSeasonId,setOutlineSeasonId]=useState<string>();
@@ -136,17 +121,13 @@ export default function ScriptWorkspace() {
   const [addingEpisode,setAddingEpisode]=useState(false);
   const [isRadarOpen, setIsRadarOpen] = useState(false);
   const [isTimingOpen, setIsTimingOpen] = useState(false);
-  const assistantToggle=useRef<HTMLButtonElement>(null);
-  const closeAssistant=()=>{setAssistantOpen(false);requestAnimationFrame(()=>assistantToggle.current?.focus());};
-  const [isAssistantOpen, setAssistantOpen] = useState(() => window.innerWidth >= 1280);
-  useEffect(()=>{if(isAssistantOpen&&workWidth<960)setTreeOpen(false);},[isAssistantOpen,workWidth]);
-  const [assistantRequest,setAssistantRequest]=useState<AssistantRequest|null>(null);
-  const assistantRequestId=useRef(0);
-  const [legacyTarget,setLegacyTarget]=useState<{unitId:string;sceneId?:string;unitIndices?:number[]}|null>(null);
-  const [legacySubmission,setLegacySubmission]=useState<{id:number;channel:'api'|'external';methodIds:string[]}>();
-  const [assistantMode,setAssistantMode] = useState<'step'|'agent'>('step');
-  const setIsAssistantOpen = (open:boolean) => {setAssistantOpen(open);};
-  const setIsAgentOpen = (open:boolean) => {setAssistantMode(open?'agent':'step');if(open)setAssistantOpen(true);};
+  const taskToggle=useRef<HTMLButtonElement>(null);
+  const closeTask=()=>{setTaskOpen(false);requestAnimationFrame(()=>taskToggle.current?.focus());};
+  const [isTaskOpen, setTaskOpen] = useState(false);
+  useEffect(()=>{if(isTaskOpen&&workWidth<960)setTreeOpen(false);},[isTaskOpen,workWidth]);
+  const [taskRequest,setWritingTaskRequest]=useState<WritingTaskRequest|null>(null);
+  const taskRequestId=useRef(0);
+  const setIsTaskOpen = (open:boolean) => {setTaskOpen(open);};
   const projectMenu = useRef<HTMLDetailsElement>(null);
   useEffect(() => {
     const dismiss = (event:PointerEvent) => {if(projectMenu.current&&!projectMenu.current.contains(event.target as Node))projectMenu.current.open=false;};
@@ -154,18 +135,9 @@ export default function ScriptWorkspace() {
     document.addEventListener('pointerdown',dismiss);document.addEventListener('keydown',escape);
     return ()=>{document.removeEventListener('pointerdown',dismiss);document.removeEventListener('keydown',escape);};
   },[]);
-  const [assistantInitialOperation, setAssistantInitialOperation] = useState<ScriptOperation | null>(null);
-  const [assistantSelection,setAssistantSelection]=useState<TextSelection|undefined>(undefined);
-  const [assistantFocusIssue,setAssistantFocusIssue]=useState('');
-  const [assistantReviewSource,setAssistantReviewSource]=useState<ReviewSource|undefined>(undefined);
+  const [taskReviewSource,setTaskReviewSource]=useState<ReviewSource|undefined>(undefined);
   const [isReadingOpen,setIsReadingOpen]=useState(false);
   const [isOriginalOpen,setIsOriginalOpen]=useState(false);
-  const [agentLaunch,setAgentLaunch]=useState<{strategy:ScriptAgentStrategy;goal:string}|null>(null);
-  const analysisPosition=JSON.stringify([viewMode,activeUnitId,activeSceneId,activeNodeId,outlineChoice,outlineSeasonId]);
-  useEffect(()=>{
-    if(analysisEntry&&analysisOrigin.current!==analysisPosition)setAnalysisEntry(null);
-  },[analysisEntry,analysisPosition]);
-
   const current = useRef(project);
   current.current = project;
   const dirty = Boolean(project && savedCurrent.current && !sameScriptContent(project, savedCurrent.current));
@@ -184,29 +156,19 @@ export default function ScriptWorkspace() {
   const navigateScene=(offset:number)=>{const next=rangeScenes[scenePosition+offset];if(next){setActiveSceneId(next.id);updateUrlParams({sceneId:next.id});}};
   const openAnalysisScene=(unitId:string,sceneId:string,source?:AnalysisSceneSource)=>{
     const target=project?.units.find(unit=>unit.id===unitId)?.scenes.find(scene=>scene.id===sceneId);if(!target)return;
-    setAnalysisEntry(null);setIsReadingOpen(false);setActiveUnitId(unitId);setActiveSceneId(sceneId);setActiveNodeId(target.structureNodeId);
+    setIsReadingOpen(false);setActiveUnitId(unitId);setActiveSceneId(sceneId);setActiveNodeId(target.structureNodeId);
     const view=source?.kind==='SCENE_PLAN'?'board':'studio';setViewMode(view);
     if(source?.kind==='SCENE_PLAN')setSceneFocus({sceneId,field:source.field,quote:source.quote});else setBodyFocus({sceneId,source});
     updateUrlParams({view,unitId,sceneId,nodeId:target.structureNodeId||null});
   };
   const openAnalysisOutline=(unitId:string,source?:AnalysisEvidenceLocation['outline'])=>{
     if(!project?.units.some(unit=>unit.id===unitId))return;
-    setAnalysisEntry(null);setIsReadingOpen(false);setActiveUnitId(unitId);setActiveNodeId(source?.nodeId);setOutlineFocus(source);setOutlineTab('outline');
+    setIsReadingOpen(false);setActiveUnitId(unitId);setActiveNodeId(source?.nodeId);setOutlineFocus(source);setOutlineTab('outline');
     if(source){setOutlineChoice(source.owner.kind==='unit'?'current':source.owner.kind==='project'?'project':source.owner.kind==='season'?'season':'story');if(source.owner.kind==='season')setOutlineSeasonId(source.owner.id);}
     setViewMode('outline');updateUrlParams({view:'outline',unitId,nodeId:source?.nodeId||null});
   };
-  const openAnalysisRequest=(request:Pick<AssistantRequest,'unitId'|'sceneId'|'nodeId'|'stage'|'selection'|'outlineRange'|'scopeId'|'seasonId'>,source?:AnalysisEvidenceLocation)=>{
-    if(source?.outline){openAnalysisOutline(request.unitId,source.outline);return;}
-    if(request.sceneId){openAnalysisScene(request.unitId,request.sceneId,source?.scene??{kind:request.stage==='BODY'?'BODY_BLOCK':'SCENE_PLAN',quote:request.selection?.text});return;}
-    setAnalysisEntry(null);setIsReadingOpen(false);setActiveUnitId(request.unitId);setActiveNodeId(request.nodeId);
-    if(request.stage==='OUTLINE'){
-      const owner={kind:request.seasonId?'season':request.scopeId?(request.scopeId===project?.id?'project':'story'):'unit',id:request.seasonId||request.scopeId||request.unitId} as import('../../../../../packages/script/src/outlineGuides').OutlineOwner;
-      openAnalysisOutline(request.unitId,request.outlineRange?{owner,start:request.outlineRange.start,end:request.outlineRange.end,nodeId:request.nodeId}:undefined);
-      if(!request.outlineRange){setOutlineChoice(owner.kind==='unit'?'current':owner.kind==='project'?'project':owner.kind==='season'?'season':'story');if(owner.kind==='season')setOutlineSeasonId(owner.id);}
-    }else{setViewMode('board');updateUrlParams({view:'board',unitId:request.unitId,nodeId:request.nodeId||null});}
-  };
   useEffect(()=>{
-    if(!bodyFocus||analysisEntry||viewMode!=='studio'||activeScene?.id!==bodyFocus.sceneId||!project||!activeUnit)return;
+    if(!bodyFocus||viewMode!=='studio'||activeScene?.id!==bodyFocus.sceneId||!project||!activeUnit)return;
     const frame=requestAnimationFrame(()=>{
       const editor=workArea.current?.querySelector<HTMLTextAreaElement>('textarea[aria-label="本场正文"]');if(!editor)return;
       const selection=bodyFocus.source?bodyEvidenceSelection(activeScene.blocks,unitCharacters(project,activeUnit),bodyFocus.source):{start:0,end:0,text:''};
@@ -217,26 +179,28 @@ export default function ScriptWorkspace() {
       editor.scrollTop=Math.max(0,line*(parseFloat(getComputedStyle(editor).lineHeight)||25)-editor.clientHeight/2);
       editor.scrollIntoView({block:'nearest'});
     });return()=>cancelAnimationFrame(frame);
-  },[bodyFocus,analysisEntry,viewMode,activeScene?.id]);
-  const legacyUnit=legacyTarget?project?.units.find(item=>item.id===legacyTarget.unitId):activeUnit;
-  const legacyScene=legacyTarget?.sceneId?legacyUnit?.scenes.find(item=>item.id===legacyTarget.sceneId):legacyUnit?.scenes[0];
-  const requestAssistant=(operation:ScriptOperation,request?:string,unitId?:string,selection?:TextSelection,entity?:AssistantRequest['entity'],scopeId?:string,nodeId?:string,explicitSceneId?:string,requestedUnitIndices?:number[])=>{
+  },[bodyFocus,viewMode,activeScene?.id]);
+  const taskUnit=project?.units.find(item=>item.id===taskRequest?.unitId)||activeUnit;
+  const taskScene=taskUnit?.scenes.find(item=>item.id===taskRequest?.sceneId)||(taskUnit?.id===activeUnit?.id?activeScene:undefined);
+  const requestWritingTask=(operation:ScriptOperation,request?:string,unitId?:string,selection?:TextSelection,entity?:WritingTaskRequest['entity'],scopeId?:string,nodeId?:string,explicitSceneId?:string,requestedUnitIndices?:number[],reviewSceneIds?:string[])=>{
     if(!project)return;
-    const targetUnit=resolveAssistantUnit(project,unitId||activeUnit?.id,entity,scopeId);
+    setTaskReviewSource(undefined);
+    const targetUnit=resolveTaskUnit(project,unitId||activeUnit?.id,entity,scopeId);
     if(!targetUnit){toast.error('这条资料尚未对应任何故事单元，请先调整适用范围。');return;}
     const targetScene=targetUnit.scenes.find(item=>item.id===(explicitSceneId||activeSceneId))||targetUnit.scenes[0];
-    const shortcut=assistantShortcuts[operation]||{label:'AI 协助',text:'请基于当前内容提出具体建议。'};
+    if(nodeId||entity)request=`${request||''}\n仅分析所选内容并给出建议，不直接替换。范围：${nodeId||entity?.id}。`;
+    const shortcut=writingTaskShortcuts[operation]||{label:'AI 协助',text:'请基于当前内容提出具体建议。'};
     const stage=['scene','rewrite','text_rewrite'].includes(operation)?'BODY':['plan','board_plan','scene_turn','ending'].includes(operation)?'SCENES':['outline','unit_outline','unit_outlines'].includes(operation)?'OUTLINE':viewMode==='blueprint'?'BLUEPRINT':viewMode==='outline'?'OUTLINE':viewMode==='board'||viewMode==='unit'?'SCENES':'BODY';
     const batchStart=project.units.findIndex(item=>item.id===targetUnit.id)+1;
     const unitIndices=['unit_outlines','board_plan'].includes(operation)?requestedUnitIndices||Array.from({length:Math.min(3,project.profile.plannedUnits-batchStart+1)},(_,i)=>batchStart+i):undefined;
-    setAssistantRequest({id:++assistantRequestId.current,text:request??(unitIndices?`${shortcut.text} 本批仅处理第 ${unitIndices.join('、')} 集，已有内容保留，其他集留待下一批。`:nodeId?`请仅为「${targetUnit.structureNodes?.find(item=>item.id===nodeId)?.title||'所选段落'}」规划分场，保留其他段落和已有正文。`:shortcut.text),label:nodeId?(stage==='OUTLINE'?'当前段落大纲':'段落分场'):scopeId&&project.seasons?.some(season=>season.id===scopeId)?'本季大纲':scopeId&&scopeId!==project.id?'当前故事大纲':shortcut.label,unitId:targetUnit.id,
+    setWritingTaskRequest({id:++taskRequestId.current,text:request??(unitIndices?`${shortcut.text} 本批仅处理第 ${unitIndices.join('、')} 集，已有内容保留，其他集留待下一批。`:nodeId?`请仅为「${targetUnit.structureNodes?.find(item=>item.id===nodeId)?.title||'所选段落'}」规划分场，保留其他段落和已有正文。`:shortcut.text),label:nodeId?(stage==='OUTLINE'?'当前段落大纲':'段落分场'):scopeId&&project.seasons?.some(season=>season.id===scopeId)?'本季大纲':scopeId&&scopeId!==project.id?'当前故事大纲':shortcut.label,unitId:targetUnit.id,
       ...(operation==='consult'&&request?.includes('分析')?{analysis:true}:{}),...(['outline','unit_outline'].includes(operation)&&!nodeId&&!project.seasons?.some(season=>season.id===scopeId)?{outlineStructure:true,outlineSceneOrder:true}:{}),
-      ...((['scene','scene_turn','text_rewrite','rewrite'].includes(operation)||operation==='consult'&&(stage==='BODY'||Boolean(explicitSceneId)))&&targetScene?{sceneId:targetScene.id}:{}),stage,selection,operation,entity,...(unitIndices?{unitIndices}:{}),...(scopeId?{scopeId,...((project.seasons||[]).some(item=>item.id===scopeId)?{seasonId:scopeId}:{})}:{}),...(nodeId?{nodeId}:{})});
-    setAssistantOpen(true);setAssistantMode('step');
+      ...((['scene','scene_turn','text_rewrite','rewrite','review'].includes(operation)||operation==='consult'&&(stage==='BODY'||Boolean(explicitSceneId)))&&targetScene?{sceneId:targetScene.id}:{}),stage,selection,...(reviewSceneIds?{reviewSceneIds}:{}),operation:nodeId||entity?'consult':operation==='outline'&&scopeId&&scopeId!==project.id?(project.seasons?.some(item=>item.id===scopeId)?'season_outline':'story_outline'):operation,entity,...(unitIndices?{unitIndices}:{}),...(scopeId?{scopeId,...((project.seasons||[]).some(item=>item.id===scopeId)?{seasonId:scopeId}:{})}:{}),...(nodeId?{nodeId}:{})});
+    setTaskOpen(true);
   };
-  const requestBeatChange=(request:AssistantRequest)=>{
-    setAssistantRequest({...request,id:++assistantRequestId.current});
-    setAssistantOpen(true);setAssistantMode('step');
+  const requestBeatChange=(request:WritingTaskRequest)=>{
+    setWritingTaskRequest({...request,id:++taskRequestId.current});
+    setTaskOpen(true);
   };
 
 
@@ -553,9 +517,9 @@ export default function ScriptWorkspace() {
     if(!target)return;
     setActiveUnitId(target.id);setActiveSceneId(sceneId);setViewMode('studio');
     updateUrlParams({view:'studio',unitId:target.id,sceneId});
-    setLegacyTarget({unitId:target.id,sceneId});
-    setAssistantFocusIssue(`${issue}\n建议：${suggestion}`);setAssistantInitialOperation(operation);setAssistantReviewSource(source);setLegacySubmission(undefined);
-    setIsAgentOpen(false);setIsAssistantOpen(true);
+    setWritingTaskRequest({id:++taskRequestId.current,unitId:target.id,sceneId,operation,text:issue+'\n建议：'+suggestion,label:'审阅修订',stage:'BODY'});
+    setTaskReviewSource(source);
+    setIsTaskOpen(true);
   };
 
   const navigateTo = (nextParams: Record<string, string>) => {
@@ -717,8 +681,8 @@ export default function ScriptWorkspace() {
         onOpenLibrary={() => navigate(libraryUrl)}
         onCreate={async (title, profile, initialBrief) => {
           const {project: created} = await scriptClient.createProject(title, profile, initialBrief);
-          setAssistantInitialOperation(null);setAssistantSelection(undefined);setAssistantReviewSource(undefined);setAssistantFocusIssue('');
-          setIsAssistantOpen(false);
+          setTaskReviewSource(undefined);
+          setIsTaskOpen(false);
           navigate(projectUrl(created.id, 'blueprint'));
           void loadList().catch(()=>{});
         }}
@@ -805,11 +769,14 @@ export default function ScriptWorkspace() {
 
         {/* Writing stays primary; document utilities live in the project menu. */}
         <div className="flex items-center gap-2 max-lg:w-full max-lg:justify-end shrink-0">
-          <button ref={assistantToggle} type="button" disabled={!editing} aria-expanded={isAssistantOpen} onClick={()=>setAssistantOpen(open=>!open)} className="flex items-center gap-1.5 px-3 py-1.5 text-xs rounded-lg border border-border-primary/30 text-text-secondary hover:text-text-primary disabled:opacity-40"><Sparkles size={13}/>AI 助手</button>
+          <button ref={taskToggle} type="button" disabled={!editing} aria-expanded={isTaskOpen} onClick={()=>setTaskOpen(open=>!open)} className="flex items-center gap-1.5 px-3 py-1.5 text-xs rounded-lg border border-border-primary/30 text-text-secondary hover:text-text-primary disabled:opacity-40"><Sparkles size={13}/>写作任务</button>
           <details ref={projectMenu} className="relative">
             <summary className="flex items-center gap-1.5 px-3 py-1.5 text-xs rounded-lg text-text-secondary hover:text-text-primary cursor-pointer list-none [&::-webkit-details-marker]:hidden" aria-label="作品菜单">作品<ChevronDown size={13}/></summary>
             <div className="absolute right-0 top-full mt-2 z-50 w-56 max-w-[calc(100vw-2rem)] rounded-lg border border-border-primary/30 bg-bg-surface shadow-xl p-1.5 text-xs" onClick={()=>{if(projectMenu.current)projectMenu.current.open=false;}}>
               {project.originalMaterial&&<button type="button" onClick={()=>setIsOriginalOpen(true)} className="block w-full text-left px-3 py-2 rounded hover:bg-bg-surface-hover">查看带入的原文</button>}
+              <div className="border-t border-border-primary/20 my-1"/>
+              <button type="button" disabled={!activeUnit} onClick={()=>setIsRadarOpen(true)} className="flex w-full items-center gap-2 px-3 py-2 rounded hover:bg-bg-surface-hover"><Radar size={14}/>连续性与线索检查</button>
+              <button type="button" disabled={!activeUnit} onClick={()=>setIsTimingOpen(true)} className="flex w-full items-center gap-2 px-3 py-2 rounded hover:bg-bg-surface-hover"><Clock size={14}/>时长估算</button>
               <div className="border-t border-border-primary/20 my-1"/>
               <ScriptExportActions project={project} localDraft={dirty}/>
             </div>
@@ -863,11 +830,7 @@ export default function ScriptWorkspace() {
         if(notice.unitId)setActiveUnitId(notice.unitId);
         setViewMode(notice.target);updateUrlParams({view:notice.target,...(notice.unitId?{unitId:notice.unitId}:{})});
       }}/>
-      {addingEpisode&&<AddEpisodeDialog project={project} unitId={activeUnit?.id||project.units[0].id} onSuggest={(choice,preview)=>{
-        const continuing=choice.kind.endsWith('continue'),source=project.units.find(u=>u.id===choice.sourceUnitId);
-        setAddingEpisode(false);setAssistantRequest({id:++assistantRequestId.current,operation:'consult',stage:'OUTLINE',unitId:preview.unitId,discussionDraft:preview.project,
-          label:`拟新增：${choice.title}`,text:`请讨论拟新增的「${choice.title}」，单集目标 ${Math.round((choice.targetDurationMs??project.profile.targetDurationMs)/6000)/10} 分钟。${continuing?`延续「${source?.title}」所属故事，依据相关前文实际落点。`:'这是新的独立故事，只用共用创作约定、人物和设定，不沿用其他故事的局部剧情。'}${choice.kind.startsWith('season_')?`新季名称「${choice.seasonTitle}」。`:''}当前是新增预览，尚未保存。先提出大纲安排和关系建议，不创建或修改分集。`});setAssistantOpen(true);setAssistantMode('step');
-      }} onClose={()=>setAddingEpisode(false)} onApply={async preview=>{
+      {addingEpisode&&<AddEpisodeDialog project={project} unitId={activeUnit?.id||project.units[0].id} onClose={()=>setAddingEpisode(false)} onApply={async preview=>{
         applyEpisodePreview(project,preview);
         const baseline=await saveForAction(true);if(!baseline)throw new Error('无法保存转换前内容');
         // Flush the current draft before applying the reviewed conversion.
@@ -879,14 +842,14 @@ export default function ScriptWorkspace() {
       }}/>}
       <p className="shrink-0 px-5 py-2 text-xs text-text-muted border-b border-border-primary/10">{viewMode==='blueprint'?'明确创作方向即可进入大纲；人物和设定可以边写边完善。':viewMode==='outline'?'整理事件、人物选择与因果；可以先推进当前集，其他集之后再细化。':viewMode==='board'||viewMode==='unit'?'把故事展开为场景序列，在这里调整节拍与节奏；准备好当前范围即可写正文。':'生成初稿后可通读、审阅和局部修改；初稿完成不等于最终定稿。'}</p>
       {/* Main Content Area: Decoupled Workspace Views */}
-      <ScriptAnalysisContext.Provider value={analysisEntry?{...analysisEntry,project,onClose:closeAnalysis,onOpenScene:openAnalysisScene,onOpenOutline:openAnalysisOutline}:null}><ScriptDirectoryContext.Provider value={{open:treeOpen,drawer:workWidth<960,setOpen:open=>{setTreeOpen(open);if(open&&workWidth<960)setAssistantOpen(false);},outline:{choice:viewMode==='outline'?outlineChoice:'current',seasonId:outlineSeasonId,onSelect:(choice,seasonId)=>{setAnalysisEntry(null);setOutlineFocus(undefined);setOutlineChoice(choice);setOutlineSeasonId(seasonId);setOutlineTab('outline');setActiveNodeId(undefined);setViewMode('outline');updateUrlParams({view:'outline',nodeId:null});}}}}><div ref={workArea} inert={!editing || legacyRecoveries.length > 0 || recovery.current?.id === 'unread' ? true : undefined} data-sidebar-mode={workWidth<960?'drawer':'inline'} className="relative flex-1 flex min-h-0 overflow-hidden script-shared-layout">
+      <ScriptDirectoryContext.Provider value={{open:treeOpen,drawer:workWidth<960,setOpen:open=>{setTreeOpen(open);if(open&&workWidth<960)setTaskOpen(false);},outline:{choice:viewMode==='outline'?outlineChoice:'current',seasonId:outlineSeasonId,onSelect:(choice,seasonId)=>{setOutlineFocus(undefined);setOutlineChoice(choice);setOutlineSeasonId(seasonId);setOutlineTab('outline');setActiveNodeId(undefined);setViewMode('outline');updateUrlParams({view:'outline',nodeId:null});}}}}><div ref={workArea} inert={!editing || legacyRecoveries.length > 0 || recovery.current?.id === 'unread' ? true : undefined} data-sidebar-mode={workWidth<960?'drawer':'inline'} className="relative flex-1 flex min-h-0 overflow-hidden script-shared-layout">
       <div className={`flex-1 min-w-0 flex overflow-hidden ${viewMode==='studio'?'script-writing-layout':''}`}>
         {viewMode === 'blueprint' ? (
           /* View 1: Dedicated Pre-Production Blueprint View */
           <div className="flex-1 h-full overflow-hidden">
             <StoryBibleView
               project={project} activeUnitId={activeUnit?.id}
-              onRequestTask={(operation,request,entity) => requestAssistant(operation,request,undefined,undefined,entity)}
+              onRequestTask={(operation,request,entity) => requestWritingTask(operation,request,undefined,undefined,entity)}
               onSwitchToOutline={() => {setViewMode('outline');updateUrlParams({view:'outline'});}}
               defaultTab={blueprintTab}
               onUpdateProject={change}
@@ -906,7 +869,7 @@ export default function ScriptWorkspace() {
               onSelectNode={nodeId=>{setActiveNodeId(nodeId);updateUrlParams({nodeId:nodeId||null});}}
               onUpdateProject={change}
               onUpdateUnit={updateUnit}
-              onRequestTask={(operation,unitId,scopeId,nodeId,unitIndices,request) => requestAssistant(operation,request,unitId,undefined,undefined,scopeId,nodeId,undefined,unitIndices)}
+              onRequestTask={(operation,unitId,scopeId,nodeId,unitIndices,request) => requestWritingTask(operation,request,unitId,undefined,undefined,scopeId,nodeId,undefined,unitIndices)}
               onRequestBeatChange={requestBeatChange}
               onSwitchToBlueprint={() => {
                 setViewMode('blueprint');
@@ -928,7 +891,7 @@ export default function ScriptWorkspace() {
             onChange={change} onUpdateUnit={updateUnit} onAddUnit={handleAddUnit} onAddScene={()=>handleAddScene(activeUnit!.id)}
             onWrite={()=>{setViewMode('studio');updateUrlParams({view:'studio'});}}
             onOutline={()=>{setViewMode('outline');updateUrlParams({view:'outline'});}}
-            onRequest={(operation,request,sceneId)=>requestAssistant(operation,request,activeUnit?.id,undefined,undefined,undefined,sceneId?undefined:activeNodeId,sceneId)}
+            onRequest={(operation,request,sceneId)=>requestWritingTask(operation,request,activeUnit?.id,undefined,undefined,undefined,sceneId?undefined:activeNodeId,sceneId)}
             onRequestBeatChange={requestBeatChange}
             onLocateOutline={source=>openAnalysisOutline(activeUnit!.id,source)}
             overview={closeOverview=><StoryGridBoard activeUnitId={activeUnit?.id} activeNodeId={activeNodeId}
@@ -951,8 +914,8 @@ export default function ScriptWorkspace() {
             onUpdateProject={change}
             onAddUnit={handleAddUnit}
             onAddScene={handleAddScene}
-            onRequestPlan={(unitId) => requestAssistant('plan',undefined,unitId,undefined,undefined,undefined,unitId===activeUnit?.id?activeNodeId:undefined)}
-            onRequestTask={(operation,unitId,sceneId)=>requestAssistant(operation,undefined,unitId,undefined,undefined,undefined,undefined,sceneId)}
+            onRequestPlan={(unitId) => requestWritingTask('plan',undefined,unitId,undefined,undefined,undefined,unitId===activeUnit?.id?activeNodeId:undefined)}
+            onRequestTask={(operation,unitId,sceneId)=>requestWritingTask(operation,undefined,unitId,undefined,undefined,undefined,undefined,sceneId)}
             onSwitchToOutline={() => {
               setViewMode('outline');
               updateUrlParams({ view: 'outline' });
@@ -973,8 +936,8 @@ export default function ScriptWorkspace() {
               onScene={(uId,sId)=>{setActiveUnitId(uId);setActiveSceneId(sId);updateUrlParams({unitId:uId,sceneId:sId});}} onAddUnit={handleAddUnit}/>
 
             {/* Middle Column: Screenplay Editor */}
-            <div className="script-writing-editor script-analysis-anchor flex-1 min-w-0 h-full overflow-hidden flex flex-col">
-              <div className="script-work-toolbar shrink-0"><button type="button" disabled={activeNodeId===UNASSIGNED_NODE} onClick={()=>handleAddScene(activeUnit!.id)}>新增场景</button>{activeScene&&<><button type="button" disabled={scenePosition<=0} onClick={()=>navigateScene(-1)}>上一场</button><button type="button" disabled={scenePosition<0||scenePosition>=rangeScenes.length-1} onClick={()=>navigateScene(1)}>下一场</button><button type="button" onClick={()=>handleDeleteScene(activeUnit!.id,activeScene.id)}>删除本场</button><button type="button" onClick={()=>requestAssistant('consult','请分析当前场景的结构与节奏，引用实际读取的正文与规划，提出修改建议。')}>分析结构与节奏</button></>}</div>
+            <div className="script-writing-editor flex-1 min-w-0 h-full overflow-hidden flex flex-col">
+              <div className="script-work-toolbar shrink-0"><button type="button" disabled={activeNodeId===UNASSIGNED_NODE} onClick={()=>handleAddScene(activeUnit!.id)}>新增场景</button>{activeScene&&<><button type="button" disabled={scenePosition<=0} onClick={()=>navigateScene(-1)}>上一场</button><button type="button" disabled={scenePosition<0||scenePosition>=rangeScenes.length-1} onClick={()=>navigateScene(1)}>下一场</button><button type="button" onClick={()=>handleDeleteScene(activeUnit!.id,activeScene.id)}>删除本场</button><button type="button" onClick={()=>requestWritingTask('consult','请分析当前场景的结构与节奏，引用实际读取的正文与规划，提出修改建议。')}>分析当前场景</button></>}</div>
               {activeScene && activeUnit ? (
                 <ScreenplayEditor
                   key={`${project.id}:${editorGeneration.current}:${activeScene.id}`}
@@ -983,17 +946,17 @@ export default function ScriptWorkspace() {
                   characters={unitCharacters(project,activeUnit)}
                   onUpdateScene={updateScene}
                   onReadThrough={()=>setIsReadingOpen(true)}
-                  onDiscuss={()=>requestAssistant('consult')}
+                  onDiscuss={()=>requestWritingTask('consult')}
                   onRegisterSpeaker={(name) => {change((draft) => {if(activeUnit&&activeScene)registerDialogueSpeaker(draft,activeUnit.id,activeScene.id,name);});}}
-                  onRequestTextTask={(selection,request)=>requestAssistant('text_rewrite',request,undefined,selection)}
-                  onRequestSceneTask={() => requestAssistant('scene')}
+                  onRequestTextTask={(selection,request)=>requestWritingTask('text_rewrite',request,undefined,selection)}
+                  onRequestSceneTask={() => requestWritingTask('scene')}
                 />
               ) : (
                 <div className="flex-1 flex flex-col items-center justify-center text-text-muted text-xs">
                   <p>请在左侧选择场景开始写作</p>
                 </div>
               )}
-              <ScriptAnalysisOutlet/>
+
             </div>
 
 
@@ -1002,84 +965,21 @@ export default function ScriptWorkspace() {
       </div>
 
 
-      {activeUnit&&editing&&<aside aria-label="AI 助手" onKeyDown={event=>{if(event.key==='Escape'){event.stopPropagation();closeAssistant();}}} hidden={!isAssistantOpen} className="script-assistant-sidebar">
-        <div className="flex items-center justify-between px-4 py-3 shrink-0 bg-bg-surface">
-          <div className="flex items-center gap-2">
-            <div className="w-6 h-6 rounded-lg bg-bg-surface-soft flex items-center justify-center text-text-primary">
-              <Sparkles size={13} />
-            </div>
-            <strong className="text-sm font-medium text-text-primary tracking-tight">剧作 AI 助手</strong>
-            <span className="px-1.5 py-0.5 rounded text-[10px] font-mono uppercase bg-bg-surface-soft text-text-muted">Copilot</span>
-          </div>
-          <div className="flex items-center gap-1">
-            <button type="button" title="时长估算" aria-label="时长估算" className="p-1.5 rounded-lg text-text-secondary hover:text-text-primary hover:bg-bg-surface-hover transition-colors" onClick={()=>setIsTimingOpen(true)}>
-              <Clock size={15}/>
-            </button>
-            <button type="button" title="连续性检查" aria-label="连续性检查" className="p-1.5 rounded-lg text-text-secondary hover:text-text-primary hover:bg-bg-surface-hover transition-colors" onClick={()=>setIsRadarOpen(true)}>
-              <Radar size={15}/>
-            </button>
-            <button type="button" title="收起助手" aria-label="收起助手" className="p-1.5 rounded-lg text-text-secondary hover:text-text-primary hover:bg-bg-surface-hover transition-colors" onClick={closeAssistant}>
-              <X size={15}/>
-            </button>
-          </div>
+      {taskUnit&&editing&&isTaskOpen&&<aside aria-label="写作任务" className="script-task-sidebar">
+        <div className="flex items-center justify-between px-4 py-3 border-b border-border-soft">
+          <strong className="text-sm">写作任务</strong><button type="button" aria-label="关闭写作任务" onClick={closeTask}><X size={16}/></button>
         </div>
-        <div className="script-assistant-body">
-          <div className="h-full min-h-0">
-            <ScriptDurablePanel key={project.id} visible={isAssistantOpen} request={assistantRequest}
-              onRequestAgent={()=>setAssistantMode('agent')} onAgentStarted={()=>setAssistantMode('step')}
-              legacyHistory={<>
-                <ScriptDiscussion project={project} onRequest={question=>requestAssistant('consult',question)}/>
-                {activeUnit&&<details><summary>更早的任务与提案</summary>
-                  <ScriptAssistant historyOnly project={project} unit={activeUnit} scene={activeScene} dirty={dirty}
-                    onSave={save} onApplied={applyAcceptedJob} onReviewScene={openReviewFinding}
-                    onOpenScene={sceneId=>{setActiveSceneId(sceneId);setViewMode('studio');updateUrlParams({view:'studio',sceneId});}}/>
-                </details>}
-              </>}
-              legacyContent={assistantInitialOperation&&(!(assistantInitialOperation in durableStep)||Boolean(assistantReviewSource))&&assistantInitialOperation!=='consult'&&legacyUnit?
-                <div className="space-y-3">
-                  <button type="button" onClick={()=>setAssistantInitialOperation(null)}>收起专项任务</button>
-                  <ScriptAssistant key={legacySubmission?.id} submission={legacySubmission} unitIndices={legacyTarget?.unitIndices} project={project} unit={legacyUnit} scene={legacyScene}
-                    dirty={dirty} onSave={save} onApplied={applyAcceptedJob} onReviewScene={openReviewFinding}
-                    onOpenScene={sceneId=>{const u=project.units.find(item=>item.scenes.some(s=>s.id===sceneId));if(u){
-                      setActiveUnitId(u.id);setActiveSceneId(sceneId);setViewMode('studio');updateUrlParams({view:'studio',unitId:u.id,sceneId});setAssistantOpen(false);
-                    }}}
-                    initialOperation={assistantInitialOperation} initialIssue={assistantFocusIssue} initialReviewSource={assistantReviewSource}
-                    initialSelection={assistantInitialOperation==='text_rewrite'?assistantSelection:undefined}/>
-                </div>:null}
-              onLegacyRequest={(request,channel,methodIds)=>{
-                setAssistantReviewSource(undefined);setLegacySubmission({id:Date.now(),channel,methodIds:methodIds.map(id=>`skill:${id}`)});setLegacyTarget({unitId:request.unitId,sceneId:request.sceneId,unitIndices:request.unitIndices});
-                setAssistantInitialOperation(request.operation||'consult');setAssistantFocusIssue(request.text);setAssistantSelection(request.selection);
-              }}
-              initialStage={viewMode==='blueprint'?'BLUEPRINT':viewMode==='outline'?'OUTLINE':viewMode==='board'||viewMode==='unit'?'SCENES':'BODY'}
-              mode={assistantMode==='agent'?'agent':'manual'} project={project} unit={activeUnit} scene={activeScene}
-              dirty={dirty} onSave={save} onSaveForAction={async()=>{const next=await saveForAction(true);if(!next)throw new Error('没有可保存的作品');return next;}} onApplied={applyAcceptedJob}
-              onOpenAnalysis={entry=>{
-                analysisReturnFocus.current=document.activeElement instanceof HTMLElement?document.activeElement:null;
-                analysisReturnAssistant.current=workWidth<960&&isAssistantOpen;
-                if(workWidth<960)setAssistantOpen(false);
-                analysisOrigin.current=JSON.stringify([viewMode==='blueprint'?'outline':viewMode,activeUnitId,activeSceneId,activeNodeId,outlineChoice,outlineSeasonId]);
-                setBodyFocus(undefined);setSceneFocus(undefined);setOutlineFocus(undefined);
-                setAnalysisEntry({...entry,onRequest:(next,source)=>{openAnalysisRequest(next,source);setAssistantOpen(true);entry.onRequest(next,source);},
-                  onRepair:entry.onRepair?(target,instruction,source)=>{openAnalysisRequest({...target,stage:target.sceneId?'SCENES':'OUTLINE'},source);setAssistantOpen(true);entry.onRepair!(target,instruction,source);}:undefined});
-                if(viewMode==='blueprint'){setViewMode('outline');updateUrlParams({view:'outline'});}
-              }}
-              onOpenScene={openAnalysisScene}
-              onOpenUpdated={target=>{
-                if(target.outlineFocus){openAnalysisOutline(target.unitId||activeUnit.id,target.outlineFocus);return;}
-                if(target.sceneId&&target.unitId){openAnalysisScene(target.unitId,target.sceneId,target.sceneSource??{kind:target.view==='board'?'SCENE_PLAN':'BODY_BLOCK'});return;}
-                setAnalysisEntry(null);if(target.unitId)setActiveUnitId(target.unitId);setActiveNodeId(target.nodeId);setViewMode(target.view);
-                updateUrlParams({view:target.view,unitId:target.unitId||activeUnit.id,sceneId:null,nodeId:target.nodeId||null});
-              }}
-              initialGoal={agentLaunch?.goal||(assistantInitialOperation==='review'?assistantFocusIssue:undefined)}
-              initialTask={agentLaunch?.strategy?.startsWith('review')||assistantInitialOperation==='review'?'REVIEW':'WRITE'}
-              initialOperation={assistantInitialOperation?durableStep[assistantInitialOperation]:undefined}
-              initialInstruction={assistantFocusIssue} initialSelection={assistantInitialOperation==='text_rewrite'?assistantSelection:undefined}/>
-
-          </div>
-
+        <div className="flex-1 min-h-0 overflow-auto p-4">
+          <ScriptTaskPanel key={`${project.id}:${taskRequest?.id||0}`} project={project} unit={taskUnit} scene={taskScene}
+            dirty={dirty} onSave={save} onApplied={applyAcceptedJob} onReviewScene={openReviewFinding}
+            onOpenScene={sceneId=>{const unit=project.units.find(u=>u.scenes.some(s=>s.id===sceneId));if(unit)openAnalysisScene(unit.id,sceneId);}}
+            initialOperation={taskRequest?.operation||(viewMode==='blueprint'?'concept':viewMode==='outline'?'unit_outline':['board','unit'].includes(viewMode)?'board_plan':'scene')} initialIssue={taskRequest?.text}
+            initialReviewSource={taskReviewSource} initialSelection={taskRequest?.selection}
+            outlineRange={taskRequest?.outlineRange} outlineBeatIds={taskRequest?.outlineBeatIds} initialReviewSceneIds={taskRequest?.reviewSceneIds}
+            initialScopeId={taskRequest?.scopeId} initialSeasonId={taskRequest?.seasonId} unitIndices={taskRequest?.unitIndices}/>
         </div>
       </aside>}
-      </div></ScriptDirectoryContext.Provider></ScriptAnalysisContext.Provider>
+      </div></ScriptDirectoryContext.Provider>
 
       <Modal isOpen={isOriginalOpen} onClose={()=>setIsOriginalOpen(false)} title="带入的原文" size="lg">
         <p className="text-xs text-text-muted mb-3">这是创建时保存的输入原件。当前写作以正文和故事资料为准。</p>
@@ -1099,7 +999,7 @@ export default function ScriptWorkspace() {
         onClose={() => setIsRadarOpen(false)}
         project={project}
         activeUnitId={activeUnitId}
-        onRequestReview={unitId=>{setActiveUnitId(unitId);setAgentLaunch({strategy:'review_all',goal:'检查本单元已写正文的动作、道具位置、人物知情和时间衔接。引用具体原文作为依据，区分规划和已发生事实。尊重留白与作者意图，不把未登记线索当作必需回收。每批说明实际检查范围，不检查未提供的正文。'});setIsRadarOpen(false);setIsAgentOpen(true);}}
+        onRequestReview={unitId=>{setIsRadarOpen(false);requestWritingTask('review','检查所选正文的人物、道具、知情状态与时间关系；引用具体原文，不强制动作连续。',unitId,undefined,undefined,undefined,undefined,undefined,undefined,project.units.find(u=>u.id===unitId)?.scenes.filter(s=>s.blocks.some(b=>b.type!=='note'&&b.text.trim())).slice(0,30).map(s=>s.id));}}
         onOpenScene={(uId, sId) => {
           setActiveUnitId(uId);
           setActiveSceneId(sId);

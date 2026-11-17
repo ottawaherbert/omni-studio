@@ -7,7 +7,6 @@ import {
   unitOutlineOwner, type OutlineOwner,
 } from '../packages/script/src/outlineGuides';
 import {applyEpisodePreview, previewNextEpisode} from '../packages/script/src/episodeDevelopment';
-import {analysisEvidence} from '../packages/script/src/structureAnalysis';
 import {
   locationFromParams, resolveScriptLocation, UNASSIGNED_NODE,
 } from '../apps/web/src/features/script/scriptWorkspaceLocation';
@@ -168,28 +167,6 @@ test('a season with only its first episode keeps the season arc separate from th
   const result = applyEpisodePreview(project, preview);
   assert.equal(outlineText(result, unitOutlineOwner(result, result.units[0])), unit.summary);
   assert.deepEqual(result.seasons, project.seasons);
-});
-
-test('node-purpose evidence retains its outline owner and a selected scene analysis excludes other scenes', () => {
-  const {project, current} = legacyStoryFixture();
-  // Use the episode original to exercise node ownership independently of legacy conversion.
-  project.storyOutlines = [];
-  project.outlineGuides = project.outlineGuides!.filter(guide => guide.owner.kind === 'unit');
-  const unit = project.units[0];
-  unit.structureNodes![0].purpose = '让等待变成行动。';
-  const nodeEvidence = analysisEvidence(project, {unitId: unit.id, nodeId: unit.structureNodes![0].id});
-  const purpose = nodeEvidence.find(item => item.kind === 'NODE_BEAT' && item.field === 'purpose');
-  assert.ok(purpose);
-  assert.deepEqual(purpose.owner, current);
-  assert.equal(purpose.nodeId, unit.structureNodes![0].id);
-  const unassigned = newScene('未归组的线索');
-  unassigned.purpose = '核实一封信的地址。';
-  unassigned.blocks[0].text = '她将信封翻到背面。';
-  unit.scenes.push(unassigned);
-  const selected = analysisEvidence(project, {unitId: unit.id, sceneId: unassigned.id});
-  const sceneEvidence = selected.filter(item => item.kind === 'SCENE_PLAN' || item.kind === 'BODY_BLOCK');
-  assert.ok(sceneEvidence.length > 0);
-  assert.ok(sceneEvidence.every(item => item.sceneId === unassigned.id));
 });
 
 test('a legacy sequel conversion preserves node, beat, scene and body identities without duplicating guides', () => {

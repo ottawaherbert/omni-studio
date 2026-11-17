@@ -8,9 +8,6 @@ import { createScriptProject } from '../packages/script/src/project';
 import { parseScriptProject, type ProjectProfile } from '../packages/script/src/schema';
 import { StoryOutlineView } from '../apps/web/src/features/script/components/StoryOutlineView';
 import { ScenePlanningView } from '../apps/web/src/features/script/components/ScenePlanningView';
-import { ScriptAnalysisView } from '../apps/web/src/features/script/components/ScriptAnalysisView';
-import { StructureAnalysisCard } from '../apps/web/src/features/script/components/StructureAnalysisCard';
-import { validateStructureAnalysis } from '../packages/script/src/structureAnalysis';
 
 const profile: ProjectProfile = {
   organization: 'standalone',
@@ -40,7 +37,6 @@ test('[P2 - 1] Primary buttons use accessible theme tokens and no invalid bg-pri
   assert.ok(indexCss.includes('--primary: #008fa3;'), 'light mode must define accessible --primary');
 
   const filesToCheck = [
-    'apps/web/src/features/script/components/StructureAnalysisCard.tsx',
     'apps/web/src/features/script/components/ScriptStructureEditor.tsx',
     'apps/web/src/features/script/components/ScreenplayEditor.tsx',
     'apps/web/src/features/script/components/StoryOutlineView.tsx',
@@ -57,16 +53,7 @@ test('[P2 - 1] Primary buttons use accessible theme tokens and no invalid bg-pri
   }
 });
 
-test('[P2 - 2] ScriptAnalysisView is constrained by parent container rather than viewport 85vh', () => {
-  const analysisCode = fs.readFileSync(path.resolve('apps/web/src/features/script/components/ScriptAnalysisView.tsx'), 'utf8');
-  assert.ok(!analysisCode.includes('max-h-[85vh]'), 'ScriptAnalysisView must not use max-h-[85vh]');
-  assert.ok(analysisCode.includes('max-h-full'), 'ScriptAnalysisView must use max-h-full');
-  assert.ok(analysisCode.includes('h-full'), 'ScriptAnalysisView must use h-full');
 
-  const scriptCss = fs.readFileSync(path.resolve('apps/web/src/features/script/script.css'), 'utf8');
-  assert.ok(scriptCss.includes('.script-analysis-layer{position:absolute;inset:0;z-index:20;background:var(--bg-surface);display:flex;flex-direction:column;min-width:0;min-height:0;overflow:hidden;max-height:100%}'));
-  assert.ok(scriptCss.includes('.script-analysis-view{display:flex;flex:1;flex-direction:column;min-width:0;min-height:0;max-height:100%;overflow:hidden;background:var(--bg-surface)}'));
-});
 
 test('[P2 - 3] Directory settings container preserves child component mounting across fold/unfold', () => {
   const outlineCode = fs.readFileSync(path.resolve('apps/web/src/features/script/components/StoryOutlineView.tsx'), 'utf8');
@@ -112,7 +99,7 @@ test('[P2 - 5] Primary button states preserve contrast only inside screenplay co
   );
 
   // These source checks complement the rendered browser contrast checks.
-  const scope = ':where(.script-shared-layout, .script-work-page, .script-writing-editor, .script-analysis-view, .script-chat-shell)';
+  const scope = ':where(.script-shared-layout, .script-work-page, .script-writing-editor)';
   const buttons = ':is(.script-primary-action, button.script-primary-btn, button[data-primary="true"], button.bg-text-primary)';
   const rules = Array.from(
     css.replace(/\/\*[\s\S]*?\*\//g, '').matchAll(/([^{}]+)\{([^{}]*)\}/g),

@@ -1,3 +1,6 @@
+import { characterReferenceSourceHash } from './characterReferenceLayouts';
+import { renderLocationSpatialAnchor } from './locationViews';
+import { locationViewSourceHash } from './locationViews';
 import type {
   ManualProductionAssetReferenceAudit,
   ManualProductionAssetReferenceCandidate,
@@ -34,6 +37,8 @@ const allBoardItems = (project: Project) => {
     ...plan.propBoards,
     ...plan.vehicleBoards,
     ...plan.variantBoards,
+    ...plan.sceneViewBoards,
+    ...plan.characterReferenceBoards,
   ];
 };
 
@@ -60,6 +65,12 @@ export const productionAssetBoardCandidateSourceContentHash = ({
   const board = allBoardItems(project).find((item) => item.id === boardItemId);
   if (!board) throw new Error("找不到当前资产板，无法计算候选来源指纹。");
   const owner = boardOwner(project, board);
+  if (board.characterReferenceLayout) return characterReferenceSourceHash(project, project.characters.find(c=>c.id===board.assetId)!, board.characterReferenceLayout, board.variantId);
+  if (board.locationView) {
+    const asset = project.assets.find(a => a.id === board.assetId);
+    if (!asset) throw new Error('场景资产已不存在。');
+    return locationViewSourceHash(project, asset, board.locationView, board.variantId);
+  }
   const variant = board.variantId
     ? owner?.variants?.find((item) => item.id === board.variantId)
     : undefined;
@@ -71,6 +82,7 @@ export const productionAssetBoardCandidateSourceContentHash = ({
   return manualFilmTeamScriptHash(stableStringify({
     schemaVersion: "production-asset-board-candidate-source.v1",
     referenceMode,
+    ...(board.assetType === 'character' && referenceMode === 'clean_reference' ? {characterReferencePolicy:'body-face-only.v1'} : {}),
     board: {
       id: board.id,
       assetId: board.assetId,
@@ -123,6 +135,7 @@ export const productionAssetBoardCandidateSourceContentHash = ({
             defaultVariantId: owner.defaultVariantId,
           }),
       visualOverride: owner.visualOverride,
+      ...(board.assetType === 'location' && owner ? { spatialAnchor: renderLocationSpatialAnchor(owner as Project['assets'][number], 'main', board.variantId) || undefined } : {}),
     } : undefined,
     variant,
     inheritedVariant,

@@ -424,6 +424,7 @@ export const runPhase13SelfCheck = (
   const rendererVisualStyleLock = {
     ...approvedStyleLock,
     version: "visual-style-lock.phase13.test",
+    stylePrompt: "rough pencil storyboard",
     treatment: {
       ...approvedStyleLock.treatment,
       linework: ["rough pencil storyboard"],

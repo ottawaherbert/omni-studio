@@ -45,8 +45,7 @@ const storyboard = read('src/pages/Storyboard.tsx');
 const productionPreparation = read('src/pages/ProductionPreparation.tsx');
 const promptEditor = read('src/components/PromptEditorModal.tsx');
 const storyboardWorkflow = read('src/hooks/useStoryboardAI.ts')
-  + read('src/components/storyboard/StoryboardHeader.tsx');
-const departmentBoards = read('src/components/storyboard/DepartmentBoardsPanel.tsx');
+  + read('src/pages/Storyboard.tsx');
 const creatorFacingAiError = read('src/features/interactive/creatorFacingAiError.ts');
 const productionBudgetBoundary = read('src/types/production.ts')
   + read('src/services/production/productionGenerationPlanningStageRunner.ts')
@@ -94,7 +93,7 @@ assert.ok(wizard.includes('draft.id'), 'The first AI proposal must open directly
 assert.equal(authoringClient.includes('45_000'), false, 'AI proposal requests must wait for the provider result instead of inventing a timeout');
 assert.ok(authoringClient.includes('getLatestDraft'), 'A persisted Graph proposal must remain recoverable after page refresh');
 assert.equal(wizard.includes('setStep('), false, 'New project creation must not force authors through a multi-step configuration flow');
-assert.ok(wizard.includes('告诉 AI 你想做什么'), 'New project creation must start from an author brief instead of technical parameters');
+assert.ok(wizard.includes('用一两句话告诉 AI 你想创作什么'), 'New project creation must start from an author brief instead of technical parameters');
 assert.ok(wizard.includes('interactiveClient.listWritingProjects'), 'Wizard must offer a shared Writing source instead of duplicating a script editor');
 assert.ok(graph.includes('interactiveClient.saveGraph'), 'Story map must persist graph edits through the domain API');
 assert.ok(
@@ -286,7 +285,8 @@ assert.equal(production.includes('视频 take'), false, 'Interactive Production 
 assert.equal(studioCreatorLanguage.includes('>TAKES<'), false, 'Studio media choices must use creator-facing labels');
 assert.equal(studioCreatorLanguage.includes('图片 Take'), false, 'Studio prompts must call the selected first-frame media an image');
 assert.equal(studioCreatorLanguage.includes('视频 Take'), false, 'Studio completion messages must call generated media a video proposal');
-assert.ok(graph.includes('hasUnsavedChanges && graph'), 'Content preparation must persist a newly added node before adopting its content');
+const contentPreparation = graph.slice(graph.indexOf('const executePrepareNodeContent'), graph.indexOf('const handlePrepareNodeContent'));
+assert.ok(contentPreparation.indexOf('await savePendingGraph()') >= 0 && contentPreparation.indexOf('await savePendingGraph()') < contentPreparation.indexOf('interactiveClient.createContentPlan'), 'Content preparation must save new nodes before planning content');
 assert.ok(graph.includes('限时选择'), 'Story map must let authors define timed choices instead of requiring database edits');
 assert.ok(graph.includes('超时自动前往'), 'Story map must expose the explicit timeout fallback destination');
 assert.ok(graph.includes('编辑玩家选择'), 'Selecting an edge must make its authoring context explicit');
@@ -358,7 +358,7 @@ assert.ok(
 assert.ok(playtest.includes("hasPlayableMedia ? 'bg-black/30' : 'bg-bg-primary/40'"), 'Real video playback must retain a dark cinematic overlay in light mode');
 assert.ok(playtest.includes('播放完毕后显示选择'), 'Interactive choices must wait for the selected node media to finish');
 assert.equal(playtest.includes('共享视频 take'), false, 'Player UI must describe playback as story footage rather than a shared-take implementation');
-assert.ok(playtest.includes('检查素材') && playtest.includes('navigate(productionHandoff)') && playtest.includes('?? currentNode?.id'), 'A failed media take must expose the relevant Production handoff while allowing clearly labeled text preview');
+assert.ok(playtest.includes('检查素材') && playtest.includes('navigate(productionHandoff)') && playtest.includes('currentNode?.id ?? runtimeBuild?.missingMediaNodeIds[0]'), 'A failed media take must expose the relevant Production handoff while allowing clearly labeled text preview');
 assert.ok(playtest.includes('effectiveMediaError && <section role="alert"') && playtest.includes('文字预览 · 画面不可用'), 'The actual media failure must stay visible rather than silently pretending the current view is a film');
 assert.ok(playtest.includes('重试读取') && playtest.includes('用当前内容重新准备'), 'Media failures must expose both retrying the old build and explicitly creating a new build');
 const playbackReset = playtest.slice(playtest.indexOf('const resetNodePlayback ='), playtest.indexOf('const unlockedChoices ='));
@@ -403,8 +403,5 @@ assert.ok(
 );
 assert.ok(storyboardWorkflow.includes('buildManualVisualPromptSourceHash'), 'Adopted visual prompts must remain tied to the confirmed Shot plan');
 assert.equal(storyboard.includes('分镜与提示词检查'), false, 'Storyboard must keep internal stale-state repair out of the creator UI');
-assert.ok(departmentBoards.includes('筹备状态') && departmentBoards.includes('核对结果'), 'Storyboard must describe production inputs in author language');
-assert.equal(departmentBoards.includes('DEPARTMENT BOARDS'), false, 'Storyboard must not expose internal department-board terminology to authors');
-assert.equal(departmentBoards.includes('specialist ok'), false, 'Storyboard must not expose raw implementation readiness labels to authors');
 
 console.log('Interactive current UI self-check passed.');

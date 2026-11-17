@@ -1,0 +1,653 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:omni-external:interactive:v1",
+  "title": "Omni external interactive v1",
+  "type": "object",
+  "additionalProperties": false,
+  "properties": {
+    "format": {
+      "const": "omni-external-interactive.v1"
+    },
+    "projectId": {
+      "type": "string",
+      "pattern": "^[A-Za-z][A-Za-z0-9_-]{0,119}$"
+    },
+    "deliveryId": {
+      "type": "string",
+      "pattern": "^[A-Za-z][A-Za-z0-9_-]{0,119}$"
+    },
+    "title": {
+      "type": "string",
+      "minLength": 1,
+      "pattern": "\\S"
+    },
+    "playerRole": {
+      "type": "string",
+      "minLength": 1,
+      "pattern": "\\S"
+    },
+    "experienceGoals": {
+      "type": "array",
+      "items": {
+        "type": "string",
+        "minLength": 1,
+        "pattern": "\\S"
+      },
+      "minItems": 1
+    },
+    "entryNodeId": {
+      "type": "string",
+      "pattern": "^[A-Za-z][A-Za-z0-9_-]{0,119}$"
+    },
+    "timing": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "targetPlaythroughSeconds": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "estimatedPlaythroughRangeSeconds": {
+          "type": "array",
+          "items": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "minItems": 2,
+          "maxItems": 2
+        },
+        "uniqueMediaBudgetSeconds": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "maxSecondsWithoutChoice": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "assumptions": {
+          "type": "string",
+          "minLength": 1,
+          "pattern": "\\S"
+        }
+      },
+      "required": [
+        "targetPlaythroughSeconds",
+        "estimatedPlaythroughRangeSeconds",
+        "uniqueMediaBudgetSeconds",
+        "maxSecondsWithoutChoice",
+        "assumptions"
+      ]
+    },
+    "chapters": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "id": {
+            "type": "string",
+            "pattern": "^[A-Za-z][A-Za-z0-9_-]{0,119}$"
+          },
+          "title": {
+            "type": "string",
+            "minLength": 1,
+            "pattern": "\\S"
+          },
+          "order": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "nodeIds": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "pattern": "^[A-Za-z][A-Za-z0-9_-]{0,119}$"
+            },
+            "minItems": 1,
+            "uniqueItems": true
+          }
+        },
+        "required": [
+          "id",
+          "title",
+          "order",
+          "nodeIds"
+        ]
+      },
+      "minItems": 1
+    },
+    "variables": {
+      "type": "array",
+      "items": {
+        "anyOf": [
+          {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "id": {
+                "type": "string",
+                "pattern": "^[A-Za-z][A-Za-z0-9_-]{0,119}$"
+              },
+              "type": {
+                "const": "boolean"
+              },
+              "default": {
+                "type": "boolean"
+              },
+              "meaning": {
+                "type": "string",
+                "minLength": 1,
+                "pattern": "\\S"
+              }
+            },
+            "required": [
+              "id",
+              "type",
+              "default",
+              "meaning"
+            ]
+          },
+          {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "id": {
+                "type": "string",
+                "pattern": "^[A-Za-z][A-Za-z0-9_-]{0,119}$"
+              },
+              "type": {
+                "const": "integer"
+              },
+              "default": {
+                "type": "integer"
+              },
+              "min": {
+                "type": "integer"
+              },
+              "max": {
+                "type": "integer"
+              },
+              "meaning": {
+                "type": "string",
+                "minLength": 1,
+                "pattern": "\\S"
+              }
+            },
+            "required": [
+              "id",
+              "type",
+              "default",
+              "min",
+              "max",
+              "meaning"
+            ]
+          },
+          {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "id": {
+                "type": "string",
+                "pattern": "^[A-Za-z][A-Za-z0-9_-]{0,119}$"
+              },
+              "type": {
+                "const": "enum"
+              },
+              "default": {
+                "type": "string",
+                "minLength": 1,
+                "pattern": "\\S"
+              },
+              "values": {
+                "type": "array",
+                "items": {
+                  "type": "string",
+                  "minLength": 1,
+                  "pattern": "\\S"
+                },
+                "minItems": 1,
+                "uniqueItems": true
+              },
+              "meaning": {
+                "type": "string",
+                "minLength": 1,
+                "pattern": "\\S"
+              }
+            },
+            "required": [
+              "id",
+              "type",
+              "default",
+              "values",
+              "meaning"
+            ]
+          }
+        ]
+      },
+      "minItems": 0
+    },
+    "nodes": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "id": {
+            "type": "string",
+            "pattern": "^[A-Za-z][A-Za-z0-9_-]{0,119}$"
+          },
+          "chapterId": {
+            "type": "string",
+            "pattern": "^[A-Za-z][A-Za-z0-9_-]{0,119}$"
+          },
+          "type": {
+            "enum": [
+              "scene",
+              "choice",
+              "router",
+              "ending"
+            ]
+          },
+          "title": {
+            "type": "string",
+            "minLength": 1,
+            "pattern": "\\S"
+          },
+          "summary": {
+            "type": "string",
+            "minLength": 1,
+            "pattern": "\\S"
+          },
+          "sceneIds": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "pattern": "^[A-Za-z][A-Za-z0-9_-]{0,119}$"
+            },
+            "minItems": 0,
+            "uniqueItems": true
+          },
+          "mediaIds": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "pattern": "^[A-Za-z][A-Za-z0-9_-]{0,119}$"
+            },
+            "minItems": 0,
+            "uniqueItems": true
+          },
+          "endingId": {
+            "type": "string",
+            "pattern": "^[A-Za-z][A-Za-z0-9_-]{0,119}$"
+          },
+          "hold": {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "mode": {
+                "enum": [
+                  "freeze",
+                  "loop",
+                  "none"
+                ]
+              },
+              "visualDirection": {
+                "type": "string",
+                "minLength": 1,
+                "pattern": "\\S"
+              },
+              "audioDirection": {
+                "type": "string",
+                "minLength": 1,
+                "pattern": "\\S"
+              }
+            },
+            "required": [
+              "mode",
+              "visualDirection",
+              "audioDirection"
+            ]
+          }
+        },
+        "required": [
+          "id",
+          "chapterId",
+          "type",
+          "title",
+          "summary",
+          "sceneIds",
+          "mediaIds"
+        ]
+      },
+      "minItems": 1
+    },
+    "edges": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "id": {
+            "type": "string",
+            "pattern": "^[A-Za-z][A-Za-z0-9_-]{0,119}$"
+          },
+          "from": {
+            "type": "string",
+            "pattern": "^[A-Za-z][A-Za-z0-9_-]{0,119}$"
+          },
+          "to": {
+            "type": "string",
+            "pattern": "^[A-Za-z][A-Za-z0-9_-]{0,119}$"
+          },
+          "label": {
+            "type": "string",
+            "minLength": 1,
+            "pattern": "\\S"
+          },
+          "condition": {
+            "$ref": "#/$defs/condition"
+          },
+          "effects": {
+            "type": "array",
+            "items": {
+              "anyOf": [
+                {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "properties": {
+                    "type": {
+                      "const": "set"
+                    },
+                    "variable": {
+                      "type": "string",
+                      "pattern": "^[A-Za-z][A-Za-z0-9_-]{0,119}$"
+                    },
+                    "value": {
+                      "type": [
+                        "boolean",
+                        "integer",
+                        "string"
+                      ]
+                    }
+                  },
+                  "required": [
+                    "type",
+                    "variable",
+                    "value"
+                  ]
+                },
+                {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "properties": {
+                    "type": {
+                      "enum": [
+                        "increment",
+                        "decrement"
+                      ]
+                    },
+                    "variable": {
+                      "type": "string",
+                      "pattern": "^[A-Za-z][A-Za-z0-9_-]{0,119}$"
+                    },
+                    "amount": {
+                      "type": "integer",
+                      "minimum": 1
+                    }
+                  },
+                  "required": [
+                    "type",
+                    "variable",
+                    "amount"
+                  ]
+                }
+              ]
+            },
+            "minItems": 0
+          },
+          "feedback": {
+            "type": "string",
+            "minLength": 1,
+            "pattern": "\\S"
+          },
+          "consequence": {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "horizon": {
+                "enum": [
+                  "immediate",
+                  "delayed",
+                  "ending"
+                ]
+              },
+              "description": {
+                "type": "string",
+                "minLength": 1,
+                "pattern": "\\S"
+              },
+              "readAtNodeIds": {
+                "type": "array",
+                "items": {
+                  "type": "string",
+                  "pattern": "^[A-Za-z][A-Za-z0-9_-]{0,119}$"
+                },
+                "minItems": 0,
+                "uniqueItems": true
+              }
+            },
+            "required": [
+              "horizon",
+              "description",
+              "readAtNodeIds"
+            ]
+          }
+        },
+        "required": [
+          "id",
+          "from",
+          "to",
+          "label",
+          "condition",
+          "effects",
+          "feedback",
+          "consequence"
+        ]
+      },
+      "minItems": 0
+    },
+    "endings": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "id": {
+            "type": "string",
+            "pattern": "^[A-Za-z][A-Za-z0-9_-]{0,119}$"
+          },
+          "title": {
+            "type": "string",
+            "minLength": 1,
+            "pattern": "\\S"
+          },
+          "nodeId": {
+            "type": "string",
+            "pattern": "^[A-Za-z][A-Za-z0-9_-]{0,119}$"
+          },
+          "payoff": {
+            "type": "string",
+            "minLength": 1,
+            "pattern": "\\S"
+          }
+        },
+        "required": [
+          "id",
+          "title",
+          "nodeId",
+          "payoff"
+        ]
+      },
+      "minItems": 1
+    },
+    "mediaPlan": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "id": {
+            "type": "string",
+            "pattern": "^[A-Za-z][A-Za-z0-9_-]{0,119}$"
+          },
+          "sceneIds": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "pattern": "^[A-Za-z][A-Za-z0-9_-]{0,119}$"
+            },
+            "minItems": 1,
+            "uniqueItems": true
+          },
+          "estimatedSeconds": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "reuseRationale": {
+            "type": "string",
+            "minLength": 1,
+            "pattern": "\\S"
+          },
+          "visualContinuity": {
+            "type": "string",
+            "minLength": 1,
+            "pattern": "\\S"
+          },
+          "audioContinuity": {
+            "type": "string",
+            "minLength": 1,
+            "pattern": "\\S"
+          }
+        },
+        "required": [
+          "id",
+          "sceneIds",
+          "estimatedSeconds",
+          "reuseRationale",
+          "visualContinuity",
+          "audioContinuity"
+        ]
+      },
+      "minItems": 0
+    }
+  },
+  "required": [
+    "format",
+    "projectId",
+    "deliveryId",
+    "title",
+    "playerRole",
+    "experienceGoals",
+    "entryNodeId",
+    "timing",
+    "chapters",
+    "variables",
+    "nodes",
+    "edges",
+    "endings",
+    "mediaPlan"
+  ],
+  "$defs": {
+    "condition": {
+      "anyOf": [
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "op": {
+              "const": "always"
+            }
+          },
+          "required": [
+            "op"
+          ]
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "op": {
+              "enum": [
+                "all",
+                "any"
+              ]
+            },
+            "predicates": {
+              "type": "array",
+              "items": {
+                "$ref": "#/$defs/condition"
+              },
+              "minItems": 1
+            }
+          },
+          "required": [
+            "op",
+            "predicates"
+          ]
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "op": {
+              "const": "not"
+            },
+            "predicate": {
+              "$ref": "#/$defs/condition"
+            }
+          },
+          "required": [
+            "op",
+            "predicate"
+          ]
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "op": {
+              "const": "compare"
+            },
+            "variable": {
+              "type": "string",
+              "pattern": "^[A-Za-z][A-Za-z0-9_-]{0,119}$"
+            },
+            "comparator": {
+              "enum": [
+                "eq",
+                "neq",
+                "gt",
+                "gte",
+                "lt",
+                "lte"
+              ]
+            },
+            "value": {
+              "type": [
+                "boolean",
+                "integer",
+                "string"
+              ]
+            }
+          },
+          "required": [
+            "op",
+            "variable",
+            "comparator",
+            "value"
+          ]
+        }
+      ]
+    }
+  }
+}

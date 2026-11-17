@@ -1,11 +1,12 @@
-import { sceneVideoClips } from '../utils/sceneVideoClips';
+import { sceneVideoClips, legacySceneVideoClips, editFromTimelineShots, audioForEdit, audioTrackTimelineStart, type TimelineShot } from '../utils/sceneVideoClips';
 import { splitTimelineShot, splitTimelineAudio, trimTimelineShot } from '../utils/timelineEditing';
 import React, { useRef, useState, useMemo } from 'react';
 import { Scene, Shot, AudioTrack } from '../clients/domainTypes';
-import { Play, Pause, Scissors, Plus, Volume2, Image as ImageIcon, Video, Mic, Music, Trash2, AlertTriangle } from 'lucide-react';
+import { Play, Pause, Scissors, Plus, Volume2, Image as ImageIcon, Video, Mic, Music, Trash2, AlertTriangle, ArrowLeft, ArrowRight, Copy, RefreshCw } from 'lucide-react';
 
 interface TimelineProps {
   scene: Scene;
+  audioPreviewTracks?: AudioTrack[];
   currentTime: number;
   isPlaying: boolean;
   onSeek: (time: number) => void;
@@ -19,6 +20,7 @@ interface TimelineProps {
 
 export default function Timeline({
   scene,
+  audioPreviewTracks,
   currentTime,
   isPlaying,
   onSeek,
@@ -29,7 +31,7 @@ export default function Timeline({
   activeAudioTrackId,
   onSelectAudioTrack
 }: TimelineProps) {
-  const trimOrigin = useRef<{ shots: Shot[]; audioTracks: AudioTrack[] } | null>(null);
+  const trimOrigin = useRef<{ shots: TimelineShot[]; audioTracks: AudioTrack[] } | null>(null);
   const containerRef = useRef<HTMLDivElement>(null);
   const [draggingTrackId, setDraggingTrackId] = useState<string | null>(null);
   const [trimmingShotId, setTrimmingShotId] = useState<string | null>(null);
@@ -39,6 +41,11 @@ export default function Timeline({
 
   const shots = useMemo(() => sceneVideoClips(scene), [scene]);
   const audioTracks = scene.audioTracks || [];
+  const displayAudioTracks = audioPreviewTracks || audioTracks;
+  const saveClips = (edited: TimelineShot[]) => {
+    const edit=editFromTimelineShots(edited);
+    onUpdateScene({edit,audioTracks:audioForEdit(scene,edit)});
+  };
 
   const totalDuration = useMemo(() => {
     return shots.reduce((acc, shot) => acc + (shot.duration || 5), 0);
@@ -127,17 +134,15 @@ export default function Timeline({
       const track = audioTracks.find(t => t.id === draggingTrackId);
       if (track) {
         onUpdateScene({
-          audioTracks: audioTracks.map(a => a.id === track.id ? { ...a, startTime: timeAtCursor, shotId: undefined } : a)
+          audioTracks: audioTracks.map(a => a.id === track.id ? { ...a, startTime: timeAtCursor, shotId: undefined, clipAnchor: undefined } : a)
         });
       }
     } else if (trimmingShotId && trimEdge) {
       const base = trimOrigin.current || { shots, audioTracks };
       const index = base.shots.findIndex(s => s.id === trimmingShotId);
       const edited = trimTimelineShot(base.shots, index, trimEdge, timeAtCursor, e.altKey);
-      let start = 0;
-      const starts = new Map(edited.map(shot => { const value = start; start += shot.duration; return [shot.id, value]; }));
-      onUpdateScene({ shots: edited, audioTracks: base.audioTracks.map(track => track.shotId && starts.has(track.shotId)
-        ? { ...track, startTime: starts.get(track.shotId)! } : track) });
+      const edit=editFromTimelineShots(edited);
+      onUpdateScene({edit,audioTracks:audioForEdit({...scene,edit:editFromTimelineShots(base.shots),audioTracks:base.audioTracks},edit)});
     } else if (trimmingAudioId && audioTrimEdge) {
       const track = (trimOrigin.current?.audioTracks || audioTracks).find(t => t.id === trimmingAudioId);
       if (track) {
@@ -151,7 +156,7 @@ export default function Timeline({
           const newStartTime = Math.max(0, track.startTime - (track.sourceStartSeconds || 0), Math.min(timeAtCursor, endTime - 0.5));
           const newDuration = endTime - newStartTime;
           onUpdateScene({
-            audioTracks: audioTracks.map(t => t.id === track.id ? { ...t, startTime: newStartTime, duration: newDuration, sourceStartSeconds: (track.sourceStartSeconds || 0) + newStartTime - track.startTime } : t)
+            audioTracks: audioTracks.map(t => t.id === track.id ? { ...t, startTime: newStartTime, duration: newDuration, clipAnchor: undefined, sourceStartSeconds: (track.sourceStartSeconds || 0) + newStartTime - track.startTime } : t)
           });
         }
       }
@@ -171,14 +176,14 @@ export default function Timeline({
 
   return (
     <div 
-      className="h-72 bg-white dark:bg-neutral-950 border-t border-gray-100 dark:border-neutral-800 flex flex-col select-none"
+      className="h-72 min-w-0 w-full bg-white dark:bg-neutral-950 border-t border-gray-100 dark:border-neutral-800 flex flex-col select-none"
       onMouseMove={handleMouseMove}
       onMouseUp={handleMouseUp}
       onMouseLeave={handleMouseUp}
     >
       {/* Toolbar */}
-      <div className="flex items-center justify-between px-8 py-4 border-b border-gray-100 dark:border-neutral-800 bg-white dark:bg-neutral-900/50">
-        <div className="flex items-center gap-6">
+      <div className="flex min-w-0 max-w-full shrink-0 items-center justify-between gap-6 overflow-x-auto px-4 py-3 border-b border-gray-100 dark:border-neutral-800 bg-white dark:bg-neutral-900/50">
+        <div className="flex shrink-0 items-center gap-6">
           <button
             onClick={onTogglePlay}
             className="w-14 h-14 flex items-center justify-center bg-gray-900 hover:bg-black dark:bg-violet-600 dark:hover:bg-violet-500 text-white rounded-[1.5rem] transition-all shadow-xl shadow-gray-500/20 active:scale-90 group"
@@ -192,15 +197,13 @@ export default function Timeline({
             </span>
           </div>
         </div>
-        <div className="flex items-center gap-4">
+        <div className="flex shrink-0 items-center gap-4">
           {activeShot && (
             <div className="flex items-center gap-4 mr-2 bg-gray-50 dark:bg-neutral-900 px-4 py-2 rounded-2xl border border-gray-100 dark:border-neutral-800 shadow-inner">
               <span className="text-[10px] font-black text-gray-400 dark:text-neutral-500 uppercase tracking-widest">转场</span>
               <select
                 value={activeShot.transition || 'none'}
-                onChange={(e) => onUpdateScene({
-                  shots: shots.map(s => s.id === activeShot.id ? { ...s, transition: e.target.value as any } : s)
-                })}
+                onChange={(e) => saveClips(shots.map(s => s.id === activeShot.id ? { ...s, transition: e.target.value as any } : s))}
                 className="bg-transparent text-gray-900 dark:text-neutral-300 text-[10px] font-black uppercase tracking-widest outline-none cursor-pointer"
               >
                 <option value="none">无</option>
@@ -219,7 +222,7 @@ export default function Timeline({
                   videoPrompt: '',
                   duration: 5,
                 };
-                onUpdateScene({ shots: [...shots, newShot] });
+                onUpdateScene({ shots: [...(scene.shots || []), newShot], edit: editFromTimelineShots([...shots, {...newShot,sourceShotId:newShot.id}]) });
                 onSelectShot(newShot.id);
               }}
               className="flex items-center gap-2.5 px-5 py-2.5 hover:bg-white dark:hover:bg-neutral-800 rounded-2xl text-[10px] font-black text-blue-600 dark:text-blue-400 transition-all uppercase tracking-widest shadow-sm border border-transparent hover:border-gray-100"
@@ -281,6 +284,12 @@ export default function Timeline({
             </button>
           </div>
 
+          <div className="flex items-center gap-1">
+            <button type="button" title="片段前移" disabled={!activeShotId || shots.findIndex(s=>s.id===activeShotId)<=0} onClick={()=>{const i=shots.findIndex(s=>s.id===activeShotId);if(i>0){const next=[...shots];[next[i-1],next[i]]=[next[i],next[i-1]];saveClips(next);}}} className="shrink-0 rounded-md p-2 text-gray-500 hover:bg-gray-100 dark:text-neutral-300 dark:hover:bg-neutral-800 disabled:opacity-30"><ArrowLeft className="h-4 w-4" /></button>
+            <button type="button" title="片段后移" disabled={!activeShotId || shots.findIndex(s=>s.id===activeShotId)>=shots.length-1} onClick={()=>{const i=shots.findIndex(s=>s.id===activeShotId);if(i>=0&&i<shots.length-1){const next=[...shots];[next[i+1],next[i]]=[next[i],next[i+1]];saveClips(next);}}} className="shrink-0 rounded-md p-2 text-gray-500 hover:bg-gray-100 dark:text-neutral-300 dark:hover:bg-neutral-800 disabled:opacity-30"><ArrowRight className="h-4 w-4" /></button>
+            <button type="button" title="复制片段" disabled={!activeShot} onClick={()=>{if(activeShot){const next=[...shots],i=next.findIndex(s=>s.id===activeShot.id);next.splice(i+1,0,{...activeShot,id:crypto.randomUUID()});saveClips(next);}}} className="shrink-0 rounded-md p-2 text-gray-500 hover:bg-gray-100 dark:text-neutral-300 dark:hover:bg-neutral-800 disabled:opacity-30"><Copy className="h-4 w-4" /></button>
+            <button type="button" title="此片段使用当前镜头素材" disabled={!activeShot} onClick={()=>{if(activeShot){const source=legacySceneVideoClips(scene).find(s=>s.id===(activeShot.sourceShotId||activeShot.id));if(source)saveClips(shots.map(s=>s.id===activeShot.id?{...s,videoUrl:source.videoUrl,imageUrl:source.imageUrl,sourceTakeId:source.sourceTakeId || source.activeTakeId,sourceStartSeconds:source.sourceStartSeconds||0}:s));}}} className="shrink-0 rounded-md p-2 text-gray-500 hover:bg-gray-100 dark:text-neutral-300 dark:hover:bg-neutral-800 disabled:opacity-30"><RefreshCw className="h-4 w-4" /></button>
+          </div>
           <div className="h-10 w-px bg-gray-100 dark:bg-neutral-800 mx-2"></div>
           
           <button 
@@ -292,39 +301,21 @@ export default function Timeline({
                 const shotStart = shotPositions[shotIndex].start;
                 if (currentTime > shotStart && currentTime < shotStart + (shot.duration || 5)) {
                   const duration1 = currentTime - shotStart;
-                  const duration2 = (shot.duration || 5) - duration1;
                   const [newShot1, newShot2] = splitTimelineShot(shot, duration1, `shot-${crypto.randomUUID()}`);
                   const newShots = [...shots];
                   newShots.splice(shotIndex, 1, newShot1, newShot2);
                   
-                  let currentStart = 0;
-                  const newShotPositions = newShots.map(s => {
-                    const start = currentStart;
-                    currentStart += (s.duration || 5);
-                    return { id: s.id, start };
-                  });
-                  
-                  onUpdateScene({ 
-                    shots: newShots,
-                    audioTracks: audioTracks.map(t => {
-                      if (t.shotId) {
-                        const linkedShot = newShotPositions.find(s => s.id === t.shotId);
-                        if (linkedShot) {
-                          return { ...t, startTime: linkedShot.start };
-                        }
-                      }
-                      return t;
-                    })
-                  });
+                  saveClips(newShots);
                 }
               } else if (activeAudioTrackId) {
                 const trackIndex = audioTracks.findIndex(t => t.id === activeAudioTrackId);
                 if (trackIndex === -1) return;
                 const track = audioTracks[trackIndex];
-                if (currentTime > track.startTime && currentTime < track.startTime + (track.duration || 5)) {
-                  const duration1 = currentTime - track.startTime;
-                  const duration2 = (track.duration || 5) - duration1;
-                  const [newTrack1, newTrack2] = splitTimelineAudio(track, duration1, `audio-${crypto.randomUUID()}`);
+                const trackStart = audioTrackTimelineStart(scene, track);
+                if (currentTime > Math.max(0,trackStart) && currentTime < trackStart + (track.duration || 5)) {
+                  const duration1 = currentTime - trackStart;
+                  const [newTrack1, newTrack2] = splitTimelineAudio({...track,startTime:trackStart}, duration1, `audio-${crypto.randomUUID()}`);
+                  newTrack1.startTime=Math.max(0,newTrack1.startTime);
                   const newTracks = [...audioTracks];
                   newTracks.splice(trackIndex, 1, newTrack1, newTrack2);
                   onUpdateScene({ audioTracks: newTracks });
@@ -340,10 +331,7 @@ export default function Timeline({
           <button 
             onClick={() => {
               if (activeShotId) {
-                onUpdateScene({ 
-                  shots: shots.filter(s => s.id !== activeShotId),
-                  audioTracks: audioTracks.filter(t => t.shotId !== activeShotId)
-                });
+                saveClips(shots.filter(s => s.id !== activeShotId));
                 onSelectShot(null);
               } else if (activeAudioTrackId) {
                 onUpdateScene({ audioTracks: audioTracks.filter(t => t.id !== activeAudioTrackId) });
@@ -476,7 +464,7 @@ export default function Timeline({
                 </button>
               </div>
               <div className="ml-20 relative w-full h-full">
-                {audioTracks.filter(t => t.type === 'dialogue').map(track => (
+                {displayAudioTracks.filter(t => t.type === 'dialogue').map(track => (
                   <div
                     key={track.id}
                     className={`absolute top-0 bottom-0 rounded-[1rem] overflow-hidden cursor-ew-resize transition-all shadow-sm ${
@@ -546,7 +534,7 @@ export default function Timeline({
                 </button>
               </div>
               <div className="ml-20 relative w-full h-full">
-                {audioTracks.filter(t => t.type === 'bgm').map(track => {
+                {displayAudioTracks.filter(t => t.type === 'bgm').map(track => {
                   const isBroken = track.linkedAssetId && !track.url;
                   return (
                   <div
@@ -624,7 +612,7 @@ export default function Timeline({
                 </button>
               </div>
               <div className="ml-20 relative w-full h-full">
-                {audioTracks.filter(t => t.type === 'sfx').map(track => {
+                {displayAudioTracks.filter(t => t.type === 'sfx').map(track => {
                   const isBroken = track.linkedAssetId && !track.url;
                   return (
                   <div

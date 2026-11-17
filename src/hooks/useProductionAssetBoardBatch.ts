@@ -30,11 +30,8 @@ import {
 } from "../clients/productionAssetWorkflowClient";
 import {
   buildProductionAssetBoardVisualQAPrompt,
-  buildProductionAssetBoardVisualRepairPrompt,
   buildProductionAssetBoardCanonicalReference,
-  buildProductionAssetBoardPreviousOutputRepairOperation,
   isProductionAssetBoardVisualQualityPassing,
-  PRODUCTION_ASSET_BOARD_VISUAL_MAX_REPAIRS,
 } from "../clients/productionAssetWorkflowClient";
 import {
   normalizeStoryboardAgentQuality,
@@ -45,7 +42,6 @@ import { safeParseAIResponse } from "../utils/aiParser";
 import { imageUrlToMediaData, inspectImageTechnicalMetadata } from "../utils/imageMediaData";
 import { summarizeUnknownError } from "../utils/logging";
 import {
-  createImageGenerationReference,
   type CompiledImageGenerationRequest,
 } from "../clients/productionStudioWorkflowClient";
 
@@ -76,28 +72,7 @@ interface AssetBoardBatchOperationToken {
   epoch: number;
 }
 
-const maxGenerationAttempts = PRODUCTION_ASSET_BOARD_VISUAL_MAX_REPAIRS + 1;
-
 const isProviderConfigurationFailure = (message: string) => message.includes("无可用渠道");
-
-const isTransientGenerationFailure = (message: string) => {
-  if (isProviderConfigurationFailure(message)) return false;
-  const normalized = message.toLowerCase();
-  return [
-    "(429)",
-    "(500)",
-    "(502)",
-    "(503)",
-    "(504)",
-    "network",
-    "timeout",
-    "proxy request failed",
-    "网络",
-    "超时",
-  ].some((marker) => normalized.includes(marker));
-};
-
-const wait = (milliseconds: number) => new Promise((resolve) => window.setTimeout(resolve, milliseconds));
 
 const allBoards = (project: Project) => {
   const plan = buildVideoStoryboardAssetBoardPlan(project);
@@ -121,7 +96,7 @@ const batchInstruction = `你是项目资产板总监 Agent。请为下面清单
 4. 不添加项目与资产档案中没有的剧情事实、文字、水印、品牌标志或无关人物。
 5. 同一资产的变体必须继承基础板；若提供参考图，优先保持参考图身份。
 6. 所有资产板必须继承同一份项目风格锁与已确认导演、摄影、灯光、美术、服化妆和表演方案；风格锁尚未明确时，只能从这些已确认项目上下文形成一个共享方向，不能逐张自由发挥。
-7. 这是一次已确认的整批生成计划。系统每次只生成下一张候选；每张都必须预览并明确采用后才能写入正式资产。失败重试可沿用本计划，所有调用必须保留提示词、模型、Skill、上下文和来源审计。
+7. 这是一次已确认的整批生成计划。系统每次只生成下一张候选；每张都必须预览并明确采用后才能写入正式资产。超时先查原任务，明确重做时可沿用本计划；所有调用必须保留提示词、模型、Skill、上下文和来源审计。
 8. 一张图只能表现当前 boardItemId 对应的一种资产。允许同一资产的多视角、表情、细节和状态，但禁止把其他角色、场景或道具拼进同一张板；组合道具必须先拆成独立资产再生成。`;
 
 export const useProductionAssetBoardBatch = ({
@@ -337,7 +312,7 @@ export const useProductionAssetBoardBatch = ({
         total: targetIds.size,
         currentBoardName: board.variantId ? `${board.assetName} · ${board.variantName || "状态变体"}` : board.assetName,
         currentAttempt: 1,
-        maxAttempts: maxGenerationAttempts,
+        maxAttempts: 1,
         failedBoardNames: [...failedBoardNames],
       });
       const boardPrompt = executionPromptByBoardId.get(board.id);
@@ -361,72 +336,43 @@ export const useProductionAssetBoardBatch = ({
           project: workingProject,
           asset: board,
         });
-        let imageUrl = "";
-        let adoptedPrompt = boardPrompt;
         let quality: ManualStoryboardAgentQuality | undefined;
-      let reviewExecution: AIExecutionProvenance | undefined;
-        let review: NonNullable<Parameters<typeof buildProductionAssetBoardReferenceUpdate>[0]["review"]> | undefined;
-        let repairIssues: string[] = [];
-        let latestError: unknown;
+        let reviewExecution: AIExecutionProvenance | undefined;
+        let review: NonNullable<Parameters<typeof buildProductionAssetBoardReferenceUpdate>[0]["review"]> = { mode: "manual", status: "pending" };
         let compiledRequest: CompiledImageGenerationRequest | undefined;
-      let executionProvenance: AIExecutionProvenance | undefined;
-        let previousOutputReferenceUrl: string | undefined;
-        for (let attempt = 1; attempt <= maxGenerationAttempts; attempt += 1) {
-          if (!isGenerationOperationCurrent(operation)) return;
-          setCurrentProgress({
-            stage: "generating",
-            completed,
-            total: targetIds.size,
-            currentBoardName: board.variantId ? `${board.assetName} · ${board.variantName || "状态变体"}` : board.assetName,
-            currentAttempt: attempt,
-            maxAttempts: maxGenerationAttempts,
-            failedBoardNames: [...failedBoardNames],
-          });
+        let generatedCandidateId: string | undefined;
+        let generationExecutionId: string | undefined;
+        let executionProvenance: AIExecutionProvenance | undefined;
+        if (!isGenerationOperationCurrent(operation)) return;
+        setCurrentProgress({
+          stage: "generating", completed, total: targetIds.size,
+          currentBoardName: board.variantId ? `${board.assetName} · ${board.variantName || "状态变体"}` : board.assetName,
+          currentAttempt: 1, maxAttempts: 1, failedBoardNames: [...failedBoardNames],
+        });
+        // One explicit request per board. A page/network timeout can leave it running.
+        const generatedImageUrl = await generateAIImage({
+          projectId: workingProject.id,
+          target: { projectId: workingProject.id, kind: "asset", assetId: board.id, referenceMode: "production_board", shotIds: [] },
+          onGenerationResult: result => { generatedCandidateId = result.candidateId; generationExecutionId = result.executionId; },
+          promptCore: boardPrompt,
+          aspectRatio: boardAspectRatio(board),
+          visualStyleProjection,
+          visualRecipeInputEvidence: buildProductionAssetVisualRecipeInputEvidence({ project: workingProject, asset: board }),
+          references: inputReferenceUrl ? [buildProductionAssetBoardCanonicalReference({ board, imageUrl: inputReferenceUrl })] : undefined,
+          operation: { kind: "generate" },
+          onExecutionProvenance: audit => { executionProvenance = audit; },
+          onPromptCompiled: compiled => { compiledRequest = compiled; },
+        });
+        if (!isGenerationOperationCurrent(operation)) return;
+        const imageUrl = await persistProjectMediaUrl(generatedImageUrl, project.id);
+        if (!isGenerationOperationCurrent(operation)) return;
+        if (!imageUrl) throw new Error("图片生成未返回结果。");
+        const technical = await inspectImageTechnicalMetadata(imageUrl);
+        if (!isGenerationOperationCurrent(operation)) return;
+        if (technical.width > 0 && technical.height > 0 && technical.width <= technical.height) {
+          review.notes = `资产板输出方向与本次结构化画幅不一致，实际返回 ${technical.width}x${technical.height}。已保留候选，请明确决定是否重做。`;
+        } else if (useAIConfigStore.getState().visualQcEnabled) {
           try {
-            const executionPrompt = buildProductionAssetBoardVisualRepairPrompt(boardPrompt, repairIssues);
-            const references = previousOutputReferenceUrl
-              ? [createImageGenerationReference({
-                  imageUrl: previousOutputReferenceUrl,
-                  label: "待修改的参考图",
-                  role: "previous_output_repair",
-                })]
-              : inputReferenceUrl
-                ? [buildProductionAssetBoardCanonicalReference({ board, imageUrl: inputReferenceUrl })]
-                : undefined;
-            const generatedImageUrl = await generateAIImage({
-              promptCore: executionPrompt,
-              aspectRatio: boardAspectRatio(board),
-              visualStyleProjection,
-              visualRecipeInputEvidence: buildProductionAssetVisualRecipeInputEvidence({ project: workingProject, asset: board }),
-              references,
-              operation: previousOutputReferenceUrl
-                ? buildProductionAssetBoardPreviousOutputRepairOperation({ board, issues: repairIssues })
-                : { kind: "generate" },
-              onExecutionProvenance: audit => { executionProvenance = audit; },
-        onPromptCompiled: (compiled) => {
-                compiledRequest = compiled;
-              },
-            });
-            if (!isGenerationOperationCurrent(operation)) return;
-            imageUrl = await persistProjectMediaUrl(generatedImageUrl, project.id);
-            if (!isGenerationOperationCurrent(operation)) return;
-            previousOutputReferenceUrl = imageUrl;
-            adoptedPrompt = executionPrompt;
-            const technical = await inspectImageTechnicalMetadata(imageUrl);
-            if (!isGenerationOperationCurrent(operation)) return;
-            if (technical.width > 0 && technical.height > 0 && technical.width <= technical.height) {
-              repairIssues = [`资产板输出方向与本次结构化画幅不一致，实际返回 ${technical.width}x${technical.height}。`];
-              latestError = new Error(repairIssues[0]);
-              imageUrl = "";
-              if (attempt < maxGenerationAttempts) continue;
-              throw latestError;
-            }
-
-            if (!useAIConfigStore.getState().visualQcEnabled) {
-              review = { mode: "manual", status: "pending" };
-              break;
-            }
-
             const qaPrompt = buildProductionAssetBoardVisualQAPrompt({ project: workingProject, board });
             const mediaDataList = await Promise.all(
               [imageUrl, inputReferenceUrl].filter(Boolean).map((url) => imageUrlToMediaData(url!)),
@@ -434,7 +380,7 @@ export const useProductionAssetBoardBatch = ({
             if (!isGenerationOperationCurrent(operation)) return;
             const qaResponse = await generateAIContent({
               taskType: "visualQc",
-          onExecutionProvenance: audit => { reviewExecution = audit; },
+              onExecutionProvenance: audit => { reviewExecution = audit; },
               prompt: qaPrompt,
               requireJson: true,
               schema: storyboardShotQualitySchema,
@@ -444,33 +390,22 @@ export const useProductionAssetBoardBatch = ({
             quality = normalizeStoryboardAgentQuality(safeParseAIResponse<unknown>(qaResponse, {}));
             if (isProductionAssetBoardVisualQualityPassing(quality)) {
               review = { mode: "automatic", executionProvenance: reviewExecution, status: "approved", reviewedAt: Date.now() };
-              break;
+            } else {
+              review = { mode: "automatic", executionProvenance: reviewExecution, status: "pending", reviewedAt: Date.now(), notes: quality.issues.map(item => `${item.description}；${item.suggestion}`).join("；") || quality.summary };
             }
-            repairIssues = quality.issues
-              .filter((item) => item.severity !== "advisory")
-              .map((item) => `${item.description}；${item.suggestion}`);
-            latestError = new Error(`资产板视觉质检 ${quality.score} 分，未达到制作参考板标准：${repairIssues.join("；") || quality.summary}`);
-            imageUrl = "";
-            if (attempt < maxGenerationAttempts) continue;
-            throw latestError;
           } catch (error) {
             if (!isGenerationOperationCurrent(operation)) return;
-            latestError = error;
-            const message = summarizeUnknownError(error).message;
-            if (attempt >= maxGenerationAttempts || !isTransientGenerationFailure(message)) throw error;
-            await wait(attempt * 1500);
-            if (!isGenerationOperationCurrent(operation)) return;
+            review = { mode: "manual", status: "pending", notes: `自动检查未完成：${summarizeUnknownError(error).message}。候选已保留。` };
           }
         }
-        if (!imageUrl) throw latestError || new Error("图片生成未返回结果。");
         if (!compiledRequest) throw new Error("资产板候选缺少图片编译审计，不能进入人工采用。");
-        const candidateId = `asset-board-${window.crypto.randomUUID()}`;
+        const candidateId = generatedCandidateId || `asset-board-${window.crypto.randomUUID()}`;
         const stagedCandidate: ProductionAssetBoardCandidate = {
           candidateId,
           board,
           imageUrl,
           source: executionProvenance?.source === "manual_external" ? "upload" : "ai_generation",
-          finalPrompt: compiledRequest?.providerPrompt || adoptedPrompt,
+          finalPrompt: compiledRequest?.providerPrompt || boardPrompt,
           modelId: executionProvenance?.modelId,
         executionProvenance,
           inputReferenceUrl,
@@ -518,6 +453,7 @@ export const useProductionAssetBoardBatch = ({
           quality: stagedCandidate.quality,
           review: stagedCandidate.review,
           referenceMode: stagedCandidate.referenceMode,
+          sourceRunId: generationExecutionId,
         });
         if (!isGenerationOperationCurrent(operation) || !replaceCurrentProjectSnapshot(savedProject)) return;
         const persisted = savedProject.manualProductionAssets?.pendingReferences?.find((item) => item.id === candidateId);
@@ -578,7 +514,7 @@ export const useProductionAssetBoardBatch = ({
     const stage: AssetBoardBatchStage = failedBoardNames.length ? "needs_decision" : "completed";
     setCurrentProgress({ stage, completed, total: targetIds.size, failedBoardNames, failureReason });
     if (isGenerationOperationCurrent(operation) && failedBoardNames.length) {
-      toast.error(`${failedBoardNames.length} 张资产板生成失败，可沿已确认计划继续重试。`);
+      toast.error(`${failedBoardNames.length} 张资产板尚未完成，请先查看原因和原生成记录；不会自动重发。`);
       throw new Error(failureReason || "资产板生成失败");
     }
     } finally {

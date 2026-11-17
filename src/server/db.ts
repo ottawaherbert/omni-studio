@@ -1,3 +1,4 @@
+import { readSceneMediaProgress } from './generation/store';
 import { appearanceSourceHash } from "../services/production/productionAppearance";
 import Database from 'better-sqlite3';
 import { previewUnusedMedia, quarantineUnusedMedia, restoreRecycledMedia } from './media/mediaGarbageCollection';
@@ -507,7 +508,9 @@ const projectListData = (data: any) => {
   const snapshot = data?.productionSourceSnapshot;
   return {
     domain: data?.domain,
-    interactiveExperienceId: data?.interactiveExperienceId,
+    // Preparation targets predate the top-level link; retain their identity in
+    // lightweight catalogs without copying the full interactive scene profile.
+    interactiveExperienceId: data?.interactiveExperienceId || data?.interactiveProductionPrepProfile?.experienceId,
     projectModel: data?.projectModel,
     productionMode: data?.productionMode,
     targetScale: data?.targetScale,
@@ -823,7 +826,7 @@ const workspaceEpisode = (
               ? workspaceStoryboardIndex(manualStoryboard)
               : stripManualStoryboardPromptBodies(manualStoryboard),
           }
-        : {}),
+        : manualStoryboard?.directorPlan ? {manualStoryboard:{schemaVersion:manualStoryboard.schemaVersion, directorPlan:manualStoryboard.directorPlan, __workspaceDirectionOnly:true}} : {}),
     };
   }),
 });
@@ -875,7 +878,9 @@ const restoreManualStoryboardPromptBodies = (incoming: any, existing: any) => {
 
 const mergeWorkspaceScene = (incoming: any, existing: any, view: string) => {
   const merged = { ...incoming };
-  if (view === 'production-preparation' && merged.manualStoryboard === undefined && existing.manualStoryboard !== undefined) {
+  if (view === 'production-preparation' && merged.manualStoryboard?.__workspaceDirectionOnly) {
+    merged.manualStoryboard = {...existing.manualStoryboard, schemaVersion:merged.manualStoryboard.schemaVersion, directorPlan:merged.manualStoryboard.directorPlan};
+  } else if (view === 'production-preparation' && merged.manualStoryboard === undefined && existing.manualStoryboard !== undefined) {
     merged.manualStoryboard = existing.manualStoryboard;
   } else if (view === 'storyboard' && merged.manualStoryboard !== undefined) {
     merged.manualStoryboard = restoreManualStoryboardPromptBodies(
@@ -1180,7 +1185,7 @@ export const dbHelpers = {
     const appearanceHistory = (db.prepare("SELECT shots.id, json_extract(shots.data, '$.appearance') AS appearance, json_object('script', json_extract(scenes.data, '$.script'), 'sourceEvidence', json_extract(scenes.data, '$.sourceEvidence'), 'description', json_extract(scenes.data, '$.description')) AS sceneData FROM shots JOIN scenes ON shots.scene_id = scenes.id AND shots.project_id = scenes.project_id WHERE shots.project_id = ? AND shots.scene_id != ? AND json_type(shots.data, '$.appearance.states') = 'array'").all(projectId, sceneId) as any[]).map(row => ({ id: row.id, appearance: JSON.parse(row.appearance), currentSourceHash: appearanceSourceHash(JSON.parse(row.sceneData)) }));
     return {
       sceneId,
-      productionTeamContext: JSON.stringify(buildProductionSceneContext({ ...episodeData, id: episodeId, scenes }, scenes[index], appearanceHistory, creativeProject), null, 2),
+      productionTeamContext: JSON.stringify({...buildProductionSceneContext({ ...episodeData, id: episodeId, scenes }, scenes[index], appearanceHistory, creativeProject),mediaProgress:readSceneMediaProgress(db,projectId,episodeId,sceneId)}, null, 2),
     };
   },
 

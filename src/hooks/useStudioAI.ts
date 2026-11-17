@@ -6,7 +6,7 @@ import toast from "react-hot-toast";
 import { generateAIImage, generateAIVideo, generateAIVoice } from "../clients/aiClient";
 import { isQwenCustomVoice, type VoiceSettings } from '../../packages/domain/src/speech';
 import { applyStudioVoiceResult, characterSpeechDirection, resolveTrackVoiceDirection, voiceDirectionOverrides } from '../utils/studioVoiceResult';
-import { appendShotTakeCandidate } from "../clients/productionMediaReviewClient";
+import { noteSuccessfulProductionEpisodeWrite } from "../utils/saveFailureRecovery";
 import { buildShotImageVisualRecipeInputEvidence } from "../clients/productionVisualImageClient";
 import {
   buildStudioShotImageVisualStyleProjection,
@@ -558,7 +558,11 @@ export function useStudioAI() {
       if (!isRequestCurrent(request)) return;
 
       let compiledImageRequest: CompiledImageGenerationRequest | undefined;
+      let generatedCandidateId: string | undefined;
       const imageUrl = await generateAIImage({
+          projectId: currentProject?.id,
+        target: { projectId: request.projectId, episodeId: request.episodeId, sceneId: request.sceneId, kind: "shot", shotIds: [request.targetId] },
+        onGenerationResult: result => { generatedCandidateId = result.candidateId; },
         promptCore: finalPrompt,
         aspectRatio: currentProject?.aspectRatio as any || "16:9",
         references: compressedReferences,
@@ -616,7 +620,7 @@ export function useStudioAI() {
       }
 
       const createdAt = Date.now();
-      const takeId = `take-${createdAt}`;
+      const takeId = generatedCandidateId || `take-${createdAt}`;
       const providerPrompt = compiledImageRequest?.providerPrompt || finalPrompt;
       const selectedAssetIds = [
         ...(selectedShot.characterIdsInShot || []),
@@ -660,13 +664,11 @@ export function useStudioAI() {
       const generatedTake = { id: takeId, imageUrl, imageMedia, generationAudit, createdAt };
 
       if (!isRequestCurrent(request)) return;
-      snapshotInteractiveNode(latestProject, request.sceneId, "Studio 生成节点镜头图片前");
-      await useProjectStore.getState().updateScene(request.sceneId, {
-        shots: latestActiveScene.shots.map((shot) => {
-          if (shot.id !== request.targetId) return shot;
-          return appendShotTakeCandidate(shot, generatedTake);
-        }),
-      }, request.episodeId);
+      const saved = await legacyProjectClient.appendStudioCandidate(request.projectId, request.episodeId, request.sceneId, { shotId: request.targetId, take: generatedTake });
+      if (isRequestCurrent(request) && useProjectStore.getState().activeEpisode === latestActiveEpisode) {
+        noteSuccessfulProductionEpisodeWrite(request.projectId, saved.episode);
+        useProjectStore.setState({ activeEpisode: saved.episode });
+      }
       if (!isRequestCurrent(request)) return;
       toast.success(sourceReviewReasons.length
         ? "图片候选已生成，但来源有更新，建议复核后再采用"
@@ -782,7 +784,10 @@ export function useStudioAI() {
       const continuityContext = stateScene ? buildVideoContinuityContext({ sceneId: stateScene.id, shots: stateScene.shots || [], unitShotIds: [selectedShot.id] }) : "";
       const providerPrompt = [finalPrompt, continuityContext && !finalPrompt.includes(continuityContext) ? continuityContext : "", visualStyleProjection.rendered.instruction].filter(Boolean).join("\n\n");
       let providerPromptAudit: VideoProviderPromptAudit | undefined;
+      let generatedCandidateId: string | undefined;
       const videoUrl = await generateAIVideo({
+        target: { projectId: request.projectId, episodeId: request.episodeId, sceneId: request.sceneId, kind: "shot", shotIds: [request.targetId] },
+        onGenerationResult: result => { generatedCandidateId = result.candidateId; },
         prompt: providerPrompt,
         imageUrl: startingImageUrl,
         durationSeconds: Number(selectedShot.duration || 0),
@@ -877,7 +882,7 @@ export function useStudioAI() {
         createdAt,
       };
       const generatedTake = {
-        id: `take-video-${createdAt}`,
+        id: generatedCandidateId || `take-video-${createdAt}`,
         imageUrl: startingImageUrl,
         imageMedia: startingImageUrl ? createLegacyMediaReference("image", startingImageUrl) : undefined,
         videoUrl,
@@ -886,12 +891,11 @@ export function useStudioAI() {
         createdAt,
       };
       if (!isRequestCurrent(request)) return;
-      snapshotInteractiveNode(latestProject, request.sceneId, "Studio 生成节点镜头视频前");
-      await useProjectStore.getState().updateScene(request.sceneId, {
-        shots: latestActiveScene.shots.map((shot) => shot.id !== request.targetId
-          ? shot
-          : appendShotTakeCandidate(shot, generatedTake)),
-      }, request.episodeId);
+      const saved = await legacyProjectClient.appendStudioCandidate(request.projectId, request.episodeId, request.sceneId, { shotId: request.targetId, take: generatedTake });
+      if (isRequestCurrent(request) && useProjectStore.getState().activeEpisode === latestActiveEpisode) {
+        noteSuccessfulProductionEpisodeWrite(request.projectId, saved.episode);
+        useProjectStore.setState({ activeEpisode: saved.episode });
+      }
       if (!isRequestCurrent(request)) return;
       toast.success(sourceReviewReasons.length
         ? "视频候选已生成，但来源有更新，建议复核后再采用"
@@ -959,6 +963,8 @@ export function useStudioAI() {
         const finalDirection = { ...inheritedDirection, ...direction };
         try {
           const audioUrl = await generateAIVoice({
+            purpose: 'production',
+            target: { projectId: requestScope.projectId, episodeId: requestScope.episodeId, sceneId: requestScope.sceneId, ...(selectedAudioTrack.shotId ? { shotIds: [selectedAudioTrack.shotId] } : {}) },
             text: finalText,
             voiceName,
             modelConfigId: audioModelId,

@@ -1,4 +1,6 @@
 export * from "../services/production/manualStoryboard";
+export * from "../services/production/sceneVisualPlan";
+export * from "../services/production/sceneProductionFlow";
 export * from "../services/production/manualVideoStoryboard";
 export * from "../services/production/storyboardBatchSceneIndex";
 export * from "../services/production/storyboardBoardAgent";
@@ -10,3 +12,4 @@ export * from "../services/production/storyboardUnitVideoPrompt";
 export * from "../services/production/storyboardVisualPromptAgent";
 export * from "../services/production/videoStoryboardSystem";
 export * from "../services/production/productionAppearance";
+export * from "../../packages/production/src/services/production/sceneVisualCoherence";

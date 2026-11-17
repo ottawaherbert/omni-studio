@@ -6,7 +6,6 @@ import { shotTakeHasVideoIntent } from "../src/services/production/shotTakeRevie
 const source = (filePath: string) => readFileSync(path.join(process.cwd(), filePath), "utf8");
 
 const storyboard = source("src/pages/Storyboard.tsx");
-const storyboardHeader = source("src/components/storyboard/StoryboardHeader.tsx");
 const storyboardAi = source("src/hooks/useStoryboardAI.ts");
 const interactiveStoryboardInstruction = source("src/utils/interactiveStoryboardInstruction.ts");
 const storyboardBatchSceneIndex = source("src/services/production/storyboardBatchSceneIndex.ts");
@@ -28,7 +27,7 @@ assert.ok(studioImport.includes("resolveManualStudioInteractiveContext(latestPro
 const manualVideoStoryboardPanel = source("src/components/production/ManualVideoStoryboardPanel.tsx");
 const assetPanel = source("src/components/production/ManualProductionAssetsPanel.tsx");
 const productionProjectAssets = source("src/services/production/productionProjectAssets.ts");
-const imagePromptModal = source("src/components/ImagePromptModal.tsx");
+const generationWorkbench = source("src/components/generation/GenerationWorkbench.tsx");
 const manualProductionAssetImages = source("src/hooks/useManualProductionAssetImages.ts");
 const manualProductionReferenceReview = source("src/components/production/ManualProductionReferenceReviewModal.tsx");
 
@@ -101,10 +100,9 @@ const productionBoardImageOverlay = source("src/services/production/productionBo
 const modal = source("src/components/ui/Modal.tsx");
 const aiParser = source("src/utils/aiParser.ts");
 
-assert.ok(
-  productionAssetBoardImages.includes('review = { mode: "automatic", status: "pending", reviewedAt: Date.now() };'),
-  "a generated asset board that exhausts automatic QA repairs must remain available for human preview",
-);
+assert.match(productionAssetBoardBatch,
+  /review = \{ mode: "automatic", executionProvenance: reviewExecution, status: "pending", reviewedAt: Date.now\(\), notes: quality.issues/,
+  "a generated asset board with failed QA remains available with the observed issues, without automatic repair");
 assert.ok(
   productionAssetBoardReview.includes("isProductionAssetBoardVisualQualityPassing(candidate.quality)"),
   "the asset-board review UI must not label every available QA score as passed",
@@ -133,9 +131,8 @@ assert.equal(storyboard.includes('prepareBatchAction("import-shots")'), false, "
 
 assert.ok(storyboard.includes("buildManualProductionAssetReadModel"));
 assert.ok(storyboard.includes("episode={activeEpisode}"), "the storyboard scene rail must read unit-owned department confirmation instead of the deprecated scene workspace");
-assert.ok(storyboard.includes("productionGate={manualProductionAssetReadModel"));
-assert.ok(storyboardHeader.includes("!productionGate.shotPlanningReady"));
-assert.equal(storyboardHeader.includes("productionGate && !productionGate.storyboardReady"), false, "formal production readiness must not hide or disable storyboard draft generation");
+assert.ok(storyboard.includes("<ProductionPreparationAdvisories gate={productionPreparationGate}"));
+assert.ok(storyboard.includes("assets: manualProductionAssetReadModel"), "preparation advisories must use current project assets");
 assert.ok(shotCard.includes("aiGenerationBlockedReason"));
 assert.ok(shotCard.includes("视频提示词 (Video Prompt)"), "manual Shot editing must keep video prompts editable alongside image prompts");
 assert.ok(storyboardAi.includes("!workflowOptions.manualReview && scriptBlocks.length === 0"), "director-production storyboards must accept the imported production script without coupling back to writing scriptBlocks");
@@ -147,9 +144,6 @@ assert.ok(storyboardBatchSceneIndex.includes("identityAnchor"));
 assert.ok(storyboardBatchSceneIndex.includes("referenceStatus"));
 assert.equal(storyboardBatchSceneIndex.includes("identityPrompt: board.prompt"), false, "shot planning must receive compact asset identity facts instead of entire nested board-generation prompts");
 assert.equal(visualPrompts.includes("导演动机（思维链）"), false, "storyboard prompts must request concise auditable rationale instead of hidden reasoning traces");
-assert.ok(storyboardHeader.includes('role="tablist"') && storyboardHeader.includes('role="tab"'), "Shots and storyboards must be separate first-level tabs");
-assert.equal(storyboardHeader.includes("批量处理其他场次"), false, "the current-scene workspace must not expose cross-scene batch actions");
-assert.ok(storyboardHeader.includes("boardBlockReason"), "a disabled story-board action must explain its upstream blocker without relying on hover text");
 assert.ok(storyboard.includes("mergeStoryboardUnitWithNext") && storyboard.includes("splitStoryboardUnit"), "authors must be able to merge adjacent Shots into a variable-size video unit and split it again");
 assert.ok(storyboard.includes("storyboardGroupingProposals") && storyboard.includes("planStoryboardCompositeVideoUnitGroups"), "automatic grouping may only appear as an explicit author-adopted proposal");
 assert.ok(storyboard.includes("adapter.limits.maxDurationSeconds") && storyboard.includes("adapter.capabilities.multiShot"), "storyboard grouping limits must come from the selected model adapter rather than an H3 constant");
@@ -161,7 +155,7 @@ assert.ok(storyboard.includes("defaultVisualReferenceMode") && storyboard.includ
 assert.ok(storyboardBoardBatchAgent.includes("workspace.defaultVisualReferenceMode"), "new StoryboardUnits must inherit the creator-selected scene default without model-specific branching");
 assert.ok(manualStudioAI.includes("request.target.videoPrompt.trim()"), "video providers must receive the focused shot prompt instead of the full authoring context bundle");
 assert.ok(manualStudioAI.includes("【作者补充要求】"), "the compact video provider prompt must preserve natural-language author direction");
-assert.ok(manualStudioAI.includes('return config.channels.some((item) => item.id === model.channelId);'), "the Studio model picker must list configured video models by capability instead of a provider allow-list");
+assert.ok(manualStudioAI.includes('return config.channels.some((item) => item.id === model.channelId && item.enabled !== false)'), "the Studio model picker must list configured video models by capability instead of a provider allow-list");
 assert.ok(manualStudioAI.includes('const localH3 = channel.type === "comfyui"'), "only a configured local ComfyUI H3 route may expose H3-specific controls");
 assert.equal(manualStudioAI.includes('channel.type === "minimax" || channel.type === "comfyui"'), false, "cloud MiniMax H3 must not remain a Studio model path");
 assert.ok(manualStudioAI.includes('localH3 ? MINIMAX_H3_REF2VA_ADAPTER_ID'), "local H3 must default to the only installed reference-video workflow");
@@ -188,12 +182,10 @@ assert.equal(shotTakeHasVideoIntent({
 assert.ok(studio.includes("buildManualStudioStoryboardTimeline(workflow.board, unitShots)"), "Studio must use the tested handoff that aggregates action panels into Shot timings without flattening speakers");
 assert.ok(studio.includes("resolveStoryboardUnitVideoPrompt"), "Studio must consume the canonical StoryboardUnit prompt instead of rebuilding a duplicate prompt");
 assert.equal(manualStudioAI.includes("? finalPrompt\n            : `${finalPrompt}"), false, "segmented video generation must not resend the oversized prompt-editor context for every provider task");
-assert.ok(storyboardHeader.includes('<Film className="h-4 w-4" />分镜'));
-assert.ok(storyboardHeader.includes('<Clapperboard className="h-4 w-4" />故事板'));
 assert.ok(manualVideoStoryboardPanel.includes("宫格模式") && manualVideoStoryboardPanel.includes("故事板模式") && manualVideoStoryboardPanel.includes("故事板参考模式"), "each StoryboardUnit must expose its clean-grid/director-board switch directly in the card header");
-assert.ok(storyboard.includes('videoGenerationMode === "shot" && (activeScene.shots'), "shot cards must only render in shot mode");
+assert.ok(storyboard.includes("shotEditor={productionStage === 'shots' && activeScene.shots.length"), "shot editor must render only in the shot timing stage");
 assert.ok(storyboard.includes('const videoGenerationMode = normalizeVideoGenerationMode(searchParams.get("videoMode"));'), "the production workspace must preserve the author-selected Shots or Storyboard tab");
-assert.ok(storyboard.includes("showVideoModeControl"), "the production route must display the Shots/Storyboard tabs");
+assert.ok(storyboard.includes("SceneProductionFlowHeader"), "the production route must expose the shared scene stage navigation");
 assert.ok(storyboard.includes("storyboardUnitAnchors.map"), "storyboard mode must render the scene-level composite board anchor");
 assert.ok(compositeBoard.includes("composeStoryboardSceneBoardWorkflow"), "storyboard mode must compose one coherent board for the whole scene instead of rendering a card per Shot");
 assert.ok(storyboard.includes("PendingCompositeStoryboardCard"), "legacy per-shot storyboard data must be shown as pending composite work instead of duplicated shot cards");
@@ -210,7 +202,7 @@ assert.ok(manualVideoStoryboardPanel.includes("进入摄影棚"), "a completed r
 const studioTargetPicker = readFileSync(new URL("../src/components/StudioGenerationTargetPicker.tsx", import.meta.url), "utf8");
 assert.ok(studioTargetPicker.includes('aria-label="摄影棚生成对象"') && studioTargetPicker.includes("视频单元"), "Studio must expose Shot and StoryboardUnit as explicit primary generation sources");
 assert.ok(studioTargetPicker.includes("宫格模式") && studioTargetPicker.includes("故事板模式"), "Studio must expose the same StoryboardUnit rendering choice as the Storyboard page");
-assert.ok(studioTargetPicker.includes('aria-label="视频生成方式"'), "adapter-supported generation modes must be visible on the primary Studio surface");
+assert.ok(!studioTargetPicker.includes('aria-label="视频生成方式"') && studio.includes("外部制作方式"), "legacy adapter choice belongs only to external preparation; internal generation uses workbench capabilities");
 assert.ok(shotCard.includes("画面版本"), "shot candidate images need an explicit user-facing label");
 assert.ok(shotCard.includes("V{takeIndex + 1}"), "shot candidate images need named versions rather than unexplained numbers");
 assert.match(
@@ -229,9 +221,6 @@ assert.ok(shotCard.includes("xl:grid-cols-2"), "fullscreen Shot information must
 assert.ok(shotCard.includes("availableHeight / naturalHeight"), "fullscreen Shot information must scale to fit rather than silently clipping long content");
 assert.ok(shotCard.includes("const availableHeight = content.clientHeight"), "fullscreen Shot fitting must use the padded content area's real available height");
 assert.ok(shotCard.includes("isFullscreen ? 'object-contain' : 'object-cover group-hover:scale-105'"), "fullscreen Shot images must remain fully visible without hover cropping");
-for (const retiredStoryboardAction of ["场景 Skill", "导出工程", "播放预演", "进入分镜摄影棚", "Shot 镜头设计"]) {
-  assert.equal(storyboardHeader.includes(retiredStoryboardAction), false, `${retiredStoryboardAction} must not compete with the current storyboard task`);
-}
 assert.ok(storyboard.includes('next.set("sceneId", sceneId)'), "scene selection must update the canonical URL state");
 assert.ok(storyboard.includes("onSelect={selectScene}"), "the scene rail must use the canonical scene selection handler");
 assert.equal(storyboard.includes("setActiveSceneId(id)"), false, "scene selection must not be reset by a stale URL scene id");
@@ -277,7 +266,7 @@ assert.ok(storyboardAi.includes("createImageGenerationReference"), "shot referen
 assert.ok(rerollExecute.includes("setGeneratingShotImageId(shotId)"), "shot image execution must expose a card-scoped pending state");
 assert.ok(rerollExecute.includes("setGeneratingShotImageId((current) => current === shotId ? null : current)"), "shot image pending state must clear after success or failure");
 assert.equal(rerollExecute.includes("currentProject.characters.find"), false, "shot image execution must not silently rebuild a different character reference package after confirmation");
-assert.ok(rerollExecute.includes("appendShotTakeCandidate(shot, {"), "shot image generation must stage the result through the shared take-review boundary");
+assert.ok(rerollExecute.includes("legacyProjectClient.appendStudioCandidate("), "shot image generation must stage the result through the shared take-review boundary");
 assert.ok(shotTakeReview.includes("(shot.takes || []).filter(takeHasMedia)"), "shot image generation must discard phantom takes without media");
 const takeMediaPredicate = shotTakeReview.slice(
   shotTakeReview.indexOf("const takeHasMedia ="),
@@ -302,8 +291,7 @@ assert.ok(storyboard.includes("deleteSelectedShots"), "selected Shots must suppo
 assert.ok(shotCard.includes('role="status"'), "the Shot image area must expose generation progress accessibly");
 assert.ok(shotCard.includes("正在生成 {currentProject?.aspectRatio || \"16:9\"} 分镜画面"), "the Shot image area must show both progress and the effective project aspect ratio");
 assert.ok(storyboard.includes("isGeneratingImage={generatingShotImageId === shot.id}"), "Storyboard must bind image progress to the exact Shot card");
-assert.ok(storyboard.includes("onOpenGenerationParams={() => setIsGenerationParamsOpen(true)}"), "Storyboard must expose aspect-ratio settings next to image generation");
-assert.ok(storyboardHeader.includes("项目画幅 {aspectRatio}"), "the Storyboard header must identify the effective ratio as a project setting");
+assert.ok(storyboard.includes("onClick={() => setIsGenerationParamsOpen(true)}"), "Storyboard must expose aspect-ratio settings next to image generation");
 assert.equal(globalGenerationParams.includes("追加提示词"), false, "project aspect-ratio settings must not include a hidden global prompt override");
 assert.equal(globalGenerationParams.includes("负面提示词"), false, "project aspect-ratio settings must not include a hidden negative-prompt override");
 assert.equal(globalGenerationParams.includes("globalGenerationParams"), false, "saving the project aspect ratio must not rewrite retired global prompt settings");
@@ -327,7 +315,7 @@ assert.equal(existsSync(path.join(process.cwd(), "src/components/StudioMultiGrid
 assert.equal(studio.includes("StudioMultiGridControls"), false);
 assert.equal(visualPrompts.includes("generateMultiGridPrompt"), false);
 
-assert.ok(assetPanel.includes("<ImagePromptModal"));
+assert.ok(assetPanel.includes("<GenerationWorkbench"));
 assert.ok(assetPanel.includes("<PromptEditorModal"));
 assert.ok(assetPanel.includes("<ManualProductionReferenceReviewModal"));
 assert.ok(assetPanel.includes("确认本场资产包"));
@@ -335,9 +323,9 @@ assert.equal(productionPreparation.includes("departmentsReadyForAssetConfirmatio
 assert.ok(productionPreparation.includes('assets?.issues.find((issue) => issue.severity === "blocking")'), "asset confirmation should block only on a hard asset error");
 assert.ok(!productionPreparation.includes("const assetPackConfirmBlockedReason = !filmTeam?.directorCockpit.readyForStoryboard"), "asset confirmation must not create a circular dependency on asset continuity readiness");
 assert.ok(assetPanel.includes("assetPackConfirmed"));
-assert.ok(imagePromptModal.includes("selectedSkillIds"));
-assert.ok(imagePromptModal.includes("selectedContextIds"));
-const referenceGenerateStart = manualProductionAssetImages.indexOf("const generateReferenceImage = async");
+assert.ok(generationWorkbench.includes("generationClient.preflight"));
+assert.ok(generationWorkbench.includes("generationClient.execute"));
+const referenceGenerateStart = manualProductionAssetImages.indexOf("const importReferenceImage = async");
 const referenceAdoptStart = manualProductionAssetImages.indexOf("const adoptCandidate = async");
 assert.ok(referenceGenerateStart >= 0 && referenceAdoptStart > referenceGenerateStart);
 assert.ok(
@@ -364,7 +352,7 @@ assert.ok(promptEditor.includes("() => intent.trim()"), "empty intent must compi
 assert.ok(directorProduction.includes("ProductionScriptImportModal"));
 assert.ok(directorProduction.includes('navigate("/production/library")'));
 assert.ok(directorProduction.includes("library.productionProjects.slice(0, 3)"));
-assert.equal(directorProduction.includes("overflow-y-auto"), false, "Production entry must not become a long project list");
+assert.equal(directorProduction.includes("library.productionProjects.map("), false, "Production entry must keep its bounded recent-project list");
 assert.ok(productionLibrary.includes("ProductionProjectCard"));
 assert.ok(productionLibrary.includes("overflow-y-auto"));
 assert.ok(productionLibrary.includes("ProductionTrashModal"));
@@ -413,7 +401,7 @@ assert.ok(productionAssetProfile.includes("生成候选"));
 assert.equal(productionAssetProfile.includes("基础设计图"), false, "production asset profiles must not present concept seed material as the formal board");
 assert.equal(productionAssetProfile.includes("角色故事设定"), false, "performance fields must live in the production profile instead of a hidden story-settings page");
 assert.ok(productionAssetProfile.includes("workflowStepId=\"production.asset.profile_enrichment\""));
-const projectBoardGenerateStart = productionAssetBoardImages.indexOf("const generateCandidate = async");
+const projectBoardGenerateStart = productionAssetBoardImages.indexOf("const stageUpload = async");
 const projectBoardAdoptStart = productionAssetBoardImages.indexOf("const adoptCandidate = async");
 assert.ok(projectBoardGenerateStart >= 0 && projectBoardAdoptStart > projectBoardGenerateStart);
 assert.ok(
@@ -427,17 +415,17 @@ assert.ok(productionAssetBoardReview.includes("采用为纯净参考"));
 assert.ok(productionAssetProfile.includes('chooseReferenceMode("production_board")'));
 assert.ok(productionAssetProfile.includes('chooseReferenceMode("clean_reference")'));
 assert.ok(productionAssetProfile.includes('next.set("referenceMode", mode)'), "the creator-selected asset reference mode must survive refresh/navigation");
-assert.ok(productionAssetBoardImages.includes('referenceMode === "production_board"'));
+assert.ok(productionAssetBoardImages.includes('referenceMode === "clean_reference" ? board.cleanPrompt'));
 assert.equal(/minimax|grok|kie/i.test(productionAssetReferenceMode), false, "asset reference modes must remain provider-neutral and creator-selected");
 assert.ok(manualVideoStoryboardPanel.includes('aria-label="故事板参考模式"'));
 assert.ok(manualVideoStoryboardPanel.includes("分镜宫格图"));
 assert.ok(manualVideoStoryboardPanel.includes("仅分镜序号"));
 assert.ok(productionBoardImageOverlay.includes("buildStoryboardVideoReferenceNumberBadges"));
 assert.ok(productionAssets.includes("episodes: fullEpisodes"), "project asset board generation must receive the complete production-unit context");
-assert.ok(productionAssetBoardBatch.includes("confirmedProductionContext"), "every asset board in a batch must inherit the same confirmed department context");
+assert.ok(productionAssetBoardBatch.includes("buildProductionAssetBoardExecutionPlan(project, missingBoards)"), "every board must derive its approved execution prompt from the current project asset design");
 assert.equal(productionAssetBoardExecution.includes("resolveVisualStyleLock"), false, "asset board prompts must not flatten mixed-media assignments into one global style string");
 assert.equal(productionAssetBoardExecution.includes("rendered.instruction"), false, "raw asset execution prompts must not duplicate the structured visual projection");
-for (const source of [productionAssetBoardImages, productionAssetBoardBatch, manualProductionAssetImages]) {
+for (const source of [productionAssetBoardBatch]) {
   assert.ok(source.includes("buildProductionAssetImageVisualStyleProjection"), "every asset-image path must resolve the current asset's canonical visual projection");
   assert.match(source, /generateAIImage\(\{[\s\S]*?visualStyleProjection,/);
 }
@@ -448,8 +436,9 @@ assert.equal(productionAssetBoardBatch.includes("context.options.map((option) =>
 assert.ok(productionAssetBoardBatch.includes('ensureAIProviderTaskReady("imageGen"'), "asset board batches must preflight the configured image provider before entering the per-board queue");
 assert.ok(productionAssetBoardBatch.includes('=> "16:9" as const'), "character, location, prop and variant identity boards must use the shared wide production-board canvas instead of legacy single-image ratios");
 assert.ok(productionAssetBoardBatch.includes("consecutiveFailures >= 3"), "asset board batches must stop after a repeated provider failure instead of appearing stuck across the whole queue");
-assert.ok(productionAssetBoardBatch.includes("isTransientGenerationFailure"), "transient image-provider failures must retry inside the confirmed batch instead of immediately returning work to the creator");
-assert.ok(productionAssetBoardBatch.includes("PRODUCTION_ASSET_BOARD_VISUAL_MAX_REPAIRS + 1"), "asset board generation plus visual repairs must remain bounded and auditable");
+assert.equal(productionAssetBoardBatch.includes("isTransientGenerationFailure"), false, "a timeout can leave a running task and must not trigger another generation");
+assert.equal(productionAssetBoardBatch.includes("PRODUCTION_ASSET_BOARD_VISUAL_MAX_REPAIRS"), false, "ordinary asset batches do not automatically regenerate for visual repair");
+assert.match(productionAssetBoardBatch, /currentAttempt: 1, maxAttempts: 1/, "each explicitly requested asset has one candidate");
 assert.ok(productionAssetBoardBatch.includes("buildProductionAssetBoardVisualQAPrompt"), "asset board batches must run whole-sheet visual QA instead of adopting an attractive but unusable image");
 assert.ok(productionAssetBoardBatch.includes("isProductionAssetBoardVisualQualityPassing"), "asset board batches must only accept a whole-sheet QA pass");
 assert.ok(productionAssetBoardBatch.includes("inspectImageTechnicalMetadata"), "asset board batches must reject portrait or non-sheet outputs before adoption");
@@ -492,10 +481,10 @@ assert.ok(productionAssetPreparationReview.includes("AI 继续优化"));
 assert.ok(productionAssetPreparationReview.includes("查看质检与提示词审计"));
 assert.ok(productionAssetPreparationService.includes("structureErrors"));
 assert.ok(productionTeamPrompts.includes("不能用正则或固定词命中代替判断"));
-assert.ok(biblePrompts.includes("【项目角色表演档案】"));
+assert.ok(biblePrompts.includes("请依据本次任务整理角色资料，输出待作者采用的候选。"));
 assert.ok(biblePrompts.includes("【项目资产制作档案】"));
 assert.ok(biblePrompts.includes("{{skills}}"), "production asset profile prompts must inject the selected Skill content");
-assert.ok(biblePrompts.includes("禁止把 MBTI 或九型人格转化为外貌、阶层、族裔、年龄或服装刻板印象"));
+assert.ok(biblePrompts.includes("禁止把 MBTI 或九型人格转化为外貌、阶层、族裔或服装刻板印象"));
 assert.ok(productionTemplateMetadata.includes("productionAssetCharacterProfile"));
 assert.ok(productionTemplateMetadata.includes("productionAssetCatalogProfile"));
 assert.ok(productionProjectAssets.includes("breakdown.assetVariantMap"));
@@ -503,14 +492,15 @@ assert.ok(assetPanel.includes("sceneBindingOnly"));
 assert.ok(assetPanel.includes("本场使用状态"));
 assert.ok(assetPanel.includes("buildProductionSceneAssetVariantBindingUpdate"));
 assert.ok(assetPanel.includes("showReferencePack={!sceneBindingOnly}"));
-assert.ok(app.includes('path="production/team" element={<Navigate to="/production/preparation" replace />}'));
+assert.ok(app.includes("RETIRED_WORKSPACE_PATHS.map"));
+assert.ok(source("src/utils/retiredWorkspaceRoutes.ts").includes('"production/team"'), "retired team links must use the shared context-preserving redirect");
 assert.ok(productionPreparation.includes("ProductionSceneRail"));
 assert.ok(productionPreparation.includes("activeStepSummaries={activeSceneStepSummaries}"), "the active scene rail must use the same authoritative readiness projection as the visible workspace");
 assert.ok(productionSceneRail.includes("isActive && activeStepSummaries"), "the active scene progress dots must not report stale department output as confirmed");
 assert.ok(productionPreparation.includes("ProductionSourceUnitRail"));
-assert.ok(productionSourceUnitRail.includes("buildManualFilmTeamReadModel"));
-assert.ok(productionSourceUnitRail.includes("item.readiness === \"ready\""));
-assert.ok(productionSourceUnitRail.includes("部门当前可用"));
+assert.ok(productionSourceUnitRail.includes("productionSourceDocumentForEpisode"));
+assert.ok(productionSourceUnitRail.includes("Boolean(plan && !needsReview)"));
+assert.ok(productionSourceUnitRail.includes("场次进度"));
 assert.ok(productionPreparation.includes('activeTab === "overview"'));
 assert.equal(productionPreparation.includes('activeTab !== "overview" && <ProductionSceneRail'), false, "script overview must use the source-unit rail instead of the production scene rail");
 assert.ok(productionPreparation.includes("sourceUnits={productionEpisodes}"), "scene-level preparation tabs must preserve a visible parent unit selector");
@@ -523,16 +513,16 @@ assert.equal(productionPreparation.includes("isSequentialBreakdownOpen"), false,
 assert.equal(productionPreparation.includes("setActiveScene"), false, "scene selection must remain URL-derived");
 assert.equal(productionPreparation.includes("setActiveTab"), false, "tab selection must remain URL-derived");
 assert.ok(productionPreparation.includes("The URL is the single source of truth"));
-assert.ok(productionPreparation.includes('activeTab === "overview" || activeTab === "departments"'), "department preparation must select an episode or film segment from the source-unit rail");
-assert.ok(productionPreparation.includes('initialDepartment={selectedDepartment}'), "department selection must follow an explicit URL or author click");
+assert.ok(productionPreparation.includes("resolveProductionSceneTab(queryTab"), "old preparation tabs must resolve through the shared scene workflow");
+assert.ok(productionPreparation.includes("queryTab !== selectedTab || queryDepartment"), "obsolete department links must normalize explicitly");
 assert.equal(productionPreparation.includes('currentTask?.tab === "departments" ? currentTask.department'), false, "a changing next-task hint must not pull authors away from the department they are reviewing");
 assert.equal(productionPreparation.includes("manualFilmTeamUnitBreakdownsReady(activeEpisode)"), false, "author department preparation must remain available before all scene breakdowns are complete");
-assert.ok(productionPreparation.includes("ProductionCoordinationWorkspace"));
+assert.ok(productionPreparation.includes("ProductionSceneBreakdownWorkspace"));
 assert.ok(productionPreparation.includes("confirmedAssetPackHash || assets.assetPackHash"));
 assert.ok(assetPanel.includes("pendingBoardItemIds"), "one scene-level confirmation must adopt all non-blocked bindings instead of forcing one click per asset");
 assert.ok(productionPreparation.includes("buildProductionPreparationTabStatuses"));
 assert.ok(productionPreparation.includes("buildProductionPreparationCurrentTask"));
-assert.ok(productionPreparation.includes('aria-label="制片筹备步骤"'), "preparation steps must remain discoverable on every workspace width");
+assert.ok(productionPreparation.includes('aria-label="场次工作区"'), "preparation steps must remain discoverable on every workspace width");
 assert.equal(productionPreparation.includes('hidden lg:block z-0 flex-grow'), false, "preparation navigation must not disappear on narrower desktop or tablet viewports");
 assert.ok(productionPreparation.includes('overflow-x-auto'), "preparation steps should scroll horizontally instead of being hidden when space is constrained");
 assert.ok(productionPreparation.includes("nextIncompleteProductionSceneId"));
@@ -542,13 +532,13 @@ assert.equal(productionPreparation.includes("ProductionSequentialBreakdownModal"
 assert.equal(productionPreparation.includes("onOpenSequential"), false);
 assert.ok(productionEpisodeAvailability.includes("hasProductionEpisodeSource"));
 assert.ok(productionEpisodeAvailability.includes("canResolveFromMetadata"), "production navigation should not refetch every episode before showing the workspace");
-for (const label of ["场次拆解", "部门筹备", "本场资产", "统筹检查"]) {
+for (const label of ["剧本总览", "场次信息", "本场资产"]) {
   assert.ok(productionPreparationViewModel.includes(label));
 }
 assert.ok(productionPreparationBreakdown.includes("PromptEditorModal"));
 assert.ok(productionPreparationBreakdown.includes("场次拆解预览"));
 assert.ok(productionPreparationBreakdown.includes("ProductionBreakdownReviewActions"));
-assert.ok(productionPreparationBreakdown.includes("确认当前拆解"));
+assert.ok(productionPreparationBreakdown.includes("确认当前信息"));
 assert.ok(productionPreparationBreakdown.includes("连续性"));
 assert.equal(productionPreparationBreakdown.includes("依次拆解本段"), false);
 assert.equal(productionPreparationBreakdown.includes("依次拆解本集"), false);
@@ -557,12 +547,12 @@ assert.ok(productionBreakdownReviewActions.includes("检查本场拆解") && pro
 assert.ok(productionBreakdownReviewActions.includes('record?.status === "needs_revision"') && productionBreakdownReviewActions.includes('record.qa?.verdict === "revise"'), "optimization must only unlock for an adopted revision verdict");
 assert.ok(productionBreakdownReviewActions.includes('status: "confirmed"') && productionBreakdownReviewActions.includes("qa: undefined"), "explicit author adoption must confirm the optimized breakdown and clear the obsolete QA result");
 assert.ok(productionPreparationBreakdown.includes("sceneActionBusy") && productionBreakdownReviewActions.includes("externalBusy") && productionBreakdownReviewActions.includes("onBusyChange"), "current-scene generation, review, and optimization actions must share one mutual exclusion state");
-assert.ok(productionPreparationBreakdown.includes("继续未完成场次"), "a confirmed scene must lead to the next unfinished scene until the whole source unit is ready");
-assert.ok(productionPreparationBreakdown.includes("if (allBreakdownsReady) onNext();"), "department preparation must only become the next action after every scene breakdown is confirmed");
-assert.ok(productionPreparationBreakdown.includes("else onContinueBreakdown();"), "an incomplete source unit must continue to its next unfinished scene instead of entering department preparation");
+assert.ok(productionPreparationBreakdown.includes("进入本场资产"), "a confirmed scene must lead to its assets");
+assert.ok(productionPreparation.includes('onNext={() => selectTab("assets")}'), "current-scene preparation must lead to current-scene assets");
+assert.ok(productionPreparation.includes("onNextTodo={activeTab"), "unfinished scenes must remain discoverable through the scene rail");
 assert.ok(productionPreparationBreakdown.includes("restrictEntityDefaults: true"), "scene breakdown prompts must keep unrelated project entities opt-in");
 assert.ok(productionBreakdownReviewActions.includes("restrictEntityDefaults: true"), "breakdown QA and repair prompts must keep unrelated project entities opt-in");
-assert.ok(productionPreparation.includes('...(selectedDepartment ? { department: selectedDepartment } : {})'), "switching preparation tabs must preserve the department the author was inspecting");
+assert.ok(productionPreparation.includes("tab: destination"), "switching source unit must preserve the selected current workflow stage");
 assert.ok(manualSceneBreakdown.includes("productionWritingSourceContext"));
 assert.ok(productionPreparationBreakdown.includes("上游剧本结构"));
 assert.equal(productionPreparationBreakdown.includes("导入拆解草案"), false, "scene breakdown must not expose a JSON writeback entry");
@@ -661,7 +651,7 @@ assert.ok(productionAssets.includes('flex flex-wrap items-center justify-end gap
 assert.ok(productionAssets.includes('shrink-0 whitespace-nowrap rounded-lg'), "project asset action labels must stay on one line");
 assert.equal(productionAssetPreparationAI.includes("importExternalCandidate"), false, "asset preparation must call the configured AI path instead of importing external candidates");
 assert.ok(manualFilmTeamCommunication.includes("normalizeManualFilmTeamHandoffs"));
-assert.ok(promptStore.includes("version: 55"));
+assert.ok(Number(promptStore.match(/version:\s*(\d+)/)?.[1]) >= 55);
 assert.ok(promptStore.includes("if (version < 55)") && promptStore.includes("newTemplates['generateImage'] = defaultTemplates['generateImage']") && promptStore.includes("newTemplates['generateVideo'] = defaultTemplates['generateVideo']"), "governed image/video execution templates must replace persisted legacy copies");
 assert.ok(promptStore.includes("if (version < 53)") && promptStore.includes("newTemplates['productionBreakdownQa'] = defaultTemplates['productionBreakdownQa']"), "the stricter breakdown QA contract must replace persisted legacy templates");
 assert.ok(promptStore.includes("delete newTemplates.generateMultiGridPrompt"));
@@ -680,34 +670,27 @@ assert.ok(productionBreakdownReviewActions.includes('status: record?.status || "
 assert.ok(productionPreparationBreakdown.includes("...(scene.productionPreparation"));
 assert.ok(productionBreakdownReviewActions.includes("...(scene.productionPreparation"));
 assert.ok(productionSceneRail.includes("preparationStepSummaries"));
-assert.ok(productionSceneRail.includes("制片筹备进度"));
+assert.ok(productionSceneRail.includes("场次信息进度"));
 assert.ok(productionSceneRail.includes("下一个待办场次"));
 assert.ok(contextMapper.includes("export interface ContextScope"));
 assert.ok(productionPreparationBreakdown.includes('episodeIds: [episode.id]'));
 assert.ok(productionBreakdownReviewActions.includes('episodeIds: [episode.id]'));
 assert.ok(productionPreparation.includes("const queryDepartment = params.get(\"department\")"));
-assert.ok(productionPreparation.includes("const selectDepartment"));
+assert.ok(productionPreparation.includes("const selectTab"));
 assert.ok(storyboard.includes("buildProductionPreparationGate"));
 assert.ok(storyboard.includes("productionPreparationGate?.readyForStoryboard"));
 assert.ok(storyboard.includes("productionPreparationGate?.readyForShotPlanning"), "Shot generation must use the lighter shot-planning gate");
 assert.ok(storyboardBatchSceneIndex.includes("manualFilmTeamRequiredDepartmentsForScene(scene)"), "batch scenes must compute their own required departments");
-assert.ok(productionPreparation.includes("requiredDepartments: recommendedDepartmentsForScene(activeScene)"), "preparation must show the departments required by the active scene");
+assert.ok(productionPreparation.includes("preparationContext.filmTeam"), "preparation must retain current-scene team context in readiness computation");
 assert.ok(productionPreparationGate.includes("readyForShotPlanning"));
 assert.ok(productionPreparationGate.includes("assetReferencesReady"));
-assert.equal(storyboardHeader.includes("使用系统模型生成分镜"), false, "AI is the only generation path, so the UI must not expose implementation wording");
-assert.equal(storyboardHeader.includes("生成当前场提示词"), false, "the UI must name image and video prompt operations precisely");
 assert.ok(storyboard.includes("生成分镜"), "an empty scene must own its primary generation action inside the empty state");
-assert.ok(storyboardHeader.includes("重新生成分镜"), "existing scenes must keep an explicit Shot regeneration action");
-assert.ok(storyboardHeader.includes("生成图片提示词") && storyboardHeader.includes("生成视频提示词"), "image and video prompts must have separate creator-facing actions");
-assert.ok(storyboardHeader.includes("当前生成任务完成后可操作") && storyboardHeader.includes("当前生成任务完成后可继续"), "temporarily locked prompt actions must explain the active generation lock");
 assert.equal(storyboard.includes("productionPreparationGate?.readyForShotPlanning\n        && manualStoryboardReadModel?.readyForImagePromptGeneration"), false, "confirmed Shots alone must unlock image prompt generation");
 assert.equal(storyboard.includes("productionPreparationGate?.readyForShotPlanning\n        && manualStoryboardReadModel?.readyForVideoPromptGeneration"), false, "confirmed Shots alone must unlock video prompt generation");
-assert.equal(storyboardHeader.includes("完善分镜"), false, "the UI must not hide two independent prompt calls behind one ambiguous action");
 assert.equal(storyboardShotAgent.includes('imagePrompt: { type:'), false, "Shot generation must not overload one model call with prompt generation");
 assert.ok(visualPrompts.includes("'generateImagePrompts'") && visualPrompts.includes("'generateVideoPrompts'"), "image and video prompts must have independent templates");
 assert.ok(assetPanel.includes("上传图片") && manualProductionAssetImages.includes("importReferenceImage"), "project asset boards must support both AI generation and creator upload");
 assert.ok(shotCard.includes("上传图片") && shotCard.includes("handleUploadImage"), "shot images must support creator upload as a formal take");
-assert.equal(storyboardHeader.includes("导入外部镜头结果"), false, "storyboard must not expose external shot writeback");
 assert.equal(storyboard.includes("ExternalShotImportModal"), false, "storyboard must use the configured AI workflow only");
 assert.equal(storyboardAi.includes("importExternalShotCandidate"), false, "storyboard hook must not retain external shot import commands");
 assert.ok(storyboard.includes("镜头故事板草案已可审阅"), "the composite board card must expose a model-free current-scene draft");
@@ -716,12 +699,8 @@ assert.ok(storyboard.includes("visualReady={activeBatchScene?.boardFormalReady}"
 assert.ok(storyboardBoardBatchAgent.includes("!item.boardDraftReady"), "storyboard unit structure must depend on confirmed Shots, not image prompts");
 assert.ok(storyboardBoardBatchAgent.includes("if (!context.boardFormalReady)"), "the board batch agent must persist structure and pause before visual rendering when image prompts are not ready");
 assert.ok(storyboardBoardBatchAgent.includes("shouldGenerateVisuals ? [ensureAIProviderTaskReady(\"imageGen\""), "the image provider must only be required for the separate visual-rendering phase");
-assert.equal(storyboardHeader.includes("生成当前场故事板"), false, "the header must not duplicate the current-scene composite board action");
-assert.ok(storyboardHeader.includes("故事板草案已生成，待正式验收"), "a generated draft must not be mislabeled as fully production-ready");
-assert.ok(storyboardHeader.includes("shotPlanningReady"));
-assert.equal(storyboardHeader.includes("storyboardAdoptionReady"), false, "formal storyboard adoption state belongs to the board review, not the generation header");
 assert.ok(storyboardBoardBatchAgent.includes("const prepareScene = (sceneId: string)"), "storyboard generation needs a current-scene action instead of only a segment batch action");
-assert.ok(storyboard.includes("onGenerateVisuals={() => boardBatchAgent.prepareScene(activeScene.id)}"), "a persisted current-scene board must not be blocked by unfinished shots in another scene");
+assert.ok(storyboard.includes("onGenerateVisuals={prepareSceneVisuals}") && storyboard.includes("else boardBatchAgent.prepareScene(activeScene.id)"), "a persisted current-scene board must not be blocked by unfinished shots in another scene");
 assert.ok(storyboardBoardBatchAgent.includes("scenes.filter((item) => item.scene.id === sceneId)"), "explicit current-scene regeneration must include a completed or stale scene instead of silently doing nothing");
 assert.ok(storyboardBoardBatchAgent.includes('const sourceScenes = requestKind === "scene" ? scenes : pendingScenes'), "current-scene execution must preserve the explicitly selected scene while segment batches remain pending-only");
 assert.ok(storyboardBoardBatchAgent.includes("restrictEntityDefaults: true"), "storyboard generation must scope automatic entity context to its target scenes");
@@ -731,11 +710,11 @@ assert.ok(storyboard.includes("manualAssetPromptContext"));
 assert.ok(storyboardAi.includes("const productionTeamContext = await resolveManualTeamContext()"));
 assert.ok(storyboardAi.includes("productionTeamContext,"));
 assert.ok(storyboardAi.includes("formalAssetContext: workflowOptions.manualAssetContext"));
-assert.ok(visualPrompts.includes("【已确认的制片筹备结果】"));
+assert.ok(visualPrompts.includes("【当前原文、相邻场次与已采用制作结果】"));
 assert.ok(visualPrompts.includes("【当前场景正式资产与状态】"));
 assert.ok(studio.includes("buildProductionPreparationGate"));
 const voiceEntry = studio.slice(studio.indexOf('const handleGenerateVoice ='), studio.indexOf('const handleSynthesize ='));
-assert.ok(voiceEntry.includes('if (!audioShot)'), 'production dialogue must retain a traceable shot');
+assert.ok(voiceEntry.includes('if (selectedAudioTrack.shotId && !audioShot)'), 'explicit shot links must remain valid, while unlinked scene dialogue remains usable');
 assert.equal(voiceEntry.includes('readyForStudio'), false, 'voice preparation must not require a finished video storyboard');
 assert.ok(voiceEntry.includes('governed: true'), 'dialogue generation must preserve the authored shot timeline');
 assert.ok(productionPreparationGate.includes("coordinationConfirmed"));
@@ -776,7 +755,7 @@ for (const workflowStepId of [
 ]) {
   assert.ok(productionSourceOverview.includes(workflowStepId));
 }
-assert.ok(productionSourceOverview.includes("采用并创建制片场次"));
+assert.ok(productionSourceOverview.includes("采用并更新制片场次"));
 assert.ok(productionSourceOverview.includes("adoptedSceneSnapshot"));
 assert.ok(productionSourceOverview.includes('{ scope: "episode" }'), "scene-plan adoption must load the full episode before replacing scenes from a focused workspace view");
 assert.equal(productionSourceOverview.includes('updateEpisode(episode.id, { scenes: nextScenes })'), false, "scene-plan adoption must not preserve stale scenes through a focused workspace save");
@@ -795,7 +774,7 @@ assert.ok(productionSourceOverview.includes("writeNewUnitRecovery"), "new-unit d
 assert.ok(productionSourceOverview.includes("manualNewUnitDraft"), "switching import modes must preserve the author's manual draft");
 assert.ok(productionSourceOverview.includes("writingImportRequestRef"), "Writing project imports must invalidate stale list and export requests");
 assert.ok(productionSourceOverview.includes("requestId !== writingImportRequestRef.current"), "an older Writing export response must not replace the latest selection");
-assert.ok(legacyProjectClient.includes("writeBackProductionScriptWorkspace"), "Writing and Production changes must use the atomic screenplay writeback route");
+assert.ok(legacyProjectClient.includes("patchProductionScriptWorkspace"), "Production screenplay changes must use the versioned production-owned mutation route");
 assert.ok(productionSourceOverview.includes("scriptDraftCharacterCount"), "the formal screenplay editor must expose body length to the author");
 assert.equal(productionSourceOverview.includes("转换为 Fountain 草稿"), false, "the screenplay overview must remain a direct text editor rather than a second professional formatting workbench");
 assert.equal(productionSourceOverview.includes("本单元批注"), false, "single-author screenplay editing must not carry a collaboration comment system");
@@ -834,5 +813,19 @@ assert.equal(productionSourceOverview.includes("向前调整顺序"), false, "ma
 assert.equal(productionSourceOverview.includes("向后调整顺序"), false, "manual up/down ordering controls must not clutter the screenplay toolbar");
 assert.equal(productionSourceOverview.includes("剧本版本历史"), false, "authors must not manage technical screenplay revisions");
 assert.equal(productionSourceOverview.includes("回滚方案"), false, "authors must not manage scene-plan versions from the main toolbar");
+
+
+
+const sceneFlow = source("src/components/storyboard/SceneProductionFlowHeader.tsx");
+assert.match(sceneFlow, /label: '分镜'/);
+assert.match(sceneFlow, /label: '故事板'/);
+assert.match(sceneFlow, /onGenerate/);
+assert.doesNotMatch(sceneFlow, /grid-cols-4/, "scene workspace must not recreate the old four-step wizard");
+assert.match(storyboard, /basisOpen/, "scene basis remains available beside the shots");
+const planningPanel = source("src/components/storyboard/SceneVisualPlanningPanel.tsx");
+assert.match(planningPanel, /showGroups, setShowGroups.*useState\(false\)/, "generation groups are optional, not the default shot editing view");
+assert.match(planningPanel, /if \(groupsChanged && shots.length\)/, "saving basis alone must not rebuild video units");
+assert.match(storyboard, /SceneStoryboardCanvas/);
+assert.match(source("src/components/storyboard/SceneStoryboardCanvas.tsx"), /GenerationWorkbench/);
 
 console.log("Manual production AI UI boundary self-check passed.");

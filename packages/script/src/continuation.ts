@@ -1,4 +1,4 @@
-import { hashValue } from '../../agent-core/src/identity';
+import { hashValue } from '../../domain/src/contentIdentity';
 import { parseScriptProject, type Scene, type ScriptBlock, type ScriptProject } from './schema';
 
 export type SceneContinuationCheckpoint = { unitId:string; sceneId:string; baseRevision:number; tailBlockId:string|null; blockCount:number; contentHash:string; structureHash:string; checkpointId:string };

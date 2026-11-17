@@ -3,6 +3,8 @@ import {
   GENERIC_VIDEO_ADAPTERS,
 } from "./adapters/genericVideoAdapter";
 import type { VideoModelAdapterDefinition } from "./videoModelAdapter";
+import type { ComfyCapabilities } from '../../../../domain/src/comfyWorkflow';
+import { createComfyVideoAdapter } from './comfyVideoAdapter';
 import {
   MINIMAX_H3_REF2VA_ADAPTER_ID,
   MINIMAX_H3_VIDEO_ADAPTERS,
@@ -50,10 +52,12 @@ const adapterForChannel = (
 export const listCompatibleVideoModelAdapters = ({
   channelType,
   modelId,
+  comfyCapabilities,
 }: {
   channelType: string;
   modelId: string;
-}) => VIDEO_MODEL_ADAPTERS
+  comfyCapabilities?: ComfyCapabilities;
+}) => channelType === 'comfyui' && comfyCapabilities ? [createComfyVideoAdapter(comfyCapabilities)] : VIDEO_MODEL_ADAPTERS
   .filter((adapter) => adapterMatchesModel(adapter, channelType, modelId, true))
   .map((adapter) => adapterForChannel(adapter, channelType));
 
@@ -61,11 +65,14 @@ export const resolveVideoModelAdapter = ({
   channelType,
   modelId,
   configuredAdapterId,
+  comfyCapabilities,
 }: {
   channelType: string;
   modelId: string;
   configuredAdapterId?: string;
+  comfyCapabilities?: ComfyCapabilities;
 }): VideoModelAdapterDefinition => {
+  if (channelType === 'comfyui' && comfyCapabilities) return createComfyVideoAdapter(comfyCapabilities);
   const configured = configuredAdapterId && configuredAdapterId !== "auto"
     ? getVideoModelAdapterById(configuredAdapterId)
     : undefined;

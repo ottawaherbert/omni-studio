@@ -1,7 +1,9 @@
 import { ProductionPreparationAdvisories } from "../components/production/ProductionPreparationAdvisories";
+import { GenerationWorkbench } from '../components/generation/GenerationWorkbench';
 import { productionPreparationHref } from "../utils/productionNavigation";
 import { appearanceImageIsAfterChange, appearanceBoards } from "../clients/productionStoryboardWorkflowClient";
-import { sceneVideoClips } from '../utils/sceneVideoClips';
+import { sceneVideoClips, sceneAudioTracks } from '../utils/sceneVideoClips';
+import { resolveAudioLibraryUrl } from '../utils/episodeAudioExport';
 import { filmPreviewOpacity } from '../../packages/domain/src/filmTimeline';
 import React, { lazy, Suspense, useState, useEffect, useRef, useMemo } from "react";
 import { useShallow } from "zustand/react/shallow";
@@ -161,6 +163,7 @@ export default function Studio({ workspaceMode = "linear" }: StudioProps) {
   const [activeSceneId, setActiveSceneId] = useState<string | null>(
     urlSceneId || baseScenes[0]?.id || null,
   );
+  const [selectedClipId, setSelectedClipId] = useState<string | null>(null);
   const [selectedShotId, setSelectedShotId] = useState<string | null>(
     urlShotId || null,
   );
@@ -266,6 +269,7 @@ export default function Studio({ workspaceMode = "linear" }: StudioProps) {
     ? resolveVideoModelAdapter({
         channelType: configuredVideoChannel.type,
         modelId: configuredVideoModel.modelId,
+        comfyCapabilities: configuredVideoModel.comfyCapabilities,
         configuredAdapterId: configuredVideoModel.videoAdapterId,
       })
     : undefined, [configuredVideoChannel, configuredVideoModel]);
@@ -274,6 +278,7 @@ export default function Studio({ workspaceMode = "linear" }: StudioProps) {
     const compatible = listCompatibleVideoModelAdapters({
       channelType: configuredVideoChannel.type,
       modelId: configuredVideoModel.modelId,
+      comfyCapabilities: configuredVideoModel.comfyCapabilities,
     });
     return compatible.length ? compatible : [configuredVideoAdapter];
   }, [configuredVideoAdapter, configuredVideoChannel, configuredVideoModel]);
@@ -375,7 +380,7 @@ export default function Studio({ workspaceMode = "linear" }: StudioProps) {
             ? "exit" as const
             : "main" as const;
       const durationSeconds = unitShots.reduce((sum, item) => sum + Number(item.duration || 0), 0);
-      const resolvedUnitPrompt = resolveStoryboardUnitVideoPrompt({ workflow, shots: unitShots });
+      const resolvedUnitPrompt = resolveStoryboardUnitVideoPrompt({ workflow, shots: activeScene?.shots || unitShots });
       const videoGenerationUnitId = workflow.videoGenerationUnitId || workflow.board.videoGenerationUnitId || workflow.board.id;
       return {
         kind: "storyboard_board",
@@ -405,7 +410,7 @@ export default function Studio({ workspaceMode = "linear" }: StudioProps) {
         interactiveNodeId: activeScene?.interactiveMetadata?.nodeIds?.[0],
         upstreamPromptSourceKind: "storyboard_unit",
         upstreamPromptSourceId: videoGenerationUnitId,
-        upstreamPromptHash: buildStoryboardUnitUpstreamPromptHash({ workflow, shots: unitShots }),
+        upstreamPromptHash: buildStoryboardUnitUpstreamPromptHash({ workflow, shots: activeScene?.shots || unitShots }),
       };
     }
     if (generationTargetSelection.kind === "storyboard_board") return null;
@@ -660,29 +665,17 @@ export default function Studio({ workspaceMode = "linear" }: StudioProps) {
     ? activeScene?.shots?.find((shot) => shot.id === selectedAudioTrack.shotId)
     : undefined;
 
-  // Resolve audio track URLs from global assets if linkedAssetId is present
+  // Preserve fixed recordings and resolve older linked assets consistently with export.
   const resolvedAudioTracks = useMemo(() => {
     if (!activeScene?.audioTracks) return [];
-    return activeScene.audioTracks.map(track => {
+    return sceneAudioTracks(activeScene).map(track => {
       if (track.linkedAssetId && !track.url) {
-        const globalAsset = globalAssets.find(a => a.id === track.linkedAssetId);
-        const projectAsset = currentProject?.assets.find(a => a.id === track.linkedAssetId);
-        
-        if (globalAsset) {
-          const resolvedUrl = globalAsset.url || globalAsset.imageUrls?.[0];
-          if (resolvedUrl) {
-            return { ...track, url: resolvedUrl };
-          }
-        } else if (projectAsset) {
-          const resolvedUrl = projectAsset.imageUrl; // For project assets, the URL might be stored in imageUrl
-          if (resolvedUrl) {
-            return { ...track, url: resolvedUrl };
-          }
-        }
+        const url = resolveAudioLibraryUrl(track.linkedAssetId, currentProject?.assets || [], globalAssets);
+        if (url) return { ...track, url };
       }
       return track;
     });
-  }, [activeScene?.audioTracks, globalAssets, currentProject?.assets]);
+  }, [activeScene, globalAssets, currentProject?.assets]);
 
   const resolvedSelectedAudioTrack = useMemo(() => 
     resolvedAudioTracks.find(t => t.id === selectedAudioTrackId),
@@ -703,46 +696,27 @@ export default function Studio({ workspaceMode = "linear" }: StudioProps) {
   } = useStudioAI();
   const episodeFilmExport = useEpisodeFilmExport({ project: currentProject, episode: activeEpisode });
 
+  const [workbenchOperation, setWorkbenchOperation] = useState<'asset_image' | 'joint_storyboard' | 'video' | null>(() => new URLSearchParams(window.location.search).has('generationTaskId') ? (['asset_image', 'joint_storyboard', 'video'].includes(new URLSearchParams(window.location.search).get('generationOperation') || '') ? new URLSearchParams(window.location.search).get('generationOperation') as 'asset_image' | 'joint_storyboard' | 'video' : 'video') : null);
   const handleGenerateImage = () => {
-    if (!selectedShot || !activeSceneId || !activeEpisode || !currentProject) return;
-    if (isDirectorProductionRoute && manualStudioTarget) {
-      manualStudioAI.prepareImage(manualStudioTarget);
-      return;
-    }
-    aiPrepareGenerateImage(selectedShot, activeSceneId, activeEpisode, currentProject);
+    setWorkbenchOperation(manualStudioTarget?.kind === 'storyboard_board' ? 'joint_storyboard' : 'asset_image');
   };
 
   const handleGenerateVideo = () => {
-    if (!selectedShot || !activeSceneId || !activeEpisode || !currentProject) return;
-    if (isDirectorProductionRoute && manualStudioTarget) {
-      if (manualStudioVideoGenerationIssue) {
-        toast.error(manualStudioVideoGenerationIssue);
-        return;
-      }
-      manualStudioAI.prepareVideo(manualStudioTarget, {
-        generationWayId: selectedVideoAdapter?.id,
-        startFrameTakeId: effectiveStartFrameTakeId || undefined,
-        startFrameUrl: selectedStartFrameUrl,
-        endFrameTakeId: effectiveEndFrameTakeId || undefined,
-        endFrameUrl: selectedEndFrameUrl,
-      });
-      return;
-    }
-    aiPrepareGenerateVideo(selectedShot, activeSceneId, activeEpisode, currentProject);
+    setWorkbenchOperation('video');
   };
 
   const handleGenerateVoice = async () => {
     if (!selectedAudioTrack || !activeSceneId || !activeEpisode || !currentProject) return;
     if (isDirectorProductionRoute) {
       const audioShot = activeScene?.shots?.find((shot) => shot.id === selectedAudioTrack.shotId);
-      if (!audioShot) {
-        toast.error("当前音轨没有可追溯的 Shot。");
+      if (selectedAudioTrack.shotId && !audioShot) {
+        toast.error("当前音轨关联的镜头已不存在。");
         return;
       }
       await aiGenerateVoice(selectedAudioTrack, activeSceneId, activeEpisode, currentProject, {
         governed: true,
-        sourceHash: manualStoryboardReadModel?.sourceHash || manualStoryboardHash({ shotId: audioShot.id, dialogue: selectedAudioTrack.text }),
-        contextSummary: `${activeScene?.title || "当前场景"} / ${audioShot.visualAction || "当前 Shot"} / ${currentProject.characters.find((character) => character.id === selectedAudioTrack.characterId)?.name || selectedAudioTrack.speakerName || selectedAudioTrack.characterId || "旁白"}`,
+        sourceHash: manualStoryboardReadModel?.sourceHash || manualStoryboardHash({ sceneId: activeSceneId, shotId: audioShot?.id, dialogue: selectedAudioTrack.text }),
+        contextSummary: `${activeScene?.title || "当前场景"} / ${audioShot?.visualAction || "场次配音"} / ${currentProject.characters.find((character) => character.id === selectedAudioTrack.characterId)?.name || selectedAudioTrack.speakerName || selectedAudioTrack.characterId || "旁白"}`,
       });
       return;
     }
@@ -953,6 +927,7 @@ export default function Studio({ workspaceMode = "linear" }: StudioProps) {
 
   const selectStudioScene = (sceneId: string) => {
     setActiveSceneId(sceneId);
+    setSelectedClipId(null);
     setSelectedShotId(null);
     setSelectedAudioTrackId(null);
     setCurrentTime(0);
@@ -1101,6 +1076,7 @@ export default function Studio({ workspaceMode = "linear" }: StudioProps) {
 
   const selectStudioAudioTrack = (trackId: string | null, start?: number) => {
     setSelectedAudioTrackId(trackId);
+    setSelectedClipId(null);
     setSelectedShotId(null);
     if (typeof start === "number") setCurrentTime(start);
     const next = new URLSearchParams(searchParams);
@@ -1254,6 +1230,12 @@ export default function Studio({ workspaceMode = "linear" }: StudioProps) {
     );
   }
 
+  if (workbenchOperation && selectedShot) {
+    const workflow = manualStudioTarget?.kind === 'storyboard_board' ? manualStudioWorkflow : undefined;
+    const visualPage = workflow?.board?.visualPages?.find(p => p.id === manualStudioTarget?.pageId) || workflow?.board?.visualPages?.[0];
+    const boardShotIds = workbenchOperation === 'joint_storyboard' && visualPage ? workflow!.board!.panels.filter(p => visualPage.panelIds.includes(p.id)).map(p => p.shotId) : manualStudioTarget?.shotIds || [selectedShot.id];
+    return <div className="h-full overflow-y-auto bg-bg-primary p-4 sm:p-6"><GenerationWorkbench target={{ projectId: currentProject.id, episodeId: activeEpisode.id, sceneId: activeScene.id, kind: workbenchOperation === 'joint_storyboard' ? 'board' : workflow ? 'video_unit' : 'shot', boardId: workflow?.board?.id, pageId: workbenchOperation === 'joint_storyboard' ? visualPage?.id : undefined, unitId: workflow?.videoGenerationUnitId || workflow?.id, shotIds: boardShotIds }} operation={workbenchOperation} returnLabel="返回摄影棚" onClose={() => setWorkbenchOperation(null)} /></div>;
+  }
   return (
       <motion.div
         initial={{ opacity: 0 }}
@@ -1384,10 +1366,12 @@ export default function Studio({ workspaceMode = "linear" }: StudioProps) {
             <StudioAssetList
             shotPositions={shotPositions}
             audioTracks={resolvedAudioTracks}
-            selectedShotId={selectedShotId}
+            selectedShotId={selectedClipId || selectedShotId}
             selectedAudioTrackId={selectedAudioTrackId}
             onSelectShot={(id, start) => {
-              selectStudioShot(id, start);
+              setSelectedClipId(id);
+              const clip=shotPositions.find(item=>item.id===id);
+              selectStudioShot(clip?.sourceShotId || id, start);
             }}
             onSelectAudioTrack={(id, start) => {
               selectStudioAudioTrack(id, start);
@@ -1457,6 +1441,7 @@ export default function Studio({ workspaceMode = "linear" }: StudioProps) {
               <Suspense fallback={<DeferredStudioPanelFallback />}>
                 {selectedShot ? (
                   <>
+
                     {isDirectorProductionRoute && manualVideoStoryboardReadModel && (
                       <StudioGenerationTargetPicker
                       shot={manualStudioTargetShot || selectedShot}
@@ -1464,20 +1449,14 @@ export default function Studio({ workspaceMode = "linear" }: StudioProps) {
                       workflow={manualStudioWorkflow || manualVideoStoryboardReadModel.workflow}
                       selection={generationTargetSelection}
                       onChange={selectGenerationTarget}
-                      readyForStudio={manualStudioGenerationReady}
-                      generationWays={configuredVideoAdapters.map((adapter) => ({
-                        id: adapter.id,
-                        label: adapter.modes[0]?.displayName || adapter.displayName,
-                        description: adapter.displayName,
-                      }))}
-                      selectedGenerationWayId={selectedVideoAdapter?.id || ""}
-                      onGenerationWayChange={handleGenerationWayChange}
                       referenceMode={manualStudioWorkflow?.board?.visualReferenceMode || "shot_grid"}
                       onReferenceModeChange={(mode) => void setStudioStoryboardReferenceMode(mode)}
-                      videoModelLabel={videoModelLabel}
                     />
                     )}
+                    <div className="space-y-3"><h3 className="text-sm font-semibold">制作当前{manualStudioTarget?.kind === 'storyboard_board' ? '片段' : '镜头'}</h3><p className="text-xs leading-5 text-text-muted">在生成工作台选择参考素材、调整参数并检查方案。结果先保存为候选。</p><div className="flex flex-wrap gap-2"><button type="button" onClick={handleGenerateVideo} className="btn-primary rounded-md px-3 py-2 text-xs">视频生成工作台</button><button type="button" onClick={handleGenerateImage} className="rounded-md border border-border-soft/40 px-3 py-2 text-xs text-text-secondary">图片生成工作台</button></div></div>
+                    <details className="border-t border-border-soft/30 pt-3"><summary className="text-xs text-text-muted">外部制作与素材导入</summary><div className="mt-4 space-y-5">
                     {isDirectorProductionRoute && manualStudioTarget && selectedVideoAdapter && (
+                      <details className="border-t border-border-soft/30 pt-3"><summary className="cursor-pointer text-xs text-text-muted">外部制作参考设置（用于外部提示词）</summary><p className="my-3 text-xs text-text-muted">仅影响下方“外部制作”的提示词与素材包。系统内生成请在工作台设置。</p><label className="block text-xs">外部制作方式<select className="my-2 w-full rounded-md border border-border-soft bg-bg-surface px-2 py-2" value={selectedVideoAdapter.id} onChange={e => handleGenerationWayChange(e.target.value)}>{configuredVideoAdapters.map(a => <option key={a.id} value={a.id}>{a.modes[0]?.displayName || a.displayName}</option>)}</select></label>
                       <StudioReferenceControlPanel
                       target={manualStudioTarget}
                       assetBoards={manualStudioAssetBoards}
@@ -1538,7 +1517,7 @@ export default function Studio({ workspaceMode = "linear" }: StudioProps) {
                           ? current.selectedVoiceReferenceIds.filter((id) => id !== referenceId)
                           : [...current.selectedVoiceReferenceIds, referenceId],
                       }))}
-                    />
+                    /></details>
                     )}
                     <StudioShotControls
                     selectedShot={isDirectorProductionRoute && manualStudioTarget ? {
@@ -1586,16 +1565,12 @@ export default function Studio({ workspaceMode = "linear" }: StudioProps) {
                       }));
                     } : undefined}
                     generationTargetLabel={isDirectorProductionRoute ? manualStudioTarget?.label : undefined}
-                    isGeneratingImage={isDirectorProductionRoute ? manualStudioAI.isGeneratingImage : isGeneratingImage}
                     isGeneratingVideo={isDirectorProductionRoute ? manualStudioAI.isGeneratingVideo : isGeneratingVideo}
                     isGeneratingDraftImage={isDirectorProductionRoute ? manualStudioAI.isGeneratingDraftImage : false}
                     isImportingMedia={isDirectorProductionRoute ? manualStudioAI.isImportingMedia : false}
-                    hasVideoCandidate={isDirectorProductionRoute ? manualVideoCandidateExists : false}
                     draftPreviewUsable={isDirectorProductionRoute
                       && Boolean(selectedShot.draftPreview?.sourceHash)
                       && selectedShot.draftPreview?.sourceHash === manualStudioSourceHash}
-                    onGenerateImage={handleGenerateImage}
-                    onGenerateVideo={handleGenerateVideo}
                     onExternalVideo={isDirectorProductionRoute && manualStudioTarget ? () => manualStudioAI.prepareVideo(manualStudioTarget, { externalOnly: true, startFrameUrl: selectedStartFrameUrl || selectedShot?.imageUrl, endFrameUrl: selectedEndFrameUrl }) : undefined}
                     onGenerateDraftImage={isDirectorProductionRoute && manualStudioTarget?.kind === "shot"
                       ? () => manualStudioAI.prepareDraftImage(manualStudioTarget)
@@ -1607,6 +1582,7 @@ export default function Studio({ workspaceMode = "linear" }: StudioProps) {
                       ? (file) => void manualStudioAI.importVideo(file, manualStudioTarget)
                       : undefined}
                     />
+                    </div></details>
                   </>
                 ) : selectedShotId ? (
                   <div className="flex min-h-48 items-center justify-center rounded-lg border border-border-soft/20 bg-bg-surface-soft px-5 text-center">
@@ -1687,7 +1663,8 @@ export default function Studio({ workspaceMode = "linear" }: StudioProps) {
                   <ErrorBoundary className="min-h-full h-full m-0 p-4 rounded-none shadow-none border-none">
                     <Suspense fallback={<DeferredStudioPanelFallback />}>
                       <Timeline
-                        scene={{ ...activeScene, audioTracks: resolvedAudioTracks }}
+                        scene={activeScene}
+                        audioPreviewTracks={resolvedAudioTracks}
                         currentTime={currentTime}
                         isPlaying={isPlaying}
                         onSeek={handleSeek}
@@ -1695,12 +1672,15 @@ export default function Studio({ workspaceMode = "linear" }: StudioProps) {
                         onUpdateScene={(updates) => {
                           updateScene(activeSceneId, updates, activeEpisode.id);
                         }}
-                        activeShotId={selectedShotId}
+                        activeShotId={selectedClipId && sceneVideoClips(activeScene).some(c=>c.id===selectedClipId && (!selectedShotId || (c.sourceShotId||c.id)===selectedShotId)) ? selectedClipId : selectedShotId}
                         onSelectShot={(id) => {
-                          selectStudioShot(id);
+                          setSelectedClipId(id);
+                          const clip=sceneVideoClips(activeScene).find(item=>item.id===id);
+                          selectStudioShot(clip?.sourceShotId || id);
                         }}
                         activeAudioTrackId={selectedAudioTrackId}
                         onSelectAudioTrack={(id) => {
+                          setSelectedClipId(null);
                           selectStudioAudioTrack(id);
                         }}
                       />
@@ -1790,6 +1770,10 @@ export default function Studio({ workspaceMode = "linear" }: StudioProps) {
         totalSceneCount={episodeFilmExport.totalSceneCount}
         isExporting={episodeFilmExport.isExporting}
         onExport={episodeFilmExport.exportEpisode}
+        onDownloadReviewed={episodeFilmExport.downloadReviewedEpisode}
+        deliveryAvailability={episodeFilmExport.deliveryAvailability}
+        previewUrl={episodeFilmExport.previewUrl}
+        onOpenQuality={() => { setIsFilmExportOpen(false); navigate(`/production/preparation?${new URLSearchParams({ projectId: currentProject.id, episodeId: activeEpisode.id, ...(activeSceneId ? { sceneId: activeSceneId } : {}), tab: 'breakdown' })}`); }}
       />
     </motion.div>
   );

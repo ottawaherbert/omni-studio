@@ -8,6 +8,9 @@ import { MAX_ASSET_UPLOAD_BYTES } from "../../../packages/domain/src/asset";
 import { composeEpisodeFilm } from "../media/episodeFilmComposition";
 import { composeVideoSegments, extractLastVideoFrame, inspectUploadedVideo, readLocalMediaSource, readVideoSource } from "../media/videoComposition";
 import { registerVideoAudioRoutes } from "./videoAudioRoutes";
+import { ProductionQuality } from '../productionQuality';
+import { GenerationStore } from '../generation/store';
+import { db } from '../db';
 
 export interface AssetRoutesOptions {
   mediaAssetsDir: string;
@@ -248,7 +251,7 @@ export const registerAssetRoutes = (app: Express, { mediaAssetsDir }: AssetRoute
       const buffers = await Promise.all(videoUrls.map((url: string) => readVideoSource({ sourceUrl: url, mediaAssetsDir, assertPublicRemoteUrl })));
       const output = await composeVideoSegments(buffers, aspectRatio);
       const url = await saveMediaBuffer({ mediaAssetsDir, projectId, mimeType: "video/mp4", buffer: output });
-      return res.json({ url });
+      return res.json({ url, qualityStatus: 'pending', purpose: 'review_preview' });
     } catch (err: any) {
       console.error("Video segment composition error:", err);
       return res.status(400).json({ error: err.message });
@@ -257,6 +260,13 @@ export const registerAssetRoutes = (app: Express, { mediaAssetsDir }: AssetRoute
 
   app.post("/api/assets/compose-episode-film", async (req, res) => {
     try {
+      if(req.body?.purpose==='delivery'){
+        const quality=new ProductionQuality(new GenerationStore(db),mediaAssetsDir);
+        const delivery=quality.delivery(req.body.inspectionId);
+        if(delivery.target.projectId!==req.body.projectId||delivery.target.episodeId!==req.body.episodeId||delivery.target.sceneId)throw new Error('整集交付须对应本项目、本集的整集总检。');
+        // Return the exact reviewed file. Re-encoding would create an unreviewed deliverable.
+        return res.json({url:delivery.media[0].mediaUrl,qualityStatus:'passed',inspectionId:delivery.inspectionId});
+      }
       const shots = Array.isArray(req.body?.shots) ? req.body.shots : [];
       if (!shots.length || shots.length > 200) return res.status(400).json({ error: "shots must contain 1-200 items" });
       const validatedShots = shots.map((shot: unknown) => {
@@ -316,7 +326,7 @@ export const registerAssetRoutes = (app: Express, { mediaAssetsDir }: AssetRoute
         subtitles: subtitleUrl ? await readLocalMediaSource({ sourceUrl: subtitleUrl, mediaAssetsDir, maximumBytes: 5 * 1024 * 1024 }) : undefined,
       });
       const url = await saveMediaBuffer({ mediaAssetsDir, projectId, mimeType: "video/mp4", buffer: output });
-      return res.json({ url });
+      return res.json({ url,qualityStatus:'pending',purpose:'review_preview' });
     } catch (err: any) {
       console.error("Episode film composition error:", err);
       return res.status(400).json({ error: err.message });

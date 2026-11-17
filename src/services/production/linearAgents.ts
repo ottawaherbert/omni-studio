@@ -157,7 +157,7 @@ export const validateLinearShotContinuity = (episodes: Episode[]): ProductionQAI
     (episode.scenes || []).forEach((scene) => {
       (scene.shots || []).forEach((shot) => {
         if (!shot.blocking && !shot.continuityNote) {
-          issues.push(issue(scenePath(episode, scene, `shots.${shot.id}.continuityNote`), "shot 缺少 blocking/continuityNote，后续容易越轴或动作接不上。", "warning", "补充 180 度轴线、视线匹配、动作顺接和空间方位连续性说明。", "continuity"));
+          issues.push(issue(scenePath(episode, scene, `shots.${shot.id}.continuityNote`), "shot 尚未记录空间或承接依据，需要结合切镜目的核对。", "warning", "说明本镜的叙事目的，以及需要延续的人物、空间与事件状态；不强制动作连续或固定左右方位。", "continuity"));
         }
       });
     });

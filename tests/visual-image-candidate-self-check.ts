@@ -344,91 +344,20 @@ assert.throws(
 );
 
 const read = (path: string) => readFileSync(path, "utf8");
-const assetViewSource = read("src/components/bible/AssetDetailView.tsx");
-const bibleHookSource = read("src/hooks/useBibleAI.ts");
+const assetViewSource = read("src/components/bible/GlobalAssetDetailView.tsx");
+const projectSource = read("src/components/production/AssetSourceMedia.tsx");
 const assetBoardBatchSource = read("src/hooks/useProductionAssetBoardBatch.ts");
-for (const [label, source] of [
-  ["AssetDetailView", assetViewSource],
-  ["useBibleAI", bibleHookSource],
-] as const) {
-  assert.match(source, /createVisualImageCandidate/, `${label} must stage generated visual candidates`);
-  assert.match(source, /compiledRequest/, `${label} must retain the compiled request audit`);
-  assert.match(source, /pendingProjectWrite/, `${label} must drain queued project writes before rebasing a candidate`);
+for (const source of [assetViewSource, projectSource]) {
+  assert.match(source, /createVisualImageCandidate/);
+  assert.match(source, /generationPlan: source.plan/);
+  assert.match(source, /upsertVisualImageCandidate/);
 }
-assert.match(assetViewSource, /await awaitProjectWrites\(generationRequest\)[\s\S]*currentProjectForCandidate[\s\S]*latestAsset/);
-const assetViewBaseUpload = assetViewSource.slice(
-  assetViewSource.indexOf("const handleBaseFileUpload"),
-  assetViewSource.indexOf("const handleVariantFileUpload"),
-);
-const assetViewVariantUpload = assetViewSource.slice(
-  assetViewSource.indexOf("const handleVariantFileUpload"),
-  assetViewSource.indexOf("const openBaseImagePrompt"),
-);
-for (const uploadSource of [assetViewBaseUpload, assetViewVariantUpload]) {
-  assert.match(uploadSource, /beginImageRequest\(/, "FileReader uploads must capture the current asset/project view");
-  assert.match(uploadSource, /isImageRequestCurrent\(uploadRequest\)/);
-  assert.match(uploadSource, /await awaitProjectWrites\(uploadRequest\)[\s\S]*resolveLatestAsset\(\)/);
-}
-assert.match(bibleHookSource, /generateAIContent as generateAIContentRaw/);
-assert.match(bibleHookSource, /await generateAIContentRaw\(\.\.\.args\)[\s\S]*assertRenderedProjectContext\(\)/);
-assert.match(bibleHookSource, /updateProjectInStore\(updates, \{ expectedProjectId: renderedProjectId \}\)/);
-for (const busyReset of [
-  "setIsGeneratingLoglineRaw(false)",
-  "setIsGeneratingConflictRaw(false)",
-  "setIsGeneratingCharactersRaw(false)",
-  "setIsGeneratingArcRaw(false)",
-  "setIsGeneratingAllAssetsRaw(false)",
-  "setIsGeneratingWorldRulesRaw(false)",
-  "setIsGeneratingBibleRaw(false)",
-]) {
-  assert.match(bibleHookSource, new RegExp(busyReset.replace(/[()]/g, "\\$&")), `project switches must clear ${busyReset}`);
-}
+assert.match(projectSource, /expectedProjectId: project.id/);
+assert.match(projectSource, /flushDebouncedProjectSave/);
+assert.match(projectSource, /current\?\.id !== project.id/);
+assert.match(projectSource, /generating.sourceHash/);
 assert.match(assetViewSource, /adoptGlobalVisualImageCandidate/);
 assert.match(read("src/components/production/VisualImageCandidatePanel.tsx"), /onAdopt|onReject/);
-
-const bibleCandidateStageSection = bibleHookSource.slice(
-  bibleHookSource.indexOf("const stageVisualImageCandidate"),
-  bibleHookSource.indexOf("const handleRegenerateLogline"),
-);
-assert.match(bibleCandidateStageSection, /await awaitBibleAIProjectWrites\(projectRequest\)[\s\S]*latestOwner/);
-assert.match(bibleCandidateStageSection, /upsertVisualImageCandidate\(latestOwner\.visualImageCandidates, candidate\)/);
-assert.match(bibleCandidateStageSection, /projectId:\s*string/);
-assert.match(bibleCandidateStageSection, /assetId:\s*string/);
-assert.match(
-  bibleCandidateStageSection,
-  /!latestProject\s*\|\|\s*!isBibleAIProjectRequestCurrent\(\{ projectId, projectEpoch \}\)/,
-  "Bible candidate staging must reject results from a switched project",
-);
-assert.match(
-  bibleCandidateStageSection,
-  /targetExists[\s\S]*character\.id === assetId[\s\S]*asset\.id === assetId/,
-  "Bible candidate staging must validate the target asset in the captured project",
-);
-assert.equal(
-  [...bibleHookSource.matchAll(/captureBibleAIProjectRequest\(latestProject\.id\)/g)].length,
-  6,
-  "every Bible image or image-prompt workflow must capture its initiating project",
-);
-assert.equal(
-  [...bibleHookSource.matchAll(/stageVisualImageCandidate\(\{\s*\.\.\.projectRequest,/g)].length,
-  5,
-  "every Bible image result must pass the captured project identity into candidate staging",
-);
-assert.match(
-  bibleHookSource,
-  /useEffect\(\(\) => \{[\s\S]*setPromptModalStateRaw\(\{[\s\S]*setImagePromptModalStateRaw\(\{[\s\S]*setGeneratingCharImageIdRaw\(null\)[\s\S]*setGeneratingAssetImageIdRaw\(null\)[\s\S]*setIsOptimizingPromptRaw\(false\)[\s\S]*\}, \[renderedProjectId\]\)/,
-  "switching projects must clear Bible prompt/image modal closures and image busy state",
-);
-assert.match(
-  bibleHookSource,
-  /visibleImagePromptModalState = imagePromptModalState\.projectId === renderedProjectId[\s\S]*isOpen: false/,
-  "a stale image prompt modal must be hidden synchronously on the first render of another project",
-);
-assert.doesNotMatch(
-  bibleHookSource,
-  /currentProject\?\.(?:characters|assets)\s*\|\|\s*\[\]/,
-  "Bible image confirmations must not mutate whichever project happens to be current",
-);
 const batchExecutionSection = assetBoardBatchSource.slice(
   assetBoardBatchSource.indexOf("const executeBatch"),
   assetBoardBatchSource.indexOf("const adoptCandidate"),

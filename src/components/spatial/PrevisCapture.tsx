@@ -1,0 +1,11 @@
+import { useEffect, useState } from 'react';
+import { createPrevisVideoRenderer, renderPrevisGrid } from './previsRenderer';
+import type { PrevisVideo } from '../../clients/previsClient';
+import { inspectSnapshot } from './contactInspection';
+declare global { interface Window { omniSpatialCapture?: (action:string,payload?:unknown)=>Promise<any> } }
+/** Worker-only renderer, controlled by a local server-owned browser context. No project mutation API. */
+export function PrevisCapture(){const [status,setStatus]=useState('正在连接本机拍摄任务…');useEffect(()=>{let disposed=false;void(async()=>{const call=window.omniSpatialCapture;if(!call){setStatus('此页面只供本机后台拍摄使用，请返回影视城。');return;}let renderer:ReturnType<typeof createPrevisVideoRenderer>|undefined;try{const data=await call('init');if(data.kind==='contact-check'){
+ const report=await inspectSnapshot(data.snapshot,frames=>{setStatus(`接触与穿模检查：${frames}个采样点`);});await call('report',report);await call('finish');setStatus(report.passed?'检查通过':'检查完成，存在待修正问题');return;
+ }if(data.kind==='studio-preview'){
+ for(const view of data.studio.plan.viewpoints){if(disposed)return;const frame={id:view.id,shotId:'preview',label:view.name,note:view.note,timeInShot:0,camera:view.camera,states:{}};const image=await renderPrevisGrid(data.studio.plan,{schemaVersion:'scene-previs.v1',locationId:view.locationId,objects:[],light:{position:[15,30,20],intensity:2.5},frames:[frame]},'16:9',[view.id],1);await call('preview',{id:view.id,image});setStatus(view.name);}await call('finish');setStatus('机位预览完成');return;
+ }const video=data as PrevisVideo;renderer=createPrevisVideoRenderer(video.timeline,video.width,video.height);for(let start=video.receivedFrames;start<video.totalFrames&&!disposed;start+=6){const images:string[]=[];for(let i=start;i<Math.min(start+6,video.totalFrames);i++)images.push(await renderer.frame(i/video.fps));const receipt=await call('frames',{start,images});if(receipt?.capturePaused){setStatus('已暂停，已拍帧保留');return;}setStatus(`白模拍摄 ${Math.min(start+6,video.totalFrames)}/${video.totalFrames}`);}if(!disposed){await call('finish');setStatus('拍摄完成');}}catch(e){setStatus((e as Error).message);await call('error',{message:(e as Error).message}).catch(()=>{});}finally{renderer?.dispose();}})();return()=>{disposed=true;};},[]);return <p className="p-8 text-text-primary">{status}</p>;}

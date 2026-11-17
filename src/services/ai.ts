@@ -1,76 +1,70 @@
-import { parseModelJson, assertProviderCompletion, jsonTransportMode, assertModelSchema } from '../../packages/model-output/src';
-import { resolveTextOutputProfile } from '../config/textModelOutput';
-import { resolveManualAIRequest, isManualAIExecution, manualAIMediaHasAudio } from "../../apps/web/src/clients/manualAIClient";
-import { manualAIPromptText, type ManualAIPromptReview } from "../../packages/domain/src/manualAI";
+import type { AudioGenerationContext } from '../../packages/domain/src/speech';
 import { Modality } from "@google/genai";
-import { speechClient } from '../../apps/web/src/clients/speechClient';
 import { assetClient } from '../../apps/web/src/clients/assetClient';
-import { speechAudioDataUrl } from '../utils/speechAudio';
-import { useAIConfigStore, AIChannel, AIModel } from "../store/useAIConfigStore";
-import { usePromptCompositionAuditStore } from "../store/usePromptCompositionAuditStore";
+import { isManualAIExecution,manualAIMediaHasAudio,resolveManualAIRequest } from "../../apps/web/src/clients/manualAIClient";
+import { speechClient } from '../../apps/web/src/clients/speechClient';
+import { manualAIPromptText,type ManualAIPromptReview } from "../../packages/domain/src/manualAI";
+import { assertModelSchema,assertProviderCompletion,jsonTransportMode,parseModelJson } from '../../packages/model-output/src';
+import { comfyGatewayClient } from '../clients/comfyGatewayClient';
+import { submitGenerationRequest,waitForGenerationResult } from '../clients/generationSubmission';
+import type { GenerationTarget } from '../../packages/domain/src/generation';
 import {
-  isOpenAICompatibleTextChannelType,
-  MINIMAX_H3_MODEL_ID,
-  openAICompatibleReasoningParams,
-  resolveKieOpenAICompatibleTextBaseUrl,
+isOpenAICompatibleTextChannelType,
+MINIMAX_H3_MODEL_ID,
+openAICompatibleReasoningParams,
+resolveKieOpenAICompatibleTextBaseUrl,
 } from "../config/aiConfigDefaults";
+import { resolveTextOutputProfile } from '../config/textModelOutput';
+import { AIChannel,AIModel,useAIConfigStore } from "../store/useAIConfigStore";
+import { usePromptCompositionAuditStore } from "../store/usePromptCompositionAuditStore";
+import { speechAudioDataUrl } from '../utils/speechAudio';
 
+import type { AIExecutionProvenance,VisualCompileManifest } from "../clients/domainTypes";
 import { useGlobalStore } from "../store/useGlobalStore";
 import {
-  generateKieGrokVideo,
-  queryKieGrokVideoTask,
-  submitKieGrokVideoTask,
-} from "./providers/kieGrokVideo";
-import { generateKieGrokImage } from "./providers/kieGrokImage";
-import { assertImageGenerationRequestSupported } from "./providers/imageModelCapabilities";
-import { createLegacyVideoGenerationIntent } from "./production/videoGenerationIntent";
-import { resolveVideoModelAdapter } from "./production/videoModelAdapterRegistry";
-import { buildLegacyGenericVideoRequest, KIE_GROK_I2V_ADAPTER_ID } from "./production/genericVideoAdapter";
-import {
-  assertFinalVideoPromptPreservesVisualStyleContract,
-  buildVideoVisualRecipeBoundary,
-  type VideoGenerationAdapterPlan,
-} from "./production/videoModelAdapter";
-import type { VideoGenerationIntent } from "./production/videoGenerationIntent";
-import { buildVideoGenerationTaskAudit } from "./production/videoGenerationTaskAudit";
-import {
-  buildMiniMaxH3VideoRequest,
-  miniMaxH3GenerationModeForAdapter,
-  MINIMAX_H3_REF2VA_ADAPTER_ID,
-} from "./production/minimaxH3Adapter";
-import {
-  queryMiniMaxH3VideoTask,
-} from "./providers/minimaxH3Video";
-import {
-  prepareComfyUIH3Intent,
-  queryComfyUIH3VideoTask,
-  submitComfyUIH3VideoTask,
-} from "./providers/comfyUIH3Video";
-import type { VideoGenerationTask } from "./providers/videoGenerationTask";
-import {
-  compileVideoProviderPrompt,
-  resolveVideoProviderType,
-  resolveVisualPromptLanguageProfile,
-  type VideoMotionContract,
-  type VideoProviderPromptAudit,
-} from "./production/visualPromptLanguageProfile";
-import {
-  comfyUIImageDimensionsForAspectRatio,
-  compileImageGenerationRequest,
-  doubaoImageSizeForAspectRatio,
-  openAIImageSizeForAspectRatio,
-  type CompiledImageGenerationRequest,
-  type ImageGenerationRequest,
+compileImageGenerationRequest,
+type CompiledImageGenerationRequest,
+type ImageGenerationRequest
 } from "./production/imageGenerationRequest";
 import {
-  composePromptBlocks,
-  markPromptBlocksDuplicatedByManifest,
-  promptBlocksFromText,
-  promptContentHash,
-  type PromptCompositionBlockInput,
-  type PromptCompositionManifest,
+MINIMAX_H3_REF2VA_ADAPTER_ID
+} from "./production/minimaxH3Adapter";
+import {
+composePromptBlocks,
+markPromptBlocksDuplicatedByManifest,
+promptBlocksFromText,
+promptContentHash,
+type PromptCompositionBlockInput,
+type PromptCompositionManifest,
 } from "./production/promptComposition";
-import type { AIExecutionProvenance, VisualCompileManifest } from "../clients/domainTypes";
+import type { VideoGenerationIntent } from "./production/videoGenerationIntent";
+import { createLegacyVideoGenerationIntent } from "./production/videoGenerationIntent";
+import { buildVideoGenerationTaskAudit } from "./production/videoGenerationTaskAudit";
+import {
+assertFinalVideoPromptPreservesVisualStyleContract,
+buildVideoVisualRecipeBoundary,
+type VideoGenerationAdapterPlan,
+} from "./production/videoModelAdapter";
+import { resolveVideoModelAdapter } from "./production/videoModelAdapterRegistry";
+import {
+compileVideoProviderPrompt,
+resolveVideoProviderType,
+resolveVisualPromptLanguageProfile,
+type VideoMotionContract,
+type VideoProviderPromptAudit,
+} from "./production/visualPromptLanguageProfile";
+import {
+prepareComfyUIH3Intent,
+queryComfyUIH3VideoTask
+} from "./providers/comfyUIH3Video";
+import { assertImageGenerationRequestSupported } from "./providers/imageModelCapabilities";
+import {
+queryKieGrokVideoTask
+} from "./providers/kieGrokVideo";
+import {
+queryMiniMaxH3VideoTask,
+} from "./providers/minimaxH3Video";
+import type { VideoGenerationTask } from "./providers/videoGenerationTask";
 
 // Helper to get channel and model
 function getModelAndChannel(
@@ -82,7 +76,8 @@ function getModelAndChannel(
   const model = state.models.find(m => m.id === modelId);
   if (!model) return null;
   const channel = state.channels.find(c => c.id === model.channelId);
-  if (!channel) return null;
+  if (!channel || channel.enabled === false) return null;
+  if (state.comfyWorkflows.some(w => w.id === model.comfyWorkflowId && w.enabled === false)) return null;
   return { model, channel };
 }
 
@@ -181,7 +176,7 @@ const providerErrorSummary = (error: unknown) => ({
   message: redactProviderText(error, 300),
 });
 
-const callGeminiProxy = async (action: string, payload: any, apiKey?: string, channelId?: string) => {
+const callGeminiProxy = async (action: string, payload: any, apiKey?: string, channelId?: string, audioContext?: AudioGenerationContext) => {
   const res = await fetch('/api/proxy/gemini', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
@@ -190,6 +185,7 @@ const callGeminiProxy = async (action: string, payload: any, apiKey?: string, ch
       payload,
       apiKey: apiKey || undefined,
       channelId: channelId || undefined,
+      ...audioContext,
     })
   });
   if (!res.ok) {
@@ -226,6 +222,8 @@ const recordReviewedAudioPrompt = (prompt: string, instructions: string | undefi
 };
 
 export async function generateAIImage(options: ImageGenerationRequest & {
+  target?: GenerationTarget;
+  onGenerationResult?: (result: Awaited<ReturnType<typeof waitForGenerationResult>>) => void;
   onPromptCompiled?: (compiled: CompiledImageGenerationRequest) => void;
   onExecutionProvenance?: (audit: AIExecutionProvenance) => void;
 }): Promise<string> {
@@ -261,188 +259,15 @@ export async function generateAIImage(options: ImageGenerationRequest & {
     modelId: model.modelId,
     manifest: compiled.manifest,
   });
-  const normalizedOptions = {
-    ...options,
-    prompt: compiled.providerPrompt,
-    aspectRatio: compiled.aspectRatio,
-    referenceImages: referenceImages.length ? referenceImages : undefined,
-  };
-
-  if (channel.type === 'kie') {
-    return generateKieGrokImage({ channel, model, options: normalizedOptions });
-  }
-
-  let apiKey = resolveClientApiKey(model, channel);
-  
-  // Remove "Bearer " prefix if user accidentally included it
-  if (apiKey.startsWith('Bearer ')) {
-    apiKey = apiKey.substring(7);
-  }
-  if (channel.type === 'gemini') {
-    // Runtime compatibility mapping:
-    let resolvedModelId = model.modelId;
-    if (resolvedModelId === 'gemini-2.5-flash-image') {
-      resolvedModelId = 'imagen-3.0-generate-002';
-    }
-
-    const response = await callGeminiProxy('generateImages', {
-      model: resolvedModelId,
-      prompt: compiled.providerPrompt,
-      config: {
-        numberOfImages: 1,
-        outputMimeType: 'image/jpeg',
-        aspectRatio: compiled.aspectRatio,
-      }
-    }, apiKey, channel.id);
-
-    if (response.generatedImages && response.generatedImages.length > 0) {
-      const base64EncodeString = response.generatedImages[0].image.imageBytes;
-      return `data:image/png;base64,${base64EncodeString}`;
-    }
-    throw new Error("No image generated");
-  } else if (channel.type === 'openai') {
-    const response = await fetch('/api/proxy/openai-image', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        baseUrl: channel.baseUrl || "https://api.openai.com/v1",
-        channelId: channel.id,
-        apiKey,
-        body: {
-          model: model.modelId,
-          prompt: compiled.providerPrompt,
-          n: 1,
-          size: openAIImageSizeForAspectRatio(compiled.aspectRatio),
-          response_format: "b64_json",
-        }
-      })
-    });
-    const data = await response.json();
-    if (!response.ok) {
-      throw new Error(`OpenAI image proxy error (${response.status}): ${redactProviderText(data)}`);
-    }
-    if (data.data?.[0]?.b64_json) {
-      return `data:image/png;base64,${data.data[0].b64_json}`;
-    }
-    throw new Error("No image generated");
-  } else if (channel.type === 'doubao') {
-    // Direct fetch for Doubao to avoid OpenAI SDK body serialization issues
-    const doubaoUrl = channel.baseUrl || "https://ark.cn-beijing.volces.com/api/v3";
-    
-    const requestBody: any = {
-      model: model.modelId,
-      prompt: compiled.providerPrompt,
-      size: doubaoImageSizeForAspectRatio(compiled.aspectRatio),
-      response_format: "url",
-      watermark: false
-    };
-
-    if (referenceImages.length > 0) {
-      requestBody.image = referenceImages;
-      requestBody.sequential_image_generation = "disabled";
-    }
-
-    let response;
-    try {
-      response = await fetch('/api/proxy/doubao', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          url: `${doubaoUrl}/images/generations`,
-          channelId: channel.id,
-          method: 'POST',
-          headers: {
-            'Authorization': `Bearer ${apiKey}`,
-            'Content-Type': 'application/json'
-          },
-          rawBody: JSON.stringify(requestBody)
-        })
-      });
-    } catch (e: any) {
-      console.error("Doubao client-side fetch failed:", providerErrorSummary(e));
-      throw new Error(`豆包供应商网络请求失败：${redactProviderText(e?.message || e, 300)}`);
-    }
-
-    if (!response.ok) {
-      const dataStr = await response.text();
-      throw new Error(`Doubao API Error (${response.status}): ${redactProviderText(dataStr)}`);
-    }
-
-    const data = await response.json();
-
-
-    if (data.data && data.data.length > 0 && data.data[0].url) {
-      return data.data[0].url;
-    }
-    
-    throw new Error("No image generated from Doubao");
-  } else if (channel.type === 'comfyui') {
-    // ComfyUI implementation
-    const state = useAIConfigStore.getState();
-    // For simplicity, we just find the first comfy workflow
-    const workflow = state.comfyWorkflows[0];
-    if (!workflow) throw new Error("No ComfyUI workflow configured");
-
-    const promptJson = JSON.parse(JSON.stringify(workflow.workflowJson));
-    const dimensionMappings = new Set(workflow.mappings.map((mapping) => mapping.systemParam));
-    if (!dimensionMappings.has("width") || !dimensionMappings.has("height")) {
-      throw new Error("ComfyUI 图片工作流缺少 width/height 结构化映射，已阻止忽略画幅继续生成。请在工作流参数对应中补齐宽高节点。");
-    }
-    const dimensions = comfyUIImageDimensionsForAspectRatio(compiled.aspectRatio);
-    workflow.mappings.forEach(mapping => {
-      if (mapping.systemParam === 'prompt' && promptJson[mapping.nodeId]) {
-        promptJson[mapping.nodeId].inputs[mapping.nodeInput] = compiled.providerPrompt;
-      }
-      if (mapping.systemParam === 'width' && promptJson[mapping.nodeId]) {
-        promptJson[mapping.nodeId].inputs[mapping.nodeInput] = dimensions.width;
-      }
-      if (mapping.systemParam === 'height' && promptJson[mapping.nodeId]) {
-        promptJson[mapping.nodeId].inputs[mapping.nodeInput] = dimensions.height;
-      }
-      if (mapping.systemParam === 'seed' && promptJson[mapping.nodeId]) {
-        promptJson[mapping.nodeId].inputs[mapping.nodeInput] = Math.floor(Math.random() * 1000000000);
-      }
-    });
-
-    const baseUrl = channel.baseUrl.replace(/\/$/, '');
-    const submitRes = await fetch(`${baseUrl}/prompt`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ prompt: promptJson })
-    });
-    const submitData = await submitRes.json();
-    const promptId = submitData.prompt_id;
-
-    // Poll for history
-    while (true) {
-      await new Promise(resolve => setTimeout(resolve, 2000));
-      const historyRes = await fetch(`${baseUrl}/history/${promptId}`);
-      const historyData = await historyRes.json();
-      if (historyData[promptId]) {
-        const outputs = historyData[promptId].outputs;
-        for (const nodeId in outputs) {
-          if (outputs[nodeId].images && outputs[nodeId].images.length > 0) {
-            const image = outputs[nodeId].images[0];
-            // Fetch the actual image
-            const imgRes = await fetch(`${baseUrl}/view?filename=${image.filename}&subfolder=${image.subfolder}&type=${image.type}`);
-            const imgBlob = await imgRes.blob();
-            return new Promise((resolve, reject) => {
-              const reader = new FileReader();
-              reader.onloadend = () => resolve(reader.result as string);
-              reader.onerror = reject;
-              reader.readAsDataURL(imgBlob);
-            });
-          }
-        }
-        throw new Error("No image in ComfyUI output");
-      }
-    }
-  } else {
-    throw new Error(`Unsupported channel type for image generation: ${channel.type}`);
-  }
+  const submitted = await submitGenerationRequest({ projectId: options.projectId, target: options.target, operation: options.target?.kind === 'board' || options.target?.kind === 'scene' ? 'joint_storyboard' : 'asset_image', modelConfigId: model.id, prompt: compiled.providerPrompt, aspectRatio: compiled.aspectRatio, references: referenceImages.map(url => ({ url, kind: 'image' })) });
+  const result = await waitForGenerationResult(submitted, channel.comfyQueue?.waitTimeoutMs);
+  options.onGenerationResult?.(result);
+  return result.url;
 }
 
 async function executeAIVideo(options: {
+  target?: GenerationTarget;
+  onGenerationResult?: (result: Awaited<ReturnType<typeof waitForGenerationResult>>) => void;
   prompt: string;
   imageUrl: string;
   durationSeconds: number;
@@ -466,6 +291,21 @@ async function executeAIVideo(options: {
   const config = getModelAndChannel('videoGen', options.modelConfigId);
   if (!config) throw new Error(`No model configured for task: videoGen`);
   const { model, channel } = config;
+  if (channel.type === 'comfyui' && model.comfyCapabilities) {
+    const result = await generateVideoFromIntent({ intent: createLegacyVideoGenerationIntent(options), modelConfigId: model.id,
+      target: options.target, onGenerationResult: options.onGenerationResult,
+      onAdapterPlanPrepared: options.onAdapterPlanPrepared, idempotencyKey: `comfy-video-${crypto.randomUUID()}` });
+    if (result.kind === 'completed') return result.videoUrl;
+    let task = result.task;
+    const deadline = Date.now() + (channel.comfyQueue?.waitTimeoutMs || 3600000);
+    while (Date.now() < deadline) {
+      if (task.status === 'succeeded' && task.videoUrl) return task.videoUrl;
+      if (['failed', 'cancelled', 'unknown'].includes(task.status)) throw new Error(`${task.error || 'ComfyUI 任务失败'}；任务 ${task.id}`);
+      await new Promise(resolve => setTimeout(resolve, channel.comfyQueue?.pollIntervalMs || 3000));
+      task = await comfyGatewayClient.query(task.id);
+    }
+    throw new Error(`等待超时，任务未取消，可在设置恢复：${task.id}`);
+  }
   const baseProviderPromptAudit = compileVideoProviderPrompt({
     authorPrompt: options.prompt,
     profile: resolveVisualPromptLanguageProfile({
@@ -525,106 +365,16 @@ async function executeAIVideo(options: {
     modelId: model.modelId,
     manifest: providerPromptAudit.manifest,
   });
-  let apiKey = resolveClientApiKey(model, channel);
-
-  // Remove "Bearer " prefix if user accidentally included it
-  if (apiKey.startsWith('Bearer ')) {
-    apiKey = apiKey.substring(7);
-  }
-  await ensureServerEnvKeyAvailable(model, channel, '视频生成');
-
-  if (channel.type === 'kie') {
-    if (options.endImageUrl) {
-      throw new Error(`${model.alias} 只支持单张首帧图片，不能发送尾帧。`);
-    }
-    const intent = directIntent;
-    const adapter = resolveVideoModelAdapter({
-      channelType: channel.type,
-      modelId: model.modelId,
-      configuredAdapterId: options.adapterId || model.videoAdapterId,
-    });
-    const adapterPlan = adapter.compile({
-      intent,
-      modelConfigId: model.id,
-      mode: model.videoGenerationDefaults?.mode,
-      resolution: model.videoGenerationDefaults?.resolution,
-      contractEnforcement: "formal",
-    });
-    const confirmedAdapterPlan = {
-      ...adapterPlan,
-      finalConfirmedPrompt: providerPrompt,
-    };
-    options.onAdapterPlanPrepared?.(confirmedAdapterPlan);
-    const request = buildLegacyGenericVideoRequest(intent, confirmedAdapterPlan);
-    return generateKieGrokVideo({
-      channel,
-      model,
-      options: {
-        prompt: request.prompt,
-        imageUrl: request.imageUrl,
-        durationSeconds: request.durationSeconds,
-        aspectRatio: request.aspectRatio,
-      },
-    });
-  }
-
-  if (channel.type === 'gemini') {
-    const imageToInlineData = async (url: string) => {
-      let dataUrl = url;
-      if (!url.startsWith("data:")) {
-        const response = await fetch(url);
-        if (!response.ok) throw new Error(`Unable to read frame image: ${response.status}`);
-        const blob = await response.blob();
-        dataUrl = await new Promise<string>((resolve, reject) => {
-          const reader = new FileReader();
-          reader.onload = () => resolve(String(reader.result || ""));
-          reader.onerror = () => reject(reader.error || new Error("Unable to read frame image"));
-          reader.readAsDataURL(blob);
-        });
-      }
-      const separator = dataUrl.indexOf(",");
-      const mimeMatch = /^data:([^;]+);base64,/.exec(dataUrl);
-      if (separator < 0 || !mimeMatch) throw new Error("Frame image must be a readable image URL or base64 data URL");
-      return { imageBytes: dataUrl.slice(separator + 1), mimeType: mimeMatch[1] };
-    };
-    const firstFrame = await imageToInlineData(options.imageUrl);
-    const supportsLastFrame = /(?:^|\/)veo-3\.1(?:-|$)/i.test(model.modelId);
-    if (options.endImageUrl && !supportsLastFrame) {
-      throw new Error(`Configured video model ${model.modelId} does not support last-frame interpolation`);
-    }
-    const lastFrame = options.endImageUrl ? await imageToInlineData(options.endImageUrl) : undefined;
-
-    let operation = await callGeminiProxy('generateVideos', {
-      model: model.modelId,
-      prompt: providerPrompt,
-      image: firstFrame,
-      config: {
-        numberOfVideos: 1,
-        resolution: '720p',
-        aspectRatio: options.aspectRatio || '16:9',
-        ...(lastFrame ? { lastFrame } : {}),
-      }
-    }, apiKey, channel.id);
-
-    while (!operation.done) {
-      await new Promise(resolve => setTimeout(resolve, 10000));
-      operation = await callGeminiProxy('getVideosOperation', { operation }, apiKey, channel.id);
-    }
-
-    const downloadLink = operation.response?.generatedVideos?.[0]?.video?.uri;
-    if (!downloadLink) throw new Error("No video generated");
-
-    const blob = await downloadGeminiVideoViaProxy(downloadLink, apiKey);
-    const { persistMediaBlob } = await import("../utils/storage");
-    return persistMediaBlob(blob);
-  } else {
-    throw new Error(`Unsupported channel type for video generation: ${channel.type}`);
-  }
+  const result = await waitForGenerationResult(await submitGenerationRequest({ target: options.target, modelConfigId: model.id, prompt: providerPrompt, operation: 'video', aspectRatio: options.aspectRatio || '16:9', duration: options.durationSeconds, references: [{ url: options.imageUrl, kind: 'image', role: 'first_frame' }, ...(options.endImageUrl ? [{ url: options.endImageUrl, kind: 'image' as const, role: 'last_frame' as const }] : [])] }));
+  options.onGenerationResult?.(result);
+  return result.url;
 }
 
 export const generateAIVideo = (options: Parameters<typeof executeAIVideo>[0]): Promise<string> => executeAIVideo(options);
 
 export interface GenerateVideoFromIntentOptions {
+  target?: GenerationTarget;
+  onGenerationResult?: (result: Awaited<ReturnType<typeof waitForGenerationResult>>) => void;
   intent: VideoGenerationIntent;
   modelConfigId?: string;
   adapterId?: string;
@@ -685,12 +435,13 @@ export const generateVideoFromIntent = async (
   const adapter = resolveVideoModelAdapter({
     channelType: channel.type,
     modelId: model.modelId,
+    comfyCapabilities: model.comfyCapabilities,
     configuredAdapterId: options.adapterId || model.videoAdapterId,
   });
-  if (channel.type === "comfyui" && adapter.id !== MINIMAX_H3_REF2VA_ADAPTER_ID) {
+  if (channel.type === "comfyui" && !model.comfyCapabilities && adapter.id !== MINIMAX_H3_REF2VA_ADAPTER_ID) {
     throw new Error("当前本地 ComfyUI 只配置了 MiniMax H3 图片参考生成方式。");
   }
-  const effectiveIntent = channel.type === "comfyui" ? prepareComfyUIH3Intent(options.intent) : options.intent;
+  const effectiveIntent = channel.type === "comfyui" && !model.comfyCapabilities ? prepareComfyUIH3Intent(options.intent) : options.intent;
   const plan = adapter.compile({
     intent: effectiveIntent,
     modelConfigId: model.id,
@@ -722,63 +473,22 @@ export const generateVideoFromIntent = async (
     extra: options.audit,
   });
 
-  if (miniMaxH3GenerationModeForAdapter(adapter.id)) {
-    const request = buildMiniMaxH3VideoRequest(effectiveIntent, confirmedPlan);
-    if (channel.type === "comfyui") {
-      usePromptCompositionAuditStore.getState().record({
-        phase: "video_generation",
-        taskType: "videoGen",
-        channelType: channel.type,
-        modelId: model.modelId,
-        manifest: adapterPromptComposition.manifest,
-      });
-      const task = await submitComfyUIH3VideoTask({
-        channel,
-        model,
-        request,
-        idempotencyKey: options.idempotencyKey,
-        audit: taskAudit,
-      });
-      return { kind: "task", task, adapterPlan: confirmedPlan };
-    }
-    throw new Error("云端 MiniMax H3 已下线；当前 H3 生成只允许使用本地 ComfyUI 工作流。");
-  }
-
-  const request = buildLegacyGenericVideoRequest(options.intent, confirmedPlan);
-  if (adapter.id === KIE_GROK_I2V_ADAPTER_ID) {
-    usePromptCompositionAuditStore.getState().record({
-      phase: "video_generation",
-      taskType: "videoGen",
-      channelType: channel.type,
-      modelId: model.modelId,
-      manifest: adapterPromptComposition.manifest,
-    });
-    const task = await submitKieGrokVideoTask({
-      channel,
-      model,
-      options: request,
-      idempotencyKey: options.idempotencyKey,
-      audit: taskAudit,
-    });
-    return { kind: "task", task, adapterPlan: confirmedPlan };
-  }
-  const videoUrl = await executeAIVideo({
-    ...request,
-    modelConfigId: model.id,
-    adapterId: adapter.id,
-    visualStyleCompileManifest: confirmedPlan.visualStyleCompileManifest,
-  }, true);
-  return { kind: "completed", videoUrl, embeddedAudio: false, adapterPlan: confirmedPlan };
+  const issue = confirmedPlan.issues.find(i => i.severity === 'blocking');
+  if (issue) throw new Error(issue.message);
+  const result = await waitForGenerationResult(await submitGenerationRequest({ projectId: typeof options.audit?.projectId === 'string' ? options.audit.projectId : undefined, target: options.target, modelConfigId: model.id, prompt: finalConfirmedPrompt, operation: 'video', aspectRatio: effectiveIntent.aspectRatio, duration: effectiveIntent.durationSeconds, commandId: options.idempotencyKey, parameters: options.resolution ? { resolution: options.resolution } : undefined, references: confirmedPlan.referenceManifest.map(ref => ({ url: ref.mediaUrl, kind: ref.mediaKind, role: ref.sourceType === 'start_frame' ? 'first_frame' : ref.sourceType === 'end_frame' ? 'last_frame' : ref.mediaKind === 'image' ? 'composition' : ref.mediaKind === 'audio' ? 'full_dialogue' : 'motion' })) }));
+  options.onGenerationResult?.(result);
+  usePromptCompositionAuditStore.getState().record({ phase: 'video_generation', taskType: 'videoGen', channelType: channel.type, modelId: model.modelId, manifest: adapterPromptComposition.manifest });
+  return { kind: 'completed', videoUrl: result.url, embeddedAudio: result.hasAudio ?? false, adapterPlan: confirmedPlan };
 };
 
 export const queryVideoGenerationTask = (
   taskId: string,
   provider: VideoGenerationTask["provider"] = "minimax_h3",
-) => provider === "kie_grok"
+) => provider === "comfyui" ? comfyGatewayClient.query(taskId) : provider === "kie_grok"
   ? queryKieGrokVideoTask(taskId)
   : provider === "comfyui_h3" ? queryComfyUIH3VideoTask(taskId) : queryMiniMaxH3VideoTask(taskId);
 
-export async function generateAIVoice(options: {
+export async function generateAIVoice(options: AudioGenerationContext & {
   text: string;
   voiceName: string;
   modelConfigId?: string;
@@ -807,42 +517,28 @@ export async function generateAIVoice(options: {
   await ensureServerEnvKeyAvailable(model, channel, '语音生成');
 
   if (channel.type === 'gemini') {
-    const maxRetries = 2;
-    let lastError: any;
-    
-    for (let i = 0; i <= maxRetries; i++) {
-      try {
-        const response = await callGeminiProxy('generateContent', {
-          model: model.modelId,
-          contents: [{ parts: [{ text: [options.language && options.language !== 'Auto' ? `Language: ${options.language}` : '', options.instructions, options.text].filter(Boolean).join('\n') }] }],
-          config: {
-            responseModalities: [Modality.AUDIO],
-            speechConfig: {
-              voiceConfig: { prebuiltVoiceConfig: { voiceName: options.voiceName } },
-            },
-          },
-        }, apiKey, channel.id);
+    const response = await callGeminiProxy('generateContent', {
+      model: model.modelId,
+      contents: [{ parts: [{ text: [options.language && options.language !== 'Auto' ? `Language: ${options.language}` : '', options.instructions, options.text].filter(Boolean).join('\n') }] }],
+      config: {
+        responseModalities: [Modality.AUDIO],
+        speechConfig: {
+          voiceConfig: { prebuiltVoiceConfig: { voiceName: options.voiceName } },
+        },
+      },
+    }, apiKey, channel.id, { purpose: options.purpose, target: options.target });
 
-        const inlineAudio = response.candidates?.[0]?.content?.parts?.find((part: any) => part.inlineData?.mimeType?.startsWith('audio/'))?.inlineData;
-        const base64Audio = inlineAudio?.data;
-        if (!base64Audio) throw new Error("No audio generated");
-        const saved = await assetClient.uploadAsset({ dataUrl: speechAudioDataUrl(base64Audio, inlineAudio.mimeType), projectId: options.projectId });
-        if (!saved.url) throw new Error('语音文件保存失败');
-        return saved.url;
-      } catch (err: any) {
-        lastError = err;
-        console.warn(`Gemini TTS attempt ${i + 1} failed:`, providerErrorSummary(err));
-        if (i < maxRetries) {
-          await new Promise(r => setTimeout(r, 1000 * (i + 1)));
-        }
-      }
-    }
-    throw lastError;
+    const inlineAudio = response.candidates?.[0]?.content?.parts?.find((part: any) => part.inlineData?.mimeType?.startsWith('audio/'))?.inlineData;
+    const base64Audio = inlineAudio?.data;
+    if (!base64Audio) throw new Error("No audio generated");
+    const saved = await assetClient.uploadAsset({ dataUrl: speechAudioDataUrl(base64Audio, inlineAudio.mimeType), projectId: options.target?.projectId || options.projectId });
+    if (!saved.url) throw new Error('语音文件保存失败');
+    return saved.url;
   } else {
     throw new Error(`Unsupported channel type for audio generation: ${channel.type}`);
   }
 }
-export async function generateAIBgm(options: {
+export async function generateAIBgm(options: AudioGenerationContext & {
   prompt: string;
 }): Promise<string> {
   const manual = await resolveManualAIRequest({ kind: "audio", prompt: options.prompt }, review => { options = { ...options, prompt: combineReviewedMediaPrompt(review) }; });
@@ -865,7 +561,7 @@ export async function generateAIBgm(options: {
       config: {
         responseModalities: [Modality.AUDIO],
       }
-    }, clientKey);
+    }, clientKey, undefined, { purpose: options.purpose, target: options.target });
     audioBase64 = data.audioBase64;
     mimeType = data.mimeType || mimeType;
 
@@ -898,6 +594,8 @@ export async function generateAIBgm(options: {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
+        purpose: options.purpose,
+        target: options.target,
         url: settings.customApiUrl,
         keySource,
         apiKey: keySource === 'local' ? settings.customApiKey || undefined : undefined,
@@ -1174,6 +872,7 @@ export async function generateAIContent(options: {
     const completionParams: any = {
       messages,
       model: model.modelId,
+      ...(model.maxOutputTokens ? { max_tokens: model.maxOutputTokens } : {}),
       ...(channel.type !== 'kie' ? openAICompatibleReasoningParams(model) : {}),
     };
     if (channel.type === 'kie') {
@@ -1232,6 +931,7 @@ export async function generateAIContent(options: {
     return acceptText(completionText(completion));
   } else if (channel.type === 'gemini') {
     const genConfig: any = { httpOptions: { retryOptions: { attempts: 1 } } };
+    if (model.maxOutputTokens) genConfig.maxOutputTokens = model.maxOutputTokens;
     if (finalSystemInstruction) {
       genConfig.systemInstruction = finalSystemInstruction;
     }
@@ -1269,6 +969,7 @@ export async function generateAIContent(options: {
         },
         body: {
           model: model.modelId,
+          ...(model.maxOutputTokens ? { max_tokens: model.maxOutputTokens } : {}),
         system: finalSystemInstruction,
           messages: [
             { role: "user", content: finalPrompt }

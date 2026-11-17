@@ -1,0 +1,366 @@
+{
+  "format": "omni-external-interactive.v1",
+  "projectId": "project_last_ferry",
+  "deliveryId": "delivery_last_ferry_001",
+  "title": "末班渡口",
+  "playerRole": "林岚；玩家只知道她在当前场景中已经获知的信息。",
+  "experienceGoals": [
+    "让隐瞒与交接都有清晰的眼前代价。",
+    "用一个共用外景展示状态仍影响后续结果。"
+  ],
+  "entryNodeId": "node_start",
+  "timing": {
+    "targetPlaythroughSeconds": 105,
+    "estimatedPlaythroughRangeSeconds": [
+      90,
+      120
+    ],
+    "uniqueMediaBudgetSeconds": 180,
+    "maxSecondsWithoutChoice": 80,
+    "assumptions": "无片头片尾；按正文动作和对白粗估，排除玩家在选择处的等待。还未测量生成视频与真人游玩。"
+  },
+  "chapters": [
+    {
+      "id": "chapter_01",
+      "title": "末班",
+      "order": 1,
+      "nodeIds": [
+        "node_start",
+        "node_hand",
+        "node_keep",
+        "node_depart",
+        "node_route",
+        "node_open",
+        "node_leave"
+      ]
+    }
+  ],
+  "variables": [
+    {
+      "id": "var_key_disclosed",
+      "type": "boolean",
+      "default": false,
+      "meaning": "钥匙是否已明确交给沈叔；分支汇合后保持。"
+    }
+  ],
+  "nodes": [
+    {
+      "id": "node_start",
+      "chapterId": "chapter_01",
+      "type": "choice",
+      "title": "选钥匙的去处",
+      "summary": "林岚看见失物柜，沈叔说明交接与赶船不能兼得。",
+      "sceneIds": [
+        "scene_001"
+      ],
+      "mediaIds": [
+        "media_001"
+      ],
+      "hold": {
+        "mode": "freeze",
+        "visualDirection": "停在林岚看向船票与登记簿的画面；不自动交出钥匙，不加新剧情动作。",
+        "audioDirection": "停住对白，延续中性室内环境声；具体衔接在系统制作中试听。"
+      }
+    },
+    {
+      "id": "node_hand",
+      "chapterId": "chapter_01",
+      "type": "scene",
+      "title": "交出钥匙",
+      "summary": "林岚交出钥匙，承认从父亲包里找到，放弃末班船。",
+      "sceneIds": [
+        "scene_002"
+      ],
+      "mediaIds": [
+        "media_002"
+      ]
+    },
+    {
+      "id": "node_keep",
+      "chapterId": "chapter_01",
+      "type": "scene",
+      "title": "登船",
+      "summary": "林岚收起钥匙，赶上渡船，仍握有秘密。",
+      "sceneIds": [
+        "scene_003"
+      ],
+      "mediaIds": [
+        "media_003"
+      ]
+    },
+    {
+      "id": "node_depart",
+      "chapterId": "chapter_01",
+      "type": "scene",
+      "title": "共同离港外景",
+      "summary": "渡船离开码头，售票厅灯光亮起。",
+      "sceneIds": [
+        "scene_004"
+      ],
+      "mediaIds": [
+        "media_004"
+      ]
+    },
+    {
+      "id": "node_route",
+      "chapterId": "chapter_01",
+      "type": "router",
+      "title": "读取此前选择",
+      "summary": "根据钥匙是否交出选择结局，不播放内容。",
+      "sceneIds": [],
+      "mediaIds": []
+    },
+    {
+      "id": "node_open",
+      "chapterId": "chapter_01",
+      "type": "ending",
+      "title": "留下名字",
+      "summary": "两人打开柜子，发现退信和未完成交接，林岚留下自己的名字。",
+      "sceneIds": [
+        "scene_005"
+      ],
+      "mediaIds": [
+        "media_005"
+      ],
+      "endingId": "ending_record"
+    },
+    {
+      "id": "node_leave",
+      "chapterId": "chapter_01",
+      "type": "ending",
+      "title": "明早再来",
+      "summary": "林岚带着钥匙离开，在时刻表上圈出明早第一班。",
+      "sceneIds": [
+        "scene_006"
+      ],
+      "mediaIds": [
+        "media_006"
+      ],
+      "endingId": "ending_return"
+    }
+  ],
+  "edges": [
+    {
+      "id": "edge_hand",
+      "from": "node_start",
+      "to": "node_hand",
+      "label": "交出钥匙，留下登记",
+      "condition": {
+        "op": "always"
+      },
+      "effects": [
+        {
+          "type": "set",
+          "variable": "var_key_disclosed",
+          "value": true
+        }
+      ],
+      "feedback": "钥匙放上登记簿，船票收回包里。",
+      "consequence": {
+        "horizon": "ending",
+        "description": "错过末班船，留下钥匙来源记录；之后共同打开失物柜。",
+        "readAtNodeIds": [
+          "node_route",
+          "node_open"
+        ]
+      }
+    },
+    {
+      "id": "edge_keep",
+      "from": "node_start",
+      "to": "node_keep",
+      "label": "收起钥匙，赶末班船",
+      "condition": {
+        "op": "always"
+      },
+      "effects": [
+        {
+          "type": "set",
+          "variable": "var_key_disclosed",
+          "value": false
+        }
+      ],
+      "feedback": "钥匙藏回内袋，林岚登船。",
+      "consequence": {
+        "horizon": "ending",
+        "description": "保留钥匙和解释权，但今晚无法查明柜内物品。",
+        "readAtNodeIds": [
+          "node_route",
+          "node_leave"
+        ]
+      }
+    },
+    {
+      "id": "edge_hand_depart",
+      "from": "node_hand",
+      "to": "node_depart",
+      "label": "继续",
+      "condition": {
+        "op": "always"
+      },
+      "effects": [],
+      "feedback": "画面按场次继续。",
+      "consequence": {
+        "horizon": "immediate",
+        "description": "承接当前场次。",
+        "readAtNodeIds": [
+          "node_depart"
+        ]
+      }
+    },
+    {
+      "id": "edge_keep_depart",
+      "from": "node_keep",
+      "to": "node_depart",
+      "label": "继续",
+      "condition": {
+        "op": "always"
+      },
+      "effects": [],
+      "feedback": "画面按场次继续。",
+      "consequence": {
+        "horizon": "immediate",
+        "description": "承接当前场次。",
+        "readAtNodeIds": [
+          "node_depart"
+        ]
+      }
+    },
+    {
+      "id": "edge_to_router",
+      "from": "node_depart",
+      "to": "node_route",
+      "label": "继续",
+      "condition": {
+        "op": "always"
+      },
+      "effects": [],
+      "feedback": "画面按场次继续。",
+      "consequence": {
+        "horizon": "immediate",
+        "description": "承接当前场次。",
+        "readAtNodeIds": [
+          "node_route"
+        ]
+      }
+    },
+    {
+      "id": "edge_record",
+      "from": "node_route",
+      "to": "node_open",
+      "label": "已交出钥匙",
+      "condition": {
+        "op": "compare",
+        "variable": "var_key_disclosed",
+        "comparator": "eq",
+        "value": true
+      },
+      "effects": [],
+      "feedback": "画面按场次继续。",
+      "consequence": {
+        "horizon": "immediate",
+        "description": "承接当前场次。",
+        "readAtNodeIds": [
+          "node_open"
+        ]
+      }
+    },
+    {
+      "id": "edge_return",
+      "from": "node_route",
+      "to": "node_leave",
+      "label": "仍持有钥匙",
+      "condition": {
+        "op": "compare",
+        "variable": "var_key_disclosed",
+        "comparator": "eq",
+        "value": false
+      },
+      "effects": [],
+      "feedback": "画面按场次继续。",
+      "consequence": {
+        "horizon": "immediate",
+        "description": "承接当前场次。",
+        "readAtNodeIds": [
+          "node_leave"
+        ]
+      }
+    }
+  ],
+  "endings": [
+    {
+      "id": "ending_record",
+      "title": "留下名字",
+      "nodeId": "node_open",
+      "payoff": "留下共同可追查的交接，同时承担错过末班船和公开来源的代价。"
+    },
+    {
+      "id": "ending_return",
+      "title": "明早再来",
+      "nodeId": "node_leave",
+      "payoff": "赶上船并保留钥匙；查明父亲行为与实际返回尚未发生。"
+    }
+  ],
+  "mediaPlan": [
+    {
+      "id": "media_001",
+      "sceneIds": [
+        "scene_001"
+      ],
+      "estimatedSeconds": 35,
+      "reuseRationale": "本单元只制作对应场次的一种完整可见状态。",
+      "visualContinuity": "傍晚潮湿渡口，保持灯光与水面方向；人物与钥匙位置以该场正文为准。",
+      "audioContinuity": "环境声延续同一渡口；对白结束后留自然空间，不自动叠入另一分支声音。"
+    },
+    {
+      "id": "media_002",
+      "sceneIds": [
+        "scene_002"
+      ],
+      "estimatedSeconds": 20,
+      "reuseRationale": "本单元只制作对应场次的一种完整可见状态。",
+      "visualContinuity": "傍晚潮湿渡口，保持灯光与水面方向；人物与钥匙位置以该场正文为准。",
+      "audioContinuity": "环境声延续同一渡口；对白结束后留自然空间，不自动叠入另一分支声音。"
+    },
+    {
+      "id": "media_003",
+      "sceneIds": [
+        "scene_003"
+      ],
+      "estimatedSeconds": 20,
+      "reuseRationale": "本单元只制作对应场次的一种完整可见状态。",
+      "visualContinuity": "傍晚潮湿渡口，保持灯光与水面方向；人物与钥匙位置以该场正文为准。",
+      "audioContinuity": "环境声延续同一渡口；对白结束后留自然空间，不自动叠入另一分支声音。"
+    },
+    {
+      "id": "media_004",
+      "sceneIds": [
+        "scene_004"
+      ],
+      "estimatedSeconds": 15,
+      "reuseRationale": "两条路线共用不含人物与道具细节的离港远景。",
+      "visualContinuity": "傍晚潮湿渡口，保持灯光与水面方向；人物与钥匙位置以该场正文为准。",
+      "audioContinuity": "环境声延续同一渡口；对白结束后留自然空间，不自动叠入另一分支声音。"
+    },
+    {
+      "id": "media_005",
+      "sceneIds": [
+        "scene_005"
+      ],
+      "estimatedSeconds": 35,
+      "reuseRationale": "本单元只制作对应场次的一种完整可见状态。",
+      "visualContinuity": "傍晚潮湿渡口，保持灯光与水面方向；人物与钥匙位置以该场正文为准。",
+      "audioContinuity": "环境声延续同一渡口；对白结束后留自然空间，不自动叠入另一分支声音。"
+    },
+    {
+      "id": "media_006",
+      "sceneIds": [
+        "scene_006"
+      ],
+      "estimatedSeconds": 35,
+      "reuseRationale": "本单元只制作对应场次的一种完整可见状态。",
+      "visualContinuity": "傍晚潮湿渡口，保持灯光与水面方向；人物与钥匙位置以该场正文为准。",
+      "audioContinuity": "环境声延续同一渡口；对白结束后留自然空间，不自动叠入另一分支声音。"
+    }
+  ]
+}

@@ -2,7 +2,7 @@ import { characterSpeechDirection } from '../../utils/studioVoiceResult';
 import { useEffect, useState } from 'react';
 import toast from 'react-hot-toast';
 import type { Character } from '../../clients/domainTypes';
-import { useAIConfigStore, useProjectStore, flushDebouncedProjectSave } from '../../clients/stateClient';
+import { useAIConfigStore, useGlobalStore, useProjectStore, flushDebouncedProjectSave } from '../../clients/stateClient';
 import { generateAIVoice } from '../../clients/aiClient';
 import { withManualAIResult } from '../../clients/manualAIClient';
 import { ManualAIResultField } from '../ManualAIResultField';
@@ -12,6 +12,7 @@ import { QWEN_VOICES, QWEN_LANGUAGES, isQwenCustomVoice, speechCapabilities, typ
 
 const field = 'mt-1 w-full rounded-md border border-border-soft bg-bg-surface px-3 py-2 text-sm';
 export function CharacterVoiceSettings({ character, projectId }: { character: Character; projectId: string }) {
+  const presets = useGlobalStore(state => state.voiceProfiles).filter(p => p.settings);
   const { models, channels, routing, hydrate } = useAIConfigStore();
   const [draft, setDraft] = useState<VoiceSettings>(() => character.voiceSettings || { voice: character.voiceName || '', language: 'Auto' });
   const [text, setText] = useState('别着急。我在这里，把刚才发生的事情慢慢告诉我。');
@@ -49,6 +50,7 @@ export function CharacterVoiceSettings({ character, projectId }: { character: Ch
     <h2 className="text-sm font-bold">角色声音</h2>
     <p className="mt-2 text-xs text-text-muted">全剧共用这份角色音色。接口在系统设置管理，上方说话习惯会带入试听与配音，单句情绪在配音时调整；换音色不会覆盖已有音频。</p>
     <fieldset disabled={busy || uploading} className="mt-4 space-y-4 disabled:opacity-60">
+      <label className="block text-xs">从音色库选用<select aria-label="从音色库选用" className={field} value="" onChange={e => { const preset = presets.find(p => p.id === e.target.value); if (preset?.settings) setDraft({ ...preset.settings }); }}><option value="">选择预设，或在下方自行设置</option>{presets.map(p => <option key={p.id} value={p.id}>{p.name}</option>)}</select></label>
       <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
         <label className="text-xs">配音模型<select aria-label="角色配音模型" className={field} value={draft.modelConfigId || ''} onChange={event => setDraft({ ...draft, modelConfigId: event.target.value || undefined, voice: '' })}>
           <option value="">跟随系统音频模型{routing.audioGen ? '' : '（尚未配置）'}</option>
@@ -72,7 +74,7 @@ export function CharacterVoiceSettings({ character, projectId }: { character: Ch
       <ManualAIResultField kind="audio" prompt={[`音色：${draft.voice}`, `语言：${draft.language}`, capabilities.speed ? `语速：${draft.speed ?? 1}` : '', previewInstructions, text].filter(Boolean).join('\n')} sourcePrompt={text} projectId={projectId} value={manualResult} onChange={setManualResult} onBusyChange={setUploading} />
       <button type="button" disabled={!text.trim() || !draft.voice || (!model && !manualResult)} className="rounded-md bg-text-primary px-4 py-2 text-xs text-bg-surface disabled:opacity-40" onClick={() => { if (!manualResult) { setPromptOpen(true); return; } void run(async () => {
         const settings = { ...draft, speed: capabilities.speed ? draft.speed : undefined, modelConfigId: model?.id };
-        const url = await withManualAIResult(text, manualResult, () => generateAIVoice({ text, voiceName: settings.voice, ...settings, instructions: previewInstructions, projectId }));
+        const url = await withManualAIResult(text, manualResult, () => generateAIVoice({ purpose: 'preview', text, voiceName: settings.voice, ...settings, instructions: previewInstructions, projectId }));
         setCandidate({ url, settings, text }); setDuration(0);
       }); }}>{busy ? '处理中…' : manualResult ? '试听上传的声音' : '生成试听'}</button>
     </fieldset>
@@ -80,7 +82,7 @@ export function CharacterVoiceSettings({ character, projectId }: { character: Ch
       setBusy(true);
       try {
         const settings = { ...draft, ...direction, modelConfigId: model?.id };
-        const url = await generateAIVoice({ text: finalText, voiceName: settings.voice, ...settings, projectId });
+        const url = await generateAIVoice({ purpose: 'preview', text: finalText, voiceName: settings.voice, ...settings, projectId });
         setCandidate({ url, settings: { ...settings, instructions: settings.instructions === previewInstructions ? draft.instructions : settings.instructions }, text: finalText }); setDuration(0);
       } finally { setBusy(false); }
     }} />
@@ -91,7 +93,7 @@ export function CharacterVoiceSettings({ character, projectId }: { character: Ch
         await save(candidate.settings, { id: crypto.randomUUID(), url: candidate.url, language: candidate.settings.language, durationSeconds: duration, usage: 'voice_timbre', description: `${candidate.settings.voice} · ${candidate.text}`, isDefault: true, createdAt: Date.now() });
         setDraft(candidate.settings); setCandidate(undefined); toast.success('已采用为角色声音参考');
       })}>保存为角色音色参考</button>
-      <p className="text-xs text-text-muted">声音参考会关联此角色；是否能传给视频接口取决于视频模型能力。当前本地 ComfyUI H3 与 Grok 不接受参考音频，配音仍可用于后续声音合成。</p>
+      <p className="text-xs text-text-muted">声音参考会关联此角色，在生成工作台按需选择“音色参考”。H3 多素材参考方案已接入音频映射，服务效果待验证；其他方案以当前能力说明为准。完整对白与音色样本分开使用。</p>
     </div>}
     {adopted?.length ? <div className="mt-5 space-y-3"><h3 className="text-xs font-bold">已采用声音参考</h3>{adopted.map(reference => <div key={reference.id}><p className="mb-1 text-xs text-text-muted">{reference.isDefault ? '默认 · ' : ''}{reference.description}</p><audio controls src={reference.url} className="w-full" /></div>)}</div> : null}
   </section>;

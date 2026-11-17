@@ -5,15 +5,13 @@ import {renderToStaticMarkup} from 'react-dom/server';
 import {createScriptProject, newScene, newUnit} from '../packages/script/src/project';
 import {parseScriptProject, type ProjectProfile, type ScriptProject} from '../packages/script/src/schema';
 import {anchorFor, outlineGuideId, type OutlineGuide} from '../packages/script/src/outlineGuides';
-import {analysisEvidence, validateStructureAnalysis} from '../packages/script/src/structureAnalysis';
 import {blocksToScreenplayText} from '../packages/script/src/fountainAdapter';
-import {StructureAnalysisCard, type AnalysisEvidenceLocation} from '../apps/web/src/features/script/components/StructureAnalysisCard';
 import {StoryOutlineView, focusOutlineEvidence} from '../apps/web/src/features/script/components/StoryOutlineView';
 import {OutlineBeats} from '../apps/web/src/features/script/components/OutlineBeats';
 import {ScenePlanningView, focusScenePlanningField} from '../apps/web/src/features/script/components/ScenePlanningView';
 import {ScriptReadThrough} from '../apps/web/src/features/script/components/ScriptReadThrough';
 import {ScriptStructure} from '../apps/web/src/features/script/ScriptStructure';
-import type {AssistantRequest} from '../apps/web/src/features/script/scriptAssistantShortcuts';
+import type {WritingTaskRequest} from '../apps/web/src/features/script/scriptTaskShortcuts';
 
 const profile:ProjectProfile={organization:'episodic',continuity:'mixed',workType:'电视剧',genres:['剧情'],language:'zh-CN',plannedUnits:4,targetDurationMs:60000,toleranceMs:5000,includeCredits:false,aspectRatio:'16:9',productionMode:'live-action'};
 
@@ -53,77 +51,6 @@ function findElement(tree:ReactNode,predicate:(element:React.ReactElement<any>)=
   const element=elements(tree).find(predicate);assert.ok(element,'expected component element');return element;
 }
 const button=(tree:ReactNode,label:string)=>findElement(tree,e=>e.type==='button'&&nodeText(e.props.children)===label);
-
-function singleAnalysis(project:ScriptProject,kind:'SCENE_PLAN'|'BODY_BLOCK'|'OUTLINE_SPAN',extra:Record<string,unknown>={}){
-  const unit=project.units[0],sources=analysisEvidence(project,{unitId:unit.id,...extra});
-  const source=sources.find(e=>e.kind===kind&&(kind!=='SCENE_PLAN'||e.field==='entryState'))!;assert.ok(source);
-  return validateStructureAnalysis({summary:'仅测试准确定位',findings:[{evidenceId:source.id,quote:source.text,issue:'核对这处承接',suggestion:'保留其余内容并核对',severity:'ADVISORY'}]},sources,project.id,project.revision,unit.id);
-}
-
-test('scene evidence, proposal, recheck and bounded repair carry the exact field and quote',()=>{
-  const project=fixture(),before=structuredClone(project),unit=project.units[0],scene=unit.scenes[0],analysis=singleAnalysis(project,'SCENE_PLAN');
-  let opened:any,requested:AssistantRequest|undefined,requestSource:AnalysisEvidenceLocation|undefined,repaired:any;
-  const tree=StructureAnalysisCard({analysis,project,onOpenScene:(...args)=>{opened=args;},onOpenOutline:()=>assert.fail('scene plan must remain a scene target'),onRequest:(request,source)=>{requested=request;requestSource=source;},onRepair:(...args)=>{repaired=args;}});
-  button(tree,'定位原文').props.onClick();
-  assert.deepEqual(opened,[unit.id,scene.id,{kind:'SCENE_PLAN',field:'entryState',blockId:undefined,quote:scene.entryState}]);
-  button(tree,'提出修改候选').props.onClick();
-  assert.equal(requested?.stage,'SCENES');assert.equal(requested?.draftOperation,'scene_plan');assert.equal(requested?.sceneId,scene.id);assert.deepEqual(requestSource,{scene:opened[2]});
-  button(tree,'重新检查').props.onClick();assert.equal(requested?.stage,'SCENES');assert.equal(requested?.analysis,true);assert.equal(requested?.sceneId,scene.id);assert.deepEqual(requestSource,{scene:opened[2]});
-  button(tree,'检查并修正本范围，最多两轮').props.onClick();assert.deepEqual(repaired[0],{unitId:unit.id,sceneId:scene.id});assert.match(repaired[1],/最多两轮/);assert.deepEqual(repaired[2],{scene:opened[2]});
-  assert.deepEqual(project,before,'navigation and request staging never edit the author document');
-});
-
-test('body evidence uses the cited block when another block repeats the same words',()=>{
-  const project=fixture(),unit=project.units[0],scene=unit.scenes[0],quote='她把信收好。';
-  scene.blocks=[{id:'block_first',type:'action',text:quote},{id:'block_cited',type:'action',text:quote}];
-  const analysis=singleAnalysis(project,'BODY_BLOCK',{blockIds:['block_cited']});
-  let opened:any,requested:AssistantRequest|undefined,source:AnalysisEvidenceLocation|undefined;
-  const tree=StructureAnalysisCard({analysis,project,onOpenScene:(...args)=>{opened=args;},onOpenOutline:()=>assert.fail(),onRequest:(request,location)=>{requested=request;source=location;}});
-  button(tree,'定位原文').props.onClick();assert.equal(opened[1],scene.id);assert.equal(opened[2].kind,'BODY_BLOCK');assert.equal(opened[2].blockId,'block_cited');assert.equal(opened[2].quote,quote);
-  button(tree,'提出修改候选').props.onClick();assert.equal(requested?.draftOperation,'replace_selection');assert.deepEqual(requested?.selection,{start:quote.length+2,end:quote.length*2+2,text:quote});assert.deepEqual(source,{scene:opened[2]});
-  const rendered=blocksToScreenplayText(scene.blocks,[]);assert.equal(rendered.slice(requested!.selection!.start,requested!.selection!.end),quote);
-  scene.blocks[1].text+='后来她离开。';
-  const stale=StructureAnalysisCard({analysis,project,onRequest:()=>assert.fail(),onOpenScene:()=>assert.fail(),onOpenOutline:()=>assert.fail()});
-  assert.equal(button(stale,'定位原文').props.disabled,true);assert.ok(!elements(stale).some(e=>e.type==='button'&&nodeText(e.props.children)==='提出修改候选'));
-});
-
-test('a season analysis never offers a scene order action even with a malformed scene finding',()=>{
-  const project=fixture(),analysis=singleAnalysis(project,'SCENE_PLAN');analysis.target={unitId:project.units[0].id,seasonId:'season_first'};
-  const tree=StructureAnalysisCard({analysis,project,onOpenScene:()=>{},onOpenOutline:()=>{},onRequest:()=>{}});
-  assert.ok(!elements(tree).some(e=>e.type==='button'&&nodeText(e.props.children)==='提出场序调整候选'));
-});
-
-test('season evidence retains season owner, absolute quote range and modification scope',()=>{
-  const project=fixture(),unit=project.units[0];unit.scopeId='season_first';project.units[1].scopeId=unit.scopeId;
-  const analysis=singleAnalysis(project,'OUTLINE_SPAN',{seasonId:'season_first'}),finding=analysis.findings[0];finding.quote='来信的来历';
-  let opened:any,requested:AssistantRequest|undefined,location:AnalysisEvidenceLocation|undefined;
-  const tree=StructureAnalysisCard({analysis,project,onOpenScene:()=>assert.fail(),onOpenOutline:(...args)=>{opened=args;},onRequest:(request,source)=>{requested=request;location=source;}});
-  button(tree,'定位原文').props.onClick();const start=project.seasons![0].arc.indexOf(finding.quote);
-  assert.deepEqual(opened,[unit.id,{owner:{kind:'season',id:'season_first'},start,end:start+finding.quote.length,nodeId:undefined}]);
-  button(tree,'提出修改候选').props.onClick();assert.equal(requested?.scopeId,'season_first');assert.equal(requested?.seasonId,'season_first');assert.deepEqual(requested?.outlineRange,{start,end:start+finding.quote.length,text:finding.quote});assert.deepEqual(location,{outline:opened[1]});
-  project.seasons=project.seasons!.filter(s=>s.id!=='season_first');
-  const stale=StructureAnalysisCard({analysis,project,onOpenScene:()=>{},onOpenOutline:()=>{},onRequest:()=>{}});assert.equal(button(stale,'定位原文').props.disabled,true);assert.match(renderToStaticMarkup(stale),/原文已变化，待复核/);
-});
-
-test('an unlinked node finding opens its actual purpose and unlinked state without inventing a span',()=>{
-  const project=fixture(),unit=project.units[0],node=unit.structureNodes![0];node.purpose='她核对信封上的地址。';
-  const sources=analysisEvidence(project,{unitId:unit.id,nodeId:node.id}),evidence=sources.find(e=>e.kind==='NODE_BEAT'&&e.nodeId===node.id)!;assert.ok(evidence);
-  const analysis=validateStructureAnalysis({summary:'节点作用定位',findings:[{evidenceId:evidence.id,quote:node.purpose,issue:'核对地址的作用',suggestion:'先核对现有节点安排',severity:'ADVISORY'}]},sources,project.id,project.revision,unit.id);
-  let opened:any;const tree=StructureAnalysisCard({analysis,project,onOpenScene:()=>assert.fail(),onOpenOutline:(...args)=>{opened=args;},onRequest:()=>{}});
-  button(tree,'定位原文').props.onClick();assert.deepEqual(opened,[unit.id,{owner:{kind:'unit',id:unit.id},start:0,end:0,nodeId:node.id,tab:'outline'}]);assert.ok(!elements(tree).some(e=>e.type==='button'&&nodeText(e.props.children)==='提出修改候选'));
-  const target=renderComponent(StoryOutlineView,outlineProps(project,{activeNodeId:node.id,focus:opened[1] as React.ComponentProps<typeof StoryOutlineView>['focus']}));
-  assert.match(target.html,/此段尚未关联大纲原文/);assert.match(target.html,/她核对信封上的地址/);assert.ok(!elements(target.tree).some(e=>e.type==='textarea'&&e.props.className==='script-original-editor'));assert.equal(findElement(target.tree,e=>e.props['data-outline-node']===node.id).type,'section');
-});
-
-test('a beat finding opens the exact beat rather than treating its change text as outline text',()=>{
-  const project=fixture(),unit=project.units[0],owner={kind:'unit' as const,id:unit.id},text=unit.summary;
-  const guide:OutlineGuide={id:outlineGuideId(owner),owner,nodeLinks:[],beats:[{id:'beat_exact_change',title:'核实地址',change:'从收到来信到确认寄信地址',anchors:[anchorFor(text,0,text.length)],unitIds:[unit.id],sceneRefs:[]}]};project.outlineGuides=[guide];
-  const sources=analysisEvidence(project,{unitId:unit.id}),evidence=sources.find(e=>e.beatId==='beat_exact_change')!;assert.ok(evidence);
-  const analysis=validateStructureAnalysis({summary:'实际节拍定位',findings:[{evidenceId:evidence.id,quote:evidence.text,issue:'核对这一变化',suggestion:'保留其他节拍',severity:'ADVISORY'}]},sources,project.id,project.revision,unit.id);
-  let opened:any;const tree=StructureAnalysisCard({analysis,project,onOpenScene:()=>assert.fail(),onOpenOutline:(...args)=>{opened=args;},onRequest:()=>{}});
-  button(tree,'定位原文').props.onClick();assert.deepEqual(opened,[unit.id,{owner,start:0,end:text.length,nodeId:undefined,tab:'beats',beatId:'beat_exact_change'}]);
-  const target=OutlineBeats({project,guides:[guide],unitId:unit.id,onChange:()=>{}});assert.equal(findElement(target,e=>e.props['data-outline-beat']==='beat_exact_change').type,'article');
-});
 
 test('outline focus uses stable beat and node identifiers and converts a node span to local selection',()=>{
   const calls:any[]=[];

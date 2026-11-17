@@ -218,43 +218,43 @@ export function ManualVideoStoryboardPanel(props: ManualVideoStoryboardPanelProp
       <section className="mb-6 rounded-lg border border-gray-200 bg-white dark:border-neutral-800 dark:bg-neutral-900">
         <header className="flex flex-wrap items-center justify-between gap-4 border-b border-gray-200 px-5 py-4 dark:border-neutral-800">
           <div className="min-w-0 flex-1">
-            <div className="flex items-center gap-2"><Clapperboard className="h-5 w-5 shrink-0 text-violet-600" /><h3 className="font-bold text-gray-900 dark:text-white">视频单元 · {unitShotIds.length} 个分镜 · {unitDurationSeconds || Number(props.shot.duration || 0)}s</h3></div>
+            <div className="flex items-center gap-2"><Clapperboard className="h-5 w-5 shrink-0 text-cyan-600" /><h3 className="font-bold text-gray-900 dark:text-white">视频单元 · {unitShotIds.length} 个分镜 · {unitDurationSeconds || Number(props.shot.duration || 0)}s</h3></div>
             <p className="mt-1 max-w-3xl line-clamp-2 text-xs text-gray-500">{compactActionSummary || props.shot.visualAction}</p>
           </div>
           <div className="flex shrink-0 flex-wrap items-center justify-end gap-2">
             {board && <div className="flex h-9 items-center gap-1 border border-gray-200 bg-gray-50 p-1 dark:border-neutral-700 dark:bg-neutral-950">
               <span className="px-2 text-[10px] font-bold text-gray-500 dark:text-neutral-400">视频参考模式</span>
               <div role="group" aria-label="故事板参考模式" className="contents">
-                <button type="button" onClick={() => void chooseReferenceMode("shot_grid")} aria-pressed={previewMode === "shot_grid"} title="纯净宫格：每个分镜一格，仅保留右上角数字编号" className={`inline-flex h-7 items-center gap-1.5 px-2.5 text-[10px] font-bold ${previewMode === "shot_grid" ? "bg-white text-violet-700 shadow-sm dark:bg-neutral-800 dark:text-violet-300" : "text-gray-500 hover:text-gray-800 dark:text-neutral-400 dark:hover:text-neutral-200"}`}>
+                <button type="button" onClick={() => void chooseReferenceMode("shot_grid")} aria-pressed={previewMode === "shot_grid"} title="纯净宫格：每个分镜一格，仅保留右上角数字编号" className={`inline-flex h-7 items-center gap-1.5 px-2.5 text-[10px] font-bold ${previewMode === "shot_grid" ? "bg-white text-cyan-700 shadow-sm dark:bg-neutral-800 dark:text-cyan-300" : "text-gray-500 hover:text-gray-800 dark:text-neutral-400 dark:hover:text-neutral-200"}`}>
                   <Grid3X3 className="h-3.5 w-3.5" />宫格模式
                 </button>
-                <button type="button" onClick={() => void chooseReferenceMode("director_board")} aria-pressed={previewMode === "director_board"} title="导演故事板：保留镜头调度与导演注释" className={`inline-flex h-7 items-center gap-1.5 px-2.5 text-[10px] font-bold ${previewMode === "director_board" ? "bg-white text-violet-700 shadow-sm dark:bg-neutral-800 dark:text-violet-300" : "text-gray-500 hover:text-gray-800 dark:text-neutral-400 dark:hover:text-neutral-200"}`}>
+                <button type="button" onClick={() => void chooseReferenceMode("director_board")} aria-pressed={previewMode === "director_board"} title="导演故事板：保留镜头调度与导演注释" className={`inline-flex h-7 items-center gap-1.5 px-2.5 text-[10px] font-bold ${previewMode === "director_board" ? "bg-white text-cyan-700 shadow-sm dark:bg-neutral-800 dark:text-cyan-300" : "text-gray-500 hover:text-gray-800 dark:text-neutral-400 dark:hover:text-neutral-200"}`}>
                   <Clapperboard className="h-3.5 w-3.5" />故事板模式
                 </button>
               </div>
             </div>}
-            {selectedPage && <button type="button" onClick={async () => { await composeShotGrid(selectedPage.id); setPreviewModeOverride("shot_grid"); setExpertOpen(true); }} disabled={!canComposeGrid || Boolean(composingGridPageId) || Boolean(runningAction)} title={missingGridImages ? `本页还有 ${missingGridImages} 个分镜缺少已采用图片，请先回分镜页上传或生成` : "使用已采用分镜图直接排版，不调用模型，不重绘故事板"} className="inline-flex h-9 items-center gap-2 rounded-md border border-violet-200 bg-violet-50 px-3 text-xs font-bold text-violet-700 hover:bg-violet-100 disabled:cursor-not-allowed disabled:opacity-40 dark:border-violet-800 dark:bg-violet-950/30 dark:text-violet-300">
+            {selectedPage && <button type="button" onClick={async () => { await composeShotGrid(selectedPage.id); setPreviewModeOverride("shot_grid"); setExpertOpen(true); }} disabled={!canComposeGrid || Boolean(composingGridPageId) || Boolean(runningAction)} title={missingGridImages ? `本页还有 ${missingGridImages} 个分镜缺少已采用图片，请先回分镜页上传或生成` : "使用已采用分镜图直接排版，不调用模型，不重绘故事板"} className="inline-flex h-9 items-center gap-2 rounded-md border border-cyan-200 bg-cyan-50 px-3 text-xs font-bold text-cyan-700 hover:bg-cyan-100 disabled:cursor-not-allowed disabled:opacity-40 dark:border-cyan-800 dark:bg-cyan-950/30 dark:text-cyan-300">
               {composingGridPageId ? <Loader2 className="h-4 w-4 animate-spin" /> : <Grid3X3 className="h-4 w-4" />}
-              {composingGridPageId ? "正在合成…" : resolveStoryboardShotGridImage(selectedPage) ? "更新宫格图" : "合成宫格图"}
+              {composingGridPageId ? "正在合成…" : resolveStoryboardShotGridImage(selectedPage) ? "更新图片排版" : "拼接已采用单镜图"}
             </button>}
-            {props.groupingProposal && <button type="button" onClick={props.groupingProposal.onAdopt} title="采用模型能力计算出的相邻镜头编组建议" className="inline-flex h-9 items-center gap-2 bg-violet-50 px-3 text-xs font-bold text-violet-700 hover:bg-violet-100 dark:bg-violet-950/30 dark:text-violet-300"><Sparkles className="h-4 w-4" />采用建议：{props.groupingProposal.shotCount} 镜头 · {props.groupingProposal.durationSeconds}s</button>}
-            {props.onMergeWithNext && <button type="button" onClick={props.onMergeWithNext} title="与下一个相邻单元合并" className="inline-flex h-9 items-center gap-2 border border-gray-200 px-3 text-xs font-bold text-gray-700 hover:border-violet-400 hover:text-violet-600 dark:border-neutral-700 dark:text-neutral-200"><Combine className="h-4 w-4" />合并下一个</button>}
-            {props.onSplitUnit && <button type="button" onClick={props.onSplitUnit} title="按 Shot 拆为独立视频单元" className="inline-flex h-9 items-center gap-2 border border-gray-200 px-3 text-xs font-bold text-gray-700 hover:border-violet-400 hover:text-violet-600 dark:border-neutral-700 dark:text-neutral-200"><Scissors className="h-4 w-4" />拆分单元</button>}
+            {props.groupingProposal && <button type="button" onClick={props.groupingProposal.onAdopt} title="采用模型能力计算出的相邻镜头编组建议" className="inline-flex h-9 items-center gap-2 bg-cyan-50 px-3 text-xs font-bold text-cyan-700 hover:bg-cyan-100 dark:bg-cyan-950/30 dark:text-cyan-300"><Sparkles className="h-4 w-4" />采用建议：{props.groupingProposal.shotCount} 镜头 · {props.groupingProposal.durationSeconds}s</button>}
+            {props.onMergeWithNext && <button type="button" onClick={props.onMergeWithNext} title="与下一个相邻单元合并" className="inline-flex h-9 items-center gap-2 border border-gray-200 px-3 text-xs font-bold text-gray-700 hover:border-cyan-400 hover:text-cyan-600 dark:border-neutral-700 dark:text-neutral-200"><Combine className="h-4 w-4" />合并下一个</button>}
+            {props.onSplitUnit && <button type="button" onClick={props.onSplitUnit} title="按 Shot 拆为独立视频单元" className="inline-flex h-9 items-center gap-2 border border-gray-200 px-3 text-xs font-bold text-gray-700 hover:border-cyan-400 hover:text-cyan-600 dark:border-neutral-700 dark:text-neutral-200"><Scissors className="h-4 w-4" />拆分单元</button>}
             <span className={`inline-flex h-9 items-center px-3 text-xs font-bold ${primaryAction ? "bg-amber-50 text-amber-700 dark:bg-amber-950/30 dark:text-amber-300" : "bg-emerald-50 text-emerald-700 dark:bg-emerald-950/30 dark:text-emerald-300"}`}>{currentStepLabel}</span>
             {batchPlanningManaged ? (
-              <span className="inline-flex h-9 items-center bg-violet-50 px-3 text-xs font-bold text-violet-700 dark:bg-violet-950/30 dark:text-violet-300">批量准备中</span>
+              <span className="inline-flex h-9 items-center bg-cyan-50 px-3 text-xs font-bold text-cyan-700 dark:bg-cyan-950/30 dark:text-cyan-300">批量准备中</span>
             ) : primaryAction ? (
-              <button type="button" onClick={runPrimaryAction} disabled={primaryDisabled} className="inline-flex h-9 items-center gap-2 bg-violet-600 px-4 text-xs font-bold text-white hover:bg-violet-500 disabled:cursor-not-allowed disabled:opacity-40">
+              <button type="button" onClick={runPrimaryAction} disabled={primaryDisabled} className="inline-flex h-9 items-center gap-2 bg-cyan-600 px-4 text-xs font-bold text-white hover:bg-cyan-500 disabled:cursor-not-allowed disabled:opacity-40">
                 {primaryAction === "strategy" ? <Sparkles className="h-4 w-4" /> : primaryAction === "board" || primaryAction === "visuals" || primaryAction === "review_visuals" ? <Clapperboard className="h-4 w-4" /> : primaryAction === "qa" ? <ShieldCheck className="h-4 w-4" /> : <CheckCircle2 className="h-4 w-4" />}{primaryActionLabel}
               </button>
             ) : null}
             {props.onContinueToStudio && canEnterStudio ? (
               <button type="button" onClick={props.onContinueToStudio} className="inline-flex h-9 items-center gap-2 bg-emerald-600 px-4 text-xs font-bold text-white hover:bg-emerald-500">进入摄影棚<ArrowRight className="h-4 w-4" /></button>
             ) : null}
-            {props.batchManaged && <button type="button" onClick={() => setExpertOpen((value) => !value)} title={expertOpen ? "收起详情" : "查看详情"} aria-label={expertOpen ? "收起详情" : "查看详情"} className="inline-flex h-9 w-9 items-center justify-center border border-gray-200 text-gray-600 hover:border-violet-400 hover:text-violet-600 dark:border-neutral-700 dark:text-neutral-300"><SlidersHorizontal className="h-4 w-4" /></button>}
+            {props.batchManaged && <button type="button" onClick={() => setExpertOpen((value) => !value)} title={expertOpen ? "收起详情" : "查看详情"} aria-label={expertOpen ? "收起详情" : "查看详情"} className="inline-flex h-9 w-9 items-center justify-center border border-gray-200 text-gray-600 hover:border-cyan-400 hover:text-cyan-600 dark:border-neutral-700 dark:text-neutral-300"><SlidersHorizontal className="h-4 w-4" /></button>}
           </div>
         </header>
-        {selectedPage && missingGridImages > 0 && <p className="px-5 py-3 text-xs leading-5 text-gray-500 dark:text-neutral-400">本页宫格还需 {missingGridImages} 张分镜图。先在“分镜”页上传或采用画面，再回这里一键排版。</p>}
+        {selectedPage && missingGridImages > 0 && <p className="px-5 py-3 text-xs leading-5 text-gray-500 dark:text-neutral-400">本页宫格还需 {missingGridImages} 张分镜图。可在镜头与时长中上传或采用单镜画面，再使用图片排版。</p>}
         {showDetails && <div className="p-5">
           <div className="mb-4 flex flex-wrap gap-2 text-[10px] font-bold">
             <span className={`border px-2 py-1 ${statusClass(readModel.strategyStatus)}`}>策略 {statusLabel[readModel.strategyStatus]}</span>
@@ -273,7 +273,7 @@ export function ManualVideoStoryboardPanel(props: ManualVideoStoryboardPanelProp
               id={`target-video-model-${workflow?.id || props.shot.id}`}
               value={workflow?.targetVideoModelConfigId || ""}
               onChange={(event) => void setTargetVideoModel(event.target.value || undefined)}
-              className="h-9 min-w-[220px] border border-gray-200 bg-white px-3 text-xs text-gray-700 focus:border-violet-500 focus:outline-none dark:border-neutral-700 dark:bg-neutral-900 dark:text-neutral-200"
+              className="h-9 min-w-[220px] border border-gray-200 bg-white px-3 text-xs text-gray-700 focus:border-cyan-500 focus:outline-none dark:border-neutral-700 dark:bg-neutral-900 dark:text-neutral-200"
             >
               <option value="">跟随设置页默认{defaultVideoModelConfigId ? "" : "（尚未设置）"}</option>
               {availableVideoModels.map((model) => <option key={model.id} value={model.id}>{model.alias}</option>)}
@@ -288,11 +288,11 @@ export function ManualVideoStoryboardPanel(props: ManualVideoStoryboardPanelProp
                     <span className={`px-2 py-0.5 text-[9px] font-bold ${statusClass(readModel.unitVideoPromptStatus)}`}>{statusLabel[readModel.unitVideoPromptStatus]}</span>
                   </div>
                   <p className="mt-1 text-[10px] text-gray-400">由本单元内分镜的动作、摄影机、对白、声音和连续性整理；摄影棚默认读取此版本。</p>
-                  {!props.videoPromptReady && <p className="mt-1 text-[10px] font-semibold text-amber-600">请先回到“分镜”页签生成并确认视频提示词；这不会阻止故事板和宫格画面生成。</p>}
+                  {!props.videoPromptReady && <p className="mt-1 text-[10px] font-semibold text-amber-600">请在镜头与时长的提示词工具中整理并确认视频提示词；这不会阻止故事板和宫格画面生成。</p>}
                 </div>
                 <div className="flex items-center gap-2">
-                  <button type="button" onClick={() => void rebuildUnitVideoPrompt()} disabled={!props.videoPromptReady} className="inline-flex h-8 items-center gap-1.5 border border-gray-200 px-2.5 text-[10px] font-bold text-gray-600 hover:border-violet-400 hover:text-violet-600 disabled:cursor-not-allowed disabled:opacity-40 dark:border-neutral-700 dark:text-neutral-300"><RefreshCw className="h-3.5 w-3.5" />根据视频提示词重建</button>
-                  <button type="button" onClick={() => void saveUnitVideoPrompt(unitVideoPromptDraft)} disabled={!props.videoPromptReady || !unitVideoPromptDraft.trim() || unitVideoPromptDraft.trim() === readModel.effectiveUnitVideoPrompt.trim()} className="inline-flex h-8 items-center gap-1.5 bg-violet-600 px-2.5 text-[10px] font-bold text-white hover:bg-violet-500 disabled:cursor-not-allowed disabled:opacity-40"><Save className="h-3.5 w-3.5" />保存上游版本</button>
+                  <button type="button" onClick={() => void rebuildUnitVideoPrompt()} disabled={!props.videoPromptReady} className="inline-flex h-8 items-center gap-1.5 border border-gray-200 px-2.5 text-[10px] font-bold text-gray-600 hover:border-cyan-400 hover:text-cyan-600 disabled:cursor-not-allowed disabled:opacity-40 dark:border-neutral-700 dark:text-neutral-300"><RefreshCw className="h-3.5 w-3.5" />根据视频提示词重建</button>
+                  <button type="button" onClick={() => void saveUnitVideoPrompt(unitVideoPromptDraft)} disabled={!props.videoPromptReady || !unitVideoPromptDraft.trim() || unitVideoPromptDraft.trim() === readModel.effectiveUnitVideoPrompt.trim()} className="inline-flex h-8 items-center gap-1.5 bg-cyan-600 px-2.5 text-[10px] font-bold text-white hover:bg-cyan-500 disabled:cursor-not-allowed disabled:opacity-40"><Save className="h-3.5 w-3.5" />保存上游版本</button>
                 </div>
               </div>
               <textarea
@@ -300,18 +300,18 @@ export function ManualVideoStoryboardPanel(props: ManualVideoStoryboardPanelProp
                 onChange={(event) => setUnitVideoPromptDraft(event.target.value)}
                 disabled={!props.videoPromptReady}
                 rows={7}
-                className="w-full resize-y border border-gray-200 bg-gray-50 p-3 text-xs leading-5 text-gray-700 outline-none focus:border-violet-500 dark:border-neutral-700 dark:bg-neutral-950 dark:text-neutral-200"
+                className="w-full resize-y border border-gray-200 bg-gray-50 p-3 text-xs leading-5 text-gray-700 outline-none focus:border-cyan-500 dark:border-neutral-700 dark:bg-neutral-950 dark:text-neutral-200"
                 aria-label="视频单元提示词"
               />
             </section>
           )}
           <div className="flex flex-wrap items-center gap-2">
             {batchPlanningManaged ? (
-              <span className="inline-flex h-9 items-center gap-2 bg-violet-50 px-3 text-xs font-bold text-violet-700 dark:bg-violet-950/30 dark:text-violet-300">
+              <span className="inline-flex h-9 items-center gap-2 bg-cyan-50 px-3 text-xs font-bold text-cyan-700 dark:bg-cyan-950/30 dark:text-cyan-300">
                 <Clapperboard className="h-4 w-4" />复合视频单元批处理待完成
               </span>
             ) : primaryAction ? (
-              <button type="button" onClick={runPrimaryAction} disabled={primaryDisabled} className={`inline-flex h-9 items-center gap-2 px-3 text-xs font-bold disabled:cursor-not-allowed disabled:opacity-40 ${primaryAction === "confirm" ? "bg-emerald-600 text-white hover:bg-emerald-500" : "bg-violet-600 text-white hover:bg-violet-500"}`}>
+              <button type="button" onClick={runPrimaryAction} disabled={primaryDisabled} className={`inline-flex h-9 items-center gap-2 px-3 text-xs font-bold disabled:cursor-not-allowed disabled:opacity-40 ${primaryAction === "confirm" ? "bg-emerald-600 text-white hover:bg-emerald-500" : "bg-cyan-600 text-white hover:bg-cyan-500"}`}>
                 {primaryAction === "strategy" ? <Sparkles className="h-4 w-4" /> : primaryAction === "board" || primaryAction === "visuals" || primaryAction === "review_visuals" ? <Clapperboard className="h-4 w-4" /> : primaryAction === "qa" ? <ShieldCheck className="h-4 w-4" /> : <CheckCircle2 className="h-4 w-4" />}{primaryActionLabel}
               </button>
             ) : (
@@ -328,7 +328,7 @@ export function ManualVideoStoryboardPanel(props: ManualVideoStoryboardPanelProp
                 <p className="text-gray-400">已采用策略</p>
                 <p className="mt-1 font-bold text-gray-900 dark:text-white">{selectedStrategy?.name || workflow.strategyDecision.selectedStrategyId}</p>
                 <p className="mt-1 text-gray-500">{workflow.strategyDecision.expectedBoardShape}</p>
-                {modifierStrategyNames.length ? <p className="mt-2 text-[10px] leading-4 text-violet-600">组合控制：{modifierStrategyNames.join(" + ")}</p> : null}
+                {modifierStrategyNames.length ? <p className="mt-2 text-[10px] leading-4 text-cyan-600">组合控制：{modifierStrategyNames.join(" + ")}</p> : null}
               </div>
               <div>
                 <p className="leading-5 text-gray-600 dark:text-neutral-300">{workflow.strategyDecision.rationale}</p>
@@ -351,7 +351,7 @@ export function ManualVideoStoryboardPanel(props: ManualVideoStoryboardPanelProp
                   const gridStatus = storyboardShotGridStatus({ board, page, shots: unitShots });
                   const selected = selectedPage?.id === page.id;
                   return (
-                    <button key={page.id} type="button" onClick={() => setSelectedPanelId(page.panelIds[0] || null)} className={`relative block w-full overflow-hidden rounded-md border p-3 text-left ${selected ? "border-violet-500 bg-violet-50 dark:bg-violet-950/20" : "border-gray-200 dark:border-neutral-800"}`}>
+                    <button key={page.id} type="button" onClick={() => setSelectedPanelId(page.panelIds[0] || null)} className={`relative block w-full overflow-hidden rounded-md border p-3 text-left ${selected ? "border-cyan-500 bg-cyan-50 dark:bg-cyan-950/20" : "border-gray-200 dark:border-neutral-800"}`}>
                       {displayImageUrl ? (
                         <img src={displayImageUrl} alt={`${previewMode === "shot_grid" ? "分镜宫格图" : "故事板"}第 ${page.pageIndex + 1} 页`} className="aspect-video w-full bg-white object-contain" referrerPolicy="no-referrer" />
                       ) : (
@@ -364,10 +364,10 @@ export function ManualVideoStoryboardPanel(props: ManualVideoStoryboardPanelProp
                   );
                 })}
               </div>
-              {previewMode === "shot_grid" && selectedPage && Boolean(selectedPage.shotGridTakes?.length) && <details className="mt-3 text-xs text-gray-500 dark:text-neutral-400"><summary className="cursor-pointer">历史宫格 · {selectedPage.shotGridTakes!.length} 个版本</summary><div className="mt-2 flex flex-wrap gap-3">{selectedPage.shotGridTakes!.map((take, index) => <a key={take.id} href={take.imageUrl} target="_blank" rel="noreferrer" className="rounded border border-gray-200 px-3 py-2 text-violet-700 hover:border-violet-400 dark:border-neutral-700 dark:text-violet-300">查看 V{index + 1}{take.id === selectedPage.activeShotGridTakeId ? " · 当前" : ""}</a>)}</div></details>}
+              {previewMode === "shot_grid" && selectedPage && Boolean(selectedPage.shotGridTakes?.length) && <details className="mt-3 text-xs text-gray-500 dark:text-neutral-400"><summary className="cursor-pointer">历史宫格 · {selectedPage.shotGridTakes!.length} 个版本</summary><div className="mt-2 flex flex-wrap gap-3">{selectedPage.shotGridTakes!.map((take, index) => <a key={take.id} href={take.imageUrl} target="_blank" rel="noreferrer" className="rounded border border-gray-200 px-3 py-2 text-cyan-700 hover:border-cyan-400 dark:border-neutral-700 dark:text-cyan-300">查看 V{index + 1}{take.id === selectedPage.activeShotGridTakeId ? " · 当前" : ""}</a>)}</div></details>}
               <div className="mt-4 grid grid-cols-2 gap-2 xl:grid-cols-4">
                 {representativePanels.map((panel, index) => (
-                  <button key={panel.id} type="button" onClick={() => setSelectedPanelId(panel.id)} className={`min-h-[126px] rounded-md border p-3 text-left transition-colors ${selectedPanelId === panel.id ? "border-violet-500 bg-violet-50 dark:bg-violet-950/20" : "border-gray-200 hover:border-gray-300 dark:border-neutral-800"}`}>
+                  <button key={panel.id} type="button" onClick={() => setSelectedPanelId(panel.id)} className={`min-h-[126px] rounded-md border p-3 text-left transition-colors ${selectedPanelId === panel.id ? "border-cyan-500 bg-cyan-50 dark:bg-cyan-950/20" : "border-gray-200 hover:border-gray-300 dark:border-neutral-800"}`}>
                     <div className="flex justify-between text-[10px] font-bold"><span>SHOT {index + 1}</span><span>{unitShots.find((shot) => shot.id === panel.shotId)?.duration || panel.durationSeconds || 0}s</span></div>
                     <p className="mt-2 text-xs font-bold text-gray-900 dark:text-white">{panel.framePurpose}</p>
                     <p className="mt-2 line-clamp-2 text-[11px] leading-5 text-gray-500">{panel.visualBeat || panel.subjectAction}</p>
@@ -392,7 +392,7 @@ export function ManualVideoStoryboardPanel(props: ManualVideoStoryboardPanelProp
                         </button>
                       )}
                       {props.onGenerateVisuals && (
-                        <button type="button" onClick={props.onGenerateVisuals} disabled={Boolean(runningAction) || !props.visualReady} className="inline-flex h-8 items-center gap-1.5 border border-gray-200 px-2.5 text-[10px] font-bold text-gray-700 hover:border-violet-400 hover:text-violet-600 disabled:opacity-40 dark:border-neutral-700 dark:text-neutral-200">
+                        <button type="button" onClick={props.onGenerateVisuals} disabled={Boolean(runningAction) || !props.visualReady} className="inline-flex h-8 items-center gap-1.5 border border-gray-200 px-2.5 text-[10px] font-bold text-gray-700 hover:border-cyan-400 hover:text-cyan-600 disabled:opacity-40 dark:border-neutral-700 dark:text-neutral-200">
                           <RefreshCw className="h-3.5 w-3.5" />重新生成双版本
                         </button>
                       )}
@@ -404,7 +404,7 @@ export function ManualVideoStoryboardPanel(props: ManualVideoStoryboardPanelProp
                         || selectedPendingVisualTake?.review?.notes
                         || (selectedPendingVisualTake ? "请按整板格数、顺序、人物身份、资产状态、动作和连续性看图采用。" : "整板视觉质检记录缺失")}</p>
                       <details className="mt-2">
-                        <summary className="cursor-pointer text-[10px] font-bold text-violet-600">查看完整故事板页 Prompt 与审计</summary>
+                        <summary className="cursor-pointer text-[10px] font-bold text-cyan-600">查看完整故事板页 Prompt 与审计</summary>
                         <p className="mt-2 whitespace-pre-wrap rounded bg-gray-50 p-3 leading-5 text-gray-600 dark:bg-neutral-950 dark:text-neutral-300">{selectedVisualTake.prompt}</p>
                         <p className="mt-2 text-[10px] text-gray-500">参考图 {selectedVisualTake.referenceImageUrls.length} 张 · Skill {selectedVisualTake.selectedSkillIds.length} 个 · 上下文 {selectedVisualTake.selectedContextIds.length} 项 · 执行记录 {selectedVisualTake.executions.length} 条</p>
                       </details>

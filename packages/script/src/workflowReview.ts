@@ -1,4 +1,4 @@
-import { hashValue } from '../../agent-core/src/identity';
+import { hashValue } from '../../domain/src/contentIdentity';
 import type { ScriptProject, DeliveryUnit } from './schema';
 import { resolveStoryOutline } from './outlines';
 

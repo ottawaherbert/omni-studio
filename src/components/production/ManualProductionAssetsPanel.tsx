@@ -1,48 +1,47 @@
-import { useMemo, useState } from "react";
-import toast from "react-hot-toast";
+import { AssetProductionUseEditor } from "./AssetProductionUseEditor";
+import { productionClient } from "../../clients/productionClient";
 import {
-  CheckCircle2,
-  Film,
-  ImageIcon,
-  Library,
-  Link2,
-  MapPin,
-  PackageOpen,
-  RefreshCw,
-  Ship,
-  ShieldAlert,
-  Upload,
-  Wand2,
-  UserRound,
+CheckCircle2,
+Film,
+ImageIcon,
+Library,
+Link2,
+MapPin,
+PackageOpen,
+RefreshCw,
+ShieldAlert,
+Ship,
+Upload,
+UserRound,
+Wand2,
 } from "lucide-react";
-import type { Episode, Project, Scene } from "../../clients/domainTypes";
+import { useMemo,useState } from "react";
+import toast from "react-hot-toast";
+import type { Episode,Project,Scene } from "../../clients/domainTypes";
+import { legacyProjectClient } from "../../clients/legacyProjectClient";
 import {
-  buildManualProductionAssetReadModel,
-  confirmManualProductionAssetBoard,
-  confirmManualProductionAssetBoards,
-  revokeManualProductionAssetBoard,
-  type ManualProductionAssetBoard,
+buildManualProductionAssetReadModel,
+buildProductionProjectAssetReadModel,
+buildProductionSceneAssetBindingUpdate,
+buildProductionSceneAssetVariantBindingUpdate,
+buildProductionSceneVehicleSelectionUpdate,
+confirmManualProductionAssetBoard,
+confirmManualProductionAssetBoards,
+revokeManualProductionAssetBoard,
+type ManualProductionAssetBoard,
 } from "../../clients/productionAssetWorkflowClient";
+import type { ManualFilmTeamReadModel } from "../../clients/productionPreparationWorkflowClient";
 import { MANUAL_FILM_TEAM_DEPARTMENTS } from "../../clients/productionPreparationWorkflowClient";
-import { Badge } from "../ui/Badge";
-import { cn } from "../../lib/utils";
-import ImagePromptModal from "../ImagePromptModal";
-import PromptEditorModal from "../PromptEditorModal";
+import { flushDebouncedProjectSave,useProjectStore } from "../../clients/stateClient";
 import { useManualProductionAssetImages } from "../../hooks/useManualProductionAssetImages";
 import { useManualProductionAssetVariants } from "../../hooks/useManualProductionAssetVariants";
-import { ManualProductionVariantReviewModal } from "./ManualProductionVariantReviewModal";
-import { ManualProductionSceneStateView } from "./ManualProductionSceneStateView";
-import { ManualProductionReferenceReviewModal } from "./ManualProductionReferenceReviewModal";
-import type { ManualFilmTeamReadModel } from "../../clients/productionPreparationWorkflowClient";
-import {
-  buildProductionProjectAssetReadModel,
-  buildProductionSceneAssetBindingUpdate,
-  buildProductionSceneVehicleSelectionUpdate,
-  buildProductionSceneAssetVariantBindingUpdate,
-} from "../../clients/productionAssetWorkflowClient";
+import { cn } from "../../lib/utils";
+import { GenerationWorkbench } from '../generation/GenerationWorkbench';
+import PromptEditorModal from "../PromptEditorModal";
 import { Modal } from "../ui/Modal";
-import { flushDebouncedProjectSave, useProjectStore } from "../../clients/stateClient";
-import { legacyProjectClient } from "../../clients/legacyProjectClient";
+import { ManualProductionReferenceReviewModal } from "./ManualProductionReferenceReviewModal";
+import { ManualProductionSceneStateView } from "./ManualProductionSceneStateView";
+import { ManualProductionVariantReviewModal } from "./ManualProductionVariantReviewModal";
 
 interface ManualProductionAssetsPanelProps {
   project: Project;
@@ -123,6 +122,7 @@ export function ManualProductionAssetsPanel({
     return Array.from(byAsset.values());
   }, [visibleBoards]);
   const assetImages = useManualProductionAssetImages({ project, episode, scene, updateProject });
+  const [generationBoardId, setGenerationBoardId] = useState<string | null>(null);
   const assetVariants = useManualProductionAssetVariants({ project, episode, scene, updateProject, updateScene });
   const projectAssets = useMemo(
     () => buildProductionProjectAssetReadModel(project, episodes || [episode]).assets,
@@ -268,6 +268,7 @@ export function ManualProductionAssetsPanel({
     }
   };
 
+  if (generationBoardId) return <GenerationWorkbench target={{ projectId: project.id, episodeId: episode.id, sceneId: scene.id, kind: 'asset', assetId: generationBoardId, referenceMode: 'production_board', shotIds: [] }} operation="asset_image" onClose={() => setGenerationBoardId(null)} />;
   return (
     <>
     <section className={cn("overflow-hidden rounded-lg bg-bg-surface animate-fade-in", embedded ? "" : "mb-6")}>
@@ -424,6 +425,11 @@ export function ManualProductionAssetsPanel({
                   <p className="mt-2 line-clamp-2 text-[9px] leading-4 text-text-muted">
                     {variants.find((variant) => variant.id === selectedVariantId)?.description || (board.assetType === "character" ? project.characters.find((item) => item.id === board.assetId)?.visualIdentity : project.assets.find((item) => item.id === board.assetId)?.description)}
                   </p>
+                  <AssetProductionUseEditor key={board.assetId} value={project.characters.find(a=>a.id===board.assetId)?.productionUse || project.assets.find(a=>a.id===board.assetId)?.productionUse} onSave={async productionUse=>{
+                    await flushDebouncedProjectSave(project.id);
+                    const saved=await productionClient.saveAssetProductionUse(project.id,board.assetId,productionUse);
+                    useProjectStore.setState(state=>state.currentProject?.id!==project.id?{}:{currentProject:{...state.currentProject,characters:state.currentProject.characters.map(a=>a.id===board.assetId?{...a,productionUse:saved.productionUse}:a),assets:state.currentProject.assets.map(a=>a.id===board.assetId?{...a,productionUse:saved.productionUse}:a)}});
+                  }} />
 
                   <div className="mt-3 flex flex-wrap gap-2">
                     <button
@@ -513,7 +519,7 @@ export function ManualProductionAssetsPanel({
                   <button
                     type="button"
                     disabled={Boolean(assetImages.generatingBoardId)}
-                    onClick={() => assetImages.openPrompt(board)}
+                    onClick={() => setGenerationBoardId(board.boardItemId)}
                     className="inline-flex h-8 items-center justify-center gap-2 rounded-xl bg-bg-surface-soft text-[10px] font-bold text-gold disabled:cursor-not-allowed disabled:opacity-40 hover:bg-bg-surface-hover transition-all cursor-pointer"
                   >
                     {assetImages.generatingBoardId === board.boardItemId ? <RefreshCw className="h-3.5 w-3.5 animate-spin" /> : <Wand2 className="h-3.5 w-3.5" />}
@@ -610,15 +616,6 @@ export function ManualProductionAssetsPanel({
         )}
       </div>
     </Modal>
-    <ImagePromptModal
-      isOpen={Boolean(assetImages.promptBoard)}
-      onClose={assetImages.closePrompt}
-      initialPrompt={assetImages.promptBoard?.prompt || ""}
-      initialReferenceImage={assetImages.promptBoard?.referenceImageUrl}
-      title={`${assetImages.promptBoard?.assetName || "资产"}参考图`}
-      confirmText={assetImages.promptBoard?.referenceImageUrl ? "重新生成参考图" : "生成参考图"}
-      onConfirm={assetImages.generateReferenceImage}
-    />
     <PromptEditorModal
               presentation="workspace"
       isOpen={Boolean(assetVariants.promptRequest)}

@@ -1,3 +1,4 @@
+import { sceneContinuityBasis } from "../clients/productionStoryboardWorkflowClient";
 import { useMemo, useState } from "react";
 import toast from "react-hot-toast";
 import { generateAIContent } from "../clients/aiClient";
@@ -411,6 +412,7 @@ export function useManualVideoStoryboard({
         const decision = readModel.workflow?.strategyDecision;
         if (!decision || !readModel.boardSourceHash) throw new Error("已确认策略已变化，请重新选择。");
         const workflow = normalizeManualStoryboardBoard({ value: parsed, episodeId: episode.id, sceneId: scene.id, shot, decision });
+        if (workflow.board) workflow.board.continuityBasis = sceneContinuityBasis(scene.visualPlan);
         setCandidate({ kind: "board", workflow, audit, sourceHash: readModel.boardSourceHash, issues: validateManualStoryboardBoard({ workflow, strategyContext, allowedAssetIds, shot }) });
       } else {
         if (!readModel.qaSourceHash) throw new Error("故事板已变化，请重新生成后质检。");
@@ -590,7 +592,7 @@ export function useManualVideoStoryboard({
       ...workflow,
       unitVideoPrompt: {
         text: prompt,
-        sourceHash: buildStoryboardUnitVideoPromptSourceHash({ workflow, shots: unitShots }),
+        sourceHash: buildStoryboardUnitVideoPromptSourceHash({ workflow, shots: scene.shots || [] }),
         source: "author_edited",
         status: "ready",
         confirmedAt: now,
@@ -626,7 +628,7 @@ export function useManualVideoStoryboard({
     const now = Date.now();
     const next: ManualStoryboardBoardWorkflow = {
       ...workflow,
-      unitVideoPrompt: buildStoryboardUnitVideoPromptRecord({ workflow, shots: unitShots, now }),
+      unitVideoPrompt: buildStoryboardUnitVideoPromptRecord({ workflow, shots: scene.shots || [], now }),
       updatedAt: now,
     };
     const workspace = scene.manualStoryboard || { schemaVersion: "manual-storyboard.v1" as const, updatedAt: now };

@@ -1,0 +1,12 @@
+{
+  "baselineFileCount": 1309,
+  "head": "a9a3a86b",
+  "changedExistingFiles": [
+    "doc/script-research-handoff-2026-09-29.md",
+    "doc/tv-short-drama-workflow-research-2026-09-29.md"
+  ],
+  "changedNonDocumentFiles": [],
+  "preservedExistingCode": true,
+  "onlyExpectedExistingDocumentChanges": true,
+  "note": "Content hashes cover baseline workspace files, not database or browser storage. New research documents are separate outputs."
+}

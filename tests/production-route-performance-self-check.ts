@@ -13,12 +13,8 @@ const appSource = fs.readFileSync(new URL("../src/App.tsx", import.meta.url), "u
 const routeProfilerSource = fs.readFileSync(new URL("../src/components/DevRouteProfiler.tsx", import.meta.url), "utf8");
 const layoutSource = fs.readFileSync(new URL("../src/components/Layout.tsx", import.meta.url), "utf8");
 
-const globalAssistantSource = fs.readFileSync(new URL("../src/components/assistant/GlobalAssistant.tsx", import.meta.url), "utf8");
 const promptEditorSource = fs.readFileSync(new URL("../src/components/PromptEditorModal.tsx", import.meta.url), "utf8");
-const imagePromptSource = fs.readFileSync(new URL("../src/components/ImagePromptModal.tsx", import.meta.url), "utf8");
 const skillStoreSource = fs.readFileSync(new URL("../src/store/useSkillStore.ts", import.meta.url), "utf8");
-const assistantContextSource = fs.readFileSync(new URL("../src/services/assistant/context.ts", import.meta.url), "utf8");
-const assistantRuntimeSource = fs.readFileSync(new URL("../src/services/assistant/runtime.ts", import.meta.url), "utf8");
 const episodeSliceSource = fs.readFileSync(new URL("../src/store/slices/episodeSlice.ts", import.meta.url), "utf8");
 const projectSliceSource = fs.readFileSync(new URL("../src/store/slices/projectSlice.ts", import.meta.url), "utf8");
 const preparationSource = fs.readFileSync(new URL("../src/pages/ProductionPreparation.tsx", import.meta.url), "utf8");
@@ -41,17 +37,6 @@ assert.match(
   /projectCount === 0[\s\S]*!hasRequestedProject[\s\S]*shouldRestoreActiveProject\(location\.pathname\)[\s\S]*void fetchProjects\(\);/,
   "the application shell must not fetch the legacy project catalog when a workspace URL already identifies its project",
 );
-for (const [source, owner] of [
-  [assistantContextSource, "assistant context"],
-  [assistantRuntimeSource, "assistant runtime"],
-] as const) {
-  assert.doesNotMatch(
-    source,
-    /getAllProjects\(\)/,
-    `${owner} must not rebuild every Episode, Scene, Shot and media body merely to locate a project`,
-  );
-}
-
 for (const [component, modulePath] of heavyRoutes) {
   assert.match(
     appSource,
@@ -98,7 +83,6 @@ assert.doesNotMatch(
 );
 for (const [label, source] of [
   ["Layout", layoutSource],
-  ["GlobalAssistant", globalAssistantSource],
 ] as const) {
   assert.doesNotMatch(
     source,
@@ -112,25 +96,11 @@ for (const [label, source] of [
   );
 }
 
-assert.match(
-  layoutSource,
-  /const\s+GlobalAssistant\s*=\s*lazy\(/,
-  "The global assistant must not inflate the shared shell before the author opens it",
-);
-assert.match(
-  layoutSource,
-  /assistantLaunchRequest\s*&&\s*\([\s\S]*<GlobalAssistant/,
-  "The global assistant chunk should only mount after an explicit assistant command",
-);
+assert.doesNotMatch(layoutSource,/GlobalAssistant|assistantLaunchRequest/);
 assert.match(
   promptEditorSource,
   /useEffect\(\(\)\s*=>\s*\{\s*if\s*\(!isOpen\)\s*return;\s*void fetchSkills\(\);/,
   "PromptEditorModal must not request the Skill catalog while its panel is closed",
-);
-assert.doesNotMatch(
-  imagePromptSource,
-  /\b(?:useSkillStore|fetchSkills|SkillRecommendationModal)\b/,
-  "ImagePromptModal must not load the Skill catalog after its Skill controls have been removed",
 );
 assert.match(
   skillStoreSource,
@@ -181,11 +151,8 @@ assert.doesNotMatch(
   /StoryboardShotReorderRail|调整顺序/,
   "Storyboard must render Shot cards directly without the retired reorder rail",
 );
-assert.match(
-  storyboardSource,
-  /isProductionEvidenceOpen\s*&&\s*\(/,
-  "Production evidence panels should stay unmounted while collapsed",
-);
+assert.match(storyboardSource, /ProductionPreparationAdvisories/);
+assert.doesNotMatch(storyboardSource, /isProductionEvidenceOpen/);
 assert.match(
   storyboardSource,
   /getStoryboardTeamContext\(/,
@@ -213,11 +180,7 @@ for (const [label, source] of [
     `${label} must subscribe only to the project state it renders`,
   );
 }
-assert.match(
-  storyboardSource,
-  /const\s+DepartmentBoardsPanel\s*=\s*lazy\(/,
-  "Department evidence should not inflate the initial Storyboard chunk",
-);
+assert.doesNotMatch(storyboardSource, /DepartmentBoardsPanel/);
 assert.match(
   storyboardSource,
   /const\s+ShotCard\s*=\s*lazy\(/,
@@ -232,11 +195,6 @@ assert.match(
   storyboardSource,
   /\{\(promptModalState\.isOpen\s*\|\|\s*boardBatchAgent\.promptRequest\s*\|\|\s*isVisualRefinementPromptOpen\)\s*&&\s*\(/,
   "Storyboard must not mount its lazy Prompt editor while every AI action is closed",
-);
-assert.match(
-  storyboardSource,
-  /repeat\(auto-fit,\s*minmax\(min\(100%,\s*300px\),\s*1fr\)\)/,
-  "Storyboard should size the Shot-card columns from the actual content width",
 );
 assert.doesNotMatch(
   storyboardSource,

@@ -1,41 +1,30 @@
-import assert from "node:assert/strict";
+import assert from 'node:assert/strict';
+import { evaluateStandaloneShotDuration, evaluateVideoUnitDuration } from '../src/services/production/shotDurationPolicy';
+import { validateStoryboardRules } from '../src/services/production/ruleQa';
+import { reviewProductionTiming } from '../src/services/production/productionTiming';
+import { initialGenerationDuration, type GenerationCapability } from '../packages/domain/src/generation';
 
-import {
-  DEFAULT_MIN_STANDALONE_SHOT_SECONDS,
-  evaluateStandaloneShotDuration,
-  evaluateVideoUnitDuration,
-  rebalanceShotDurations,
-} from "../src/services/production/shotDurationPolicy";
-import { validateStoryboardRules } from "../src/services/production/ruleQa";
-
-assert.equal(DEFAULT_MIN_STANDALONE_SHOT_SECONDS, 3);
-assert.equal(evaluateStandaloneShotDuration({ duration: 1 }).valid, false);
-assert.equal(evaluateStandaloneShotDuration({ duration: 2 }).requiresGrouping, true);
-assert.equal(evaluateStandaloneShotDuration({ duration: 3 }).valid, true);
-assert.equal(evaluateStandaloneShotDuration({
-  duration: 1,
-  shortDurationOverride: { purpose: "impact_frame", reason: "结尾冲击帧仅承担一次视觉重音。" },
-}).valid, true);
-assert.equal(evaluateStandaloneShotDuration({
-  duration: 1,
-  shortDurationOverride: { purpose: "impact_frame", reason: "短" },
-}).valid, false);
-assert.equal(evaluateVideoUnitDuration(2).valid, false);
-assert.equal(evaluateVideoUnitDuration(3).valid, true);
-const rebalanced = rebalanceShotDurations([
-  { id: "a", duration: 1 },
-  { id: "b", duration: 5 },
-  { id: "c", duration: 1 },
-], 10);
-assert.deepEqual(rebalanced.map((shot) => shot.duration), [3, 4, 3]);
-assert.equal(rebalanced.reduce((total, shot) => total + Number(shot.duration), 0), 10);
-assert.throws(() => rebalanceShotDurations([{ duration: 1 }, { duration: 1 }], 5), /cannot fit/);
-
-const storyboardIssues = validateStoryboardRules([{ id: "episode", scenes: [{
-  id: "scene",
-  title: "时长测试",
-  shots: [{ id: "short-shot", duration: 1, visualAction: "角色推门进入房间。" }],
-}] }] as any);
-assert.ok(storyboardIssues.some((item) => item.target === "shot.short-shot.duration" && item.severity === "blocking"));
-
-console.log("Shot duration policy self-check passed.");
+for (const duration of [0.4, 1, 2, 6.8, 45]) {
+  assert.equal(evaluateStandaloneShotDuration({ duration }).valid, true);
+  assert.equal(evaluateVideoUnitDuration(duration).valid, true);
+}
+for (const duration of [0, -1, NaN, Infinity]) assert.equal(evaluateStandaloneShotDuration({ duration }).valid, false);
+const issues = validateStoryboardRules([{ id: 'ep', scenes: [{ id: 's', title: '短插入', shots: [{ id: 'short', duration: 0.4, visualAction: '开关弹下' }] }] }] as any);
+assert.ok(!issues.some(i => i.target === 'shot.short.duration'));
+const equal = ['a','b','c'].map(id => ({ id, duration: 12, visualAction: '开关弹下', cameraMovement: '缓慢推进' }));
+const snapshot = JSON.stringify(equal), review = reviewProductionTiming(equal, ['a']);
+assert.ok(review.issues.some(i => i.code === 'TIMING_UNIFORM_SCENE'));
+assert.ok(review.issues.some(i => i.code === 'TIMING_BASIS_MISSING' && i.message.includes('a')));
+assert.ok(review.issues.every(i => !i.blocking));
+assert.equal(JSON.stringify(equal), snapshot, 'reading never redistributes durations or edits works');
+const described = reviewProductionTiming(equal.map(s => ({ ...s, motivation: '让观众发现灯亮了', editingNote: '完成点亮后留一拍反应切出；有意等长的节奏实验' })), ['b']);
+assert.equal(described.shots[0].basisStatus, 'described');
+assert.equal(described.creativeStatus, 'not_assessed', 'notes are not creative approval');
+assert.ok(described.issues.some(i => i.code === 'TIMING_UNIFORM_SCENE'));
+assert.equal(reviewProductionTiming(equal, []).issues.length, 0);
+const cap = { minDuration: 5, maxDuration: 14, parameters: [{key:'duration', default:10, integer:true}] } as GenerationCapability;
+assert.equal(initialGenerationDuration(0.4, cap), 5);
+assert.equal(initialGenerationDuration(6.8, cap), 7);
+assert.equal(initialGenerationDuration(16, cap), 16, 'do not truncate narrative to fit provider');
+assert.equal(initialGenerationDuration(6.8, { ...cap, durations:[5,10] }), 10);
+console.log('Timing checks passed: fractional edits, scoped warnings, no false acceptance, provider padding.');

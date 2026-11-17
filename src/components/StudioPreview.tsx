@@ -114,7 +114,7 @@ export const StudioPreview: React.FC<StudioPreviewProps> = ({
             onClick={onSynthesize}
             disabled={isSynthesizing}
             className="flex h-8 min-w-8 items-center justify-center gap-2 bg-text-primary px-2 text-xs font-bold text-bg-surface transition-all hover:bg-text-primary/90 active:scale-95 disabled:opacity-50 cursor-pointer sm:px-4"
-            title="导出成片"
+            title="影片导出"
           >
             {isSynthesizing ? (
               <span className="flex items-center gap-2">
@@ -124,7 +124,7 @@ export const StudioPreview: React.FC<StudioPreviewProps> = ({
             ) : (
               <>
                 <Video className="w-3.5 h-3.5" />
-                <span className="hidden sm:inline">导出成片</span>
+                <span className="hidden sm:inline">影片导出</span>
               </>
             )}
           </button>
@@ -206,15 +206,25 @@ export const StudioPreview: React.FC<StudioPreviewProps> = ({
               const failed = take.videoMedia?.status === "failed"
                 || ["failed", "cancelled"].includes(take.generationAudit?.videoTaskStatus || "");
               const sourceReviewRecommended = take.generationAudit?.sourceReview?.status === "review_recommended";
+              const isAdopted = takeShot.activeTakeId === take.id;
+              const isPreviewed = previewTakeId ? previewTakeId === take.id : isAdopted;
               return (
-                <div key={take.id} className="relative h-12 w-20 shrink-0">
+                <div key={take.id} className="flex w-28 shrink-0 flex-col gap-1">
+                  <div className="flex min-h-5 items-center justify-between gap-1 text-[10px] font-bold">
+                    {isAdopted ? (
+                      <span className="inline-flex items-center gap-1 text-gold"><Check className="h-3 w-3" aria-hidden="true" />已采用</span>
+                    ) : <span className="text-text-muted">候选版本</span>}
+                    {isPreviewed && <span className="text-sky-400">预览中</span>}
+                  </div>
                   <button
                     type="button"
+                    aria-pressed={isPreviewed}
+                    aria-label={`预览方案 ${index + 1} · ${isVideoTake ? "视频" : "图片"}`}
                     onClick={() => {
                       setPreviewMode(isVideoTake ? "video" : "image");
                       onPreviewTake?.(take.id);
                     }}
-                    className={`relative h-12 w-20 overflow-hidden rounded-lg border transition-all cursor-pointer ${takeShot.activeTakeId === take.id ? "border-gold" : previewTakeId === take.id ? "border-sky-400 ring-1 ring-sky-400/30" : "border-border-soft/20 hover:border-border-soft/40"}`}
+                    className={`relative h-16 w-full overflow-hidden rounded-lg border transition-all cursor-pointer ${isPreviewed ? "border-sky-400 ring-1 ring-sky-400/30" : isAdopted ? "border-gold" : "border-border-soft/20 hover:border-border-soft/40"}`}
                     title={`预览方案 ${index + 1}${take.generationAudit ? ` · ${take.generationAudit.modelId}` : ""}`}
                   >
                     {take.imageUrl ? <img src={take.imageUrl} alt={`素材版本 ${index + 1}`} className="h-full w-full object-cover" /> : <div className="flex h-full items-center justify-center bg-bg-surface-soft"><Video className="h-4 w-4 text-text-muted" /></div>}
@@ -225,19 +235,21 @@ export const StudioPreview: React.FC<StudioPreviewProps> = ({
                       <span className="absolute left-1 top-1 rounded bg-amber-500 px-1 py-0.5 text-[8px] font-black text-black">来源有更新</span>
                     )}
                   </button>
-                  <button
+                  {isAdopted ? (
+                    <span className="flex h-7 items-center justify-center text-[10px] text-text-muted">当前使用版本</span>
+                  ) : <button
                     type="button"
                     disabled={!readyForAdoption}
                     onClick={() => {
                       setPreviewMode(isVideoTake ? "video" : "image");
                       onAdoptTake?.(take.id);
                     }}
-                    className="absolute right-1 top-1 flex h-5 w-5 items-center justify-center rounded-md border border-white/25 bg-black/70 text-white shadow-sm hover:bg-gold hover:text-black disabled:cursor-not-allowed disabled:opacity-70"
+                    className="flex h-7 items-center justify-center gap-1 rounded-md border border-border-soft/30 text-[10px] font-bold text-text-secondary hover:bg-gold hover:text-black disabled:cursor-not-allowed disabled:opacity-70"
                     title={failed ? "候选生成失败，不能采用" : readyForAdoption ? sourceReviewRecommended ? `来源有更新，建议复核；仍可采用方案 ${index + 1}` : `采用方案 ${index + 1}` : "候选尚未生成完成，不能采用"}
                     aria-label={readyForAdoption ? `采用方案 ${index + 1}` : `方案 ${index + 1} 尚不可采用`}
                   >
-                    {failed ? <CircleAlert className="h-3 w-3" /> : readyForAdoption ? <Check className="h-3 w-3" /> : <Loader2 className="h-3 w-3 animate-spin" />}
-                  </button>
+                    {failed ? <><CircleAlert className="h-3 w-3" aria-hidden="true" />生成失败</> : readyForAdoption ? "采用此版本" : <><Loader2 className="h-3 w-3 animate-spin" aria-hidden="true" />生成中</>}
+                  </button>}
                 </div>
               );
             })}

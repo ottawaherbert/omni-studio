@@ -23,24 +23,12 @@ for (const snippet of [
   assert.ok(operatorClientSource.includes(snippet), `operatorClient missing ${snippet}`);
 }
 
-for (const filePath of [
-  "src/components/storyboard/DepartmentBoardsPanel.tsx",
-]) {
-  const text = source(filePath);
-  assert.equal(
-    /fetch\(`?\/api\/operator/.test(text),
-    false,
-    `${filePath} must call apps/web/src/clients/operatorClient.ts instead of direct Operator fetch`,
-  );
-  assert.equal(
-    text.includes("parseOperatorResponse") || text.includes("parseOperatorAuditResponse"),
-    false,
-    `${filePath} should not duplicate Operator HTTP parsing`,
-  );
-  assert.ok(
-    text.includes("clients/operatorClient"),
-    `${filePath} should import the Operator action client`,
-  );
-}
+// DepartmentBoardsPanel was retired. Check the current advanced UI through its shared client.
+const previsPage = source("src/pages/Previs.tsx");
+assert.equal(/fetch\s*\(/.test(previsPage), false, "virtual production UI must use its shared transport client");
+assert.ok(previsPage.includes("clients/previsClient"));
+const server = source("server.ts");
+assert.ok(server.includes("registerPrevisRoutes(app, generationEngine.media)"));
+assert.ok(server.includes("basePath: '/api/operator/previs', assertProjectAccess: assertOperatorProjectAccess"));
 
 console.log("Operator UI action boundary self-check passed.");

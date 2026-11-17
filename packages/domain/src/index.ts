@@ -1,5 +1,4 @@
 export * from "./asset";
-export * from "./assistant";
 export * from "./aiConfig";
 export * from "./creativeSource";
 export * from "./game";

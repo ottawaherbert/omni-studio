@@ -1,3 +1,4 @@
+import {templateOverrides} from '../../config/prompts/templatePreferences';
 import { productionClient } from "../../clients/productionClient";
 import { defaultTemplates } from "../../config/prompts";
 import { PromptTemplate } from "../../config/prompts/types";
@@ -13,6 +14,13 @@ export interface LoadedProductionTemplate {
   trace: ProductionTemplateTrace;
 }
 
+const explicitlyUsesBuiltin = (id: string): boolean => {
+  try {
+    const state = JSON.parse(localStorage.getItem("omni-prompt-storage") || '{}').state;
+    return Array.isArray(state?.builtinSelections) && state.builtinSelections.includes(id);
+  } catch { return false; }
+};
+
 const localStorageTemplate = (id: string): PromptTemplate | undefined => {
   if (typeof localStorage === "undefined") return undefined;
   try {
@@ -20,7 +28,7 @@ const localStorageTemplate = (id: string): PromptTemplate | undefined => {
     if (!raw) return undefined;
     const parsed = JSON.parse(raw);
     const templates = parsed?.state?.templates || parsed?.templates;
-    const template = templates?.[id];
+    const template = templateOverrides(defaultTemplates,templates||{},parsed?.state?.baselineHashes||{})[id];
     return typeof template?.template === "string" ? template : undefined;
   } catch {
     return undefined;
@@ -91,8 +99,9 @@ export const loadProductionPromptTemplate = async (
   id: string,
   fallback?: PromptTemplate,
 ): Promise<LoadedProductionTemplate> => {
+  if (explicitlyUsesBuiltin(id)) return loadBuiltinTemplate(id, fallback);
   const local = localStorageTemplate(id);
-  if (local) {
+  if (local && local.template !== defaultTemplates[id]?.template) {
     const bodyWarnings = validateTemplateBodyVariables(id, local.template);
     if (bodyWarnings.length > 0) {
       return loadBuiltinTemplate(id, fallback, [
@@ -111,7 +120,7 @@ export const loadProductionPromptTemplate = async (
   }
 
   const server = await serverTemplate(id);
-  if (server) {
+  if (server && server !== defaultTemplates[id]?.template) {
     const bodyWarnings = validateTemplateBodyVariables(id, server);
     if (bodyWarnings.length > 0) {
       return loadBuiltinTemplate(id, fallback, [

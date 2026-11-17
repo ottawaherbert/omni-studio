@@ -1,0 +1,83 @@
+{
+  "format": "omni-external-bible.v1",
+  "projectId": "project_last_ferry",
+  "deliveryId": "delivery_last_ferry_001",
+  "title": "末班渡口",
+  "language": "zh-CN",
+  "workType": "互动微短片",
+  "logline": "父亲去世后，林岚带着一把渡口旧钥匙赶末班船。交出钥匙能打开失物柜，却也要把父亲的隐瞒写进登记簿。",
+  "theme": "替亲人保守秘密，与让事实留下可追查的记录之间的取舍。",
+  "audience": "偏好现实题材、细微选择后果的成年观众",
+  "profile": {
+    "organization": "standalone",
+    "continuity": "serialized",
+    "aspectRatio": "16:9",
+    "productionMode": "AI-video"
+  },
+  "methods": [
+    {
+      "id": "method_visible_cost",
+      "title": "选择的可见代价",
+      "level": "technique",
+      "instructions": "让两个选项的眼前得失可辨；不以未告知的惩罚证明某个选项错误。",
+      "appliesTo": "入口选择与两个结局"
+    }
+  ],
+  "characters": [
+    {
+      "id": "char_lin",
+      "name": "林岚",
+      "bio": "三十二岁，刚办完父亲的后事，准备坐末班船离开小岛。",
+      "desire": "带着父亲留给她的东西离开，不再被渡口的人追问。",
+      "need": "决定自己愿意为查明父亲的行为承担多少责任。",
+      "contradiction": "既希望父亲清白，又害怕留下能够追查他的证据。",
+      "arc": "可以主动留下记录，也可以先保留钥匙；两条路线的承担方式不同。",
+      "voice": "话短，紧张时先谈具体物品，不直接讲感受。"
+    },
+    {
+      "id": "char_shen",
+      "name": "沈叔",
+      "bio": "接替林岚父亲看守渡口；腕部扭伤，能写字但不能长时间用力。",
+      "desire": "按时关闸，并把失物柜的交接缺口查清。",
+      "need": "接受善意不能代替可查证的手续。",
+      "contradiction": "信任老同事，却仍要追问钥匙为什么一直没交回。",
+      "arc": "得到钥匙时留下完整交接，没得到时仍按规定关闸。",
+      "voice": "不急着下判断，问具体时间、地点和经手人。"
+    }
+  ],
+  "facts": [
+    {
+      "id": "fact_key",
+      "text": "林岚从父亲留下的帆布包里找到失物柜的铜钥匙；沈叔尚不知道她持有它。",
+      "status": "fixed"
+    },
+    {
+      "id": "fact_ferry",
+      "text": "末班船即将离港，交接失物柜需要留在渡口，无法同时赶上这一班。",
+      "status": "fixed"
+    },
+    {
+      "id": "fact_box",
+      "text": "失物柜内保留一包退回的信和一张交接纸；纸张不能单独证明父亲所有行为的原因。",
+      "status": "fixed"
+    }
+  ],
+  "units": [
+    {
+      "id": "unit_01",
+      "title": "末班",
+      "order": 1,
+      "summary": "是否交出钥匙决定林岚留在渡口登记，或带着未解决的问题登船离开。"
+    }
+  ],
+  "style": {
+    "voice": "现实、克制，以动作承担情绪。",
+    "pacing": "只做一次明确选择，汇合后立即兑现后果。",
+    "dialogue": "少解释背景，人物围绕钥匙、船票与登记簿交流。",
+    "imagery": "湿地面、日光灯、玻璃反光；不增加奇观镜头。",
+    "avoid": [
+      "结尾突然证明父亲完全无辜",
+      "用旁白说教两个选择谁更高尚"
+    ]
+  }
+}

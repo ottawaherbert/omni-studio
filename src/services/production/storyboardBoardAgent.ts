@@ -1,3 +1,5 @@
+import { renderSceneContinuityBasis } from "./sceneVisualPlan";
+import type { SceneVisualPlan } from "../../types/project";
 import { Type } from "../../clients/aiSchemaClient";
 import type {
   ManualStoryboardAgentQuality,
@@ -539,7 +541,7 @@ export const buildStoryboardBoardBatchPrompt = ({
   assetContext,
 }: {
   confirmedPrompt: string;
-  sceneContext: { id?: string; title?: string; description?: string; script?: string };
+  sceneContext: { id?: string; title?: string; description?: string; script?: string; visualPlan?: SceneVisualPlan };
   shots: Shot[];
   filmTeamContext: string;
   assetContext: string;
@@ -561,6 +563,7 @@ export const buildStoryboardBoardBatchPrompt = ({
     title: sceneContext.title,
     description: sceneContext.description || "",
     script: sceneContext.script || "",
+    sceneContinuity: renderSceneContinuityBasis(sceneContext.visualPlan),
     shots: shots.map(projectShotForManualStoryboardPrompt),
   };
   return composePromptBlocks([

@@ -1,4 +1,4 @@
-import {hashValue} from '../../agent-core/src/identity';
+import {hashValue} from '../../domain/src/contentIdentity';
 import type {ScriptProject} from './schema';
 import {structureGrantHash} from './outlineGuides';
 import {structureNodeSceneIds,updateUnitStructure} from './structure';

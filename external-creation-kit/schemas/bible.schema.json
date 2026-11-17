@@ -1,0 +1,316 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:omni-external:bible:v1",
+  "title": "Omni external bible v1",
+  "type": "object",
+  "additionalProperties": false,
+  "properties": {
+    "format": {
+      "const": "omni-external-bible.v1"
+    },
+    "projectId": {
+      "type": "string",
+      "pattern": "^[A-Za-z][A-Za-z0-9_-]{0,119}$"
+    },
+    "deliveryId": {
+      "type": "string",
+      "pattern": "^[A-Za-z][A-Za-z0-9_-]{0,119}$"
+    },
+    "title": {
+      "type": "string",
+      "minLength": 1,
+      "pattern": "\\S"
+    },
+    "language": {
+      "type": "string",
+      "minLength": 1,
+      "pattern": "\\S"
+    },
+    "workType": {
+      "type": "string",
+      "minLength": 1,
+      "pattern": "\\S"
+    },
+    "logline": {
+      "type": "string",
+      "minLength": 1,
+      "pattern": "\\S"
+    },
+    "theme": {
+      "type": "string",
+      "minLength": 1,
+      "pattern": "\\S"
+    },
+    "audience": {
+      "type": "string",
+      "minLength": 1,
+      "pattern": "\\S"
+    },
+    "profile": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "organization": {
+          "enum": [
+            "standalone",
+            "episodic"
+          ]
+        },
+        "continuity": {
+          "enum": [
+            "serialized",
+            "procedural",
+            "anthology",
+            "mixed"
+          ]
+        },
+        "aspectRatio": {
+          "enum": [
+            "16:9",
+            "9:16",
+            "1:1"
+          ]
+        },
+        "productionMode": {
+          "enum": [
+            "live-action",
+            "AI-video",
+            "animation",
+            "hybrid"
+          ]
+        }
+      },
+      "required": [
+        "organization",
+        "continuity",
+        "aspectRatio",
+        "productionMode"
+      ]
+    },
+    "methods": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "id": {
+            "type": "string",
+            "pattern": "^[A-Za-z][A-Za-z0-9_-]{0,119}$"
+          },
+          "title": {
+            "type": "string",
+            "minLength": 1,
+            "pattern": "\\S"
+          },
+          "level": {
+            "enum": [
+              "framework",
+              "technique",
+              "genre"
+            ]
+          },
+          "instructions": {
+            "type": "string",
+            "minLength": 1,
+            "pattern": "\\S"
+          },
+          "appliesTo": {
+            "type": "string",
+            "minLength": 1,
+            "pattern": "\\S"
+          }
+        },
+        "required": [
+          "id",
+          "title",
+          "level",
+          "instructions",
+          "appliesTo"
+        ]
+      },
+      "minItems": 0
+    },
+    "characters": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "id": {
+            "type": "string",
+            "pattern": "^[A-Za-z][A-Za-z0-9_-]{0,119}$"
+          },
+          "name": {
+            "type": "string",
+            "minLength": 1,
+            "pattern": "\\S"
+          },
+          "bio": {
+            "type": "string",
+            "minLength": 1,
+            "pattern": "\\S"
+          },
+          "desire": {
+            "type": "string",
+            "minLength": 1,
+            "pattern": "\\S"
+          },
+          "need": {
+            "type": "string",
+            "minLength": 1,
+            "pattern": "\\S"
+          },
+          "contradiction": {
+            "type": "string",
+            "minLength": 1,
+            "pattern": "\\S"
+          },
+          "arc": {
+            "type": "string",
+            "minLength": 1,
+            "pattern": "\\S"
+          },
+          "voice": {
+            "type": "string",
+            "minLength": 1,
+            "pattern": "\\S"
+          }
+        },
+        "required": [
+          "id",
+          "name",
+          "bio",
+          "desire",
+          "need",
+          "contradiction",
+          "arc",
+          "voice"
+        ]
+      },
+      "minItems": 0
+    },
+    "facts": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "id": {
+            "type": "string",
+            "pattern": "^[A-Za-z][A-Za-z0-9_-]{0,119}$"
+          },
+          "text": {
+            "type": "string",
+            "minLength": 1,
+            "pattern": "\\S"
+          },
+          "status": {
+            "enum": [
+              "fixed",
+              "proposed"
+            ]
+          }
+        },
+        "required": [
+          "id",
+          "text",
+          "status"
+        ]
+      },
+      "minItems": 0
+    },
+    "units": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "id": {
+            "type": "string",
+            "pattern": "^[A-Za-z][A-Za-z0-9_-]{0,119}$"
+          },
+          "title": {
+            "type": "string",
+            "minLength": 1,
+            "pattern": "\\S"
+          },
+          "order": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "summary": {
+            "type": "string",
+            "minLength": 1,
+            "pattern": "\\S"
+          }
+        },
+        "required": [
+          "id",
+          "title",
+          "order",
+          "summary"
+        ]
+      },
+      "minItems": 1
+    },
+    "style": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "voice": {
+          "type": "string",
+          "minLength": 1,
+          "pattern": "\\S"
+        },
+        "pacing": {
+          "type": "string",
+          "minLength": 1,
+          "pattern": "\\S"
+        },
+        "dialogue": {
+          "type": "string",
+          "minLength": 1,
+          "pattern": "\\S"
+        },
+        "imagery": {
+          "type": "string",
+          "minLength": 1,
+          "pattern": "\\S"
+        },
+        "avoid": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1,
+            "pattern": "\\S"
+          },
+          "minItems": 0
+        }
+      },
+      "required": [
+        "voice",
+        "pacing",
+        "dialogue",
+        "imagery",
+        "avoid"
+      ]
+    }
+  },
+  "required": [
+    "format",
+    "projectId",
+    "deliveryId",
+    "title",
+    "language",
+    "workType",
+    "logline",
+    "theme",
+    "audience",
+    "profile",
+    "methods",
+    "characters",
+    "facts",
+    "units",
+    "style"
+  ]
+}

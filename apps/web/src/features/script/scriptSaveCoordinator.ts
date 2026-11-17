@@ -1,6 +1,6 @@
 import type { ScriptProject } from '../../../../../packages/script/src/schema';
 import { applyWorkspacePatch, createWorkspacePatch } from '../../../../../packages/script/src/workspacePatch';
-import { stableJson } from '../../../../../packages/agent-core/src/identity';
+import { stableJson } from '../../../../../packages/domain/src/contentIdentity';
 
 export function sameScriptContent(a: ScriptProject, b: ScriptProject): boolean {
   const { revision: _ar, updatedAt: _at, ...left } = a;

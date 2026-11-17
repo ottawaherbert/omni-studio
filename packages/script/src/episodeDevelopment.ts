@@ -1,4 +1,4 @@
-import {hashValue} from '../../agent-core/src/identity';
+import {hashValue} from '../../domain/src/contentIdentity';
 import {newId,newUnit} from './project';
 import {parseScriptProject,type ScriptProject} from './schema';
 import {getOutlineGuide,outlineGuideId,outlineText,setOutlineText,storyOutlineOwner,type OutlineOwner} from './outlineGuides';

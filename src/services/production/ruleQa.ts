@@ -232,29 +232,6 @@ export const validateFormatSpecificRules = (
   return issues;
 };
 
-const continuityCheckDefinitions = [
-  {
-    key: "axis",
-    label: "180 度轴线",
-    pattern: /180|轴线|轴向|视线方向|朝向|方向|左后方|右后方|左前方|右前方|门内|院内|axis|line of action|screen direction|方位/i,
-  },
-  {
-    key: "eyeline",
-    label: "视线匹配",
-    pattern: /视线|眼神|eyeline|eye[- ]?line|look direction|gaze/i,
-  },
-  {
-    key: "matchOnAction",
-    label: "动作顺接",
-    pattern: /动作顺接|动作衔接|动作连续|运动方向延续|接上|接上一|继前|延续前|连续|连贯|传递|场景切换|无直接空间关系|标题卡|match[- ]?on[- ]?action|match cut|continuing action|hand movement|gesture/i,
-  },
-  {
-    key: "spatial",
-    label: "空间方位连续性",
-    pattern: /空间|方位|位置|左侧|右侧|左后方|右后方|左前方|右前方|门内|院内|画面外|前镜头|上一镜头|screen left|screen right|foreground|background|blocking|geography|spatial/i,
-  },
-];
-
 const shotSizeCategory = (shotSize?: string) => {
   const value = (shotSize || "").toLowerCase();
   if (/mcu|medium close|medium|ms|中景/.test(value)) return "medium";
@@ -263,93 +240,12 @@ const shotSizeCategory = (shotSize?: string) => {
   return value ? "other" : "";
 };
 
-const isExempt = (note: string) => {
-  const exemptions = [
-    "故意越轴",
-    "越过轴线",
-    "reverse angle",
-    "motivated axis break",
-    "deliberate screen direction reversal",
-  ];
-  return exemptions.some((term) => note.toLowerCase().includes(term.toLowerCase()));
-};
-
-const getCharCenters = (shot: Shot) => {
-  const centers: Record<string, number> = {};
-  if (shot.compositionData?.entities) {
-    shot.compositionData.entities.forEach((ent) => {
-      if (ent.type === "character" && ent.screenBox) {
-        centers[ent.id] = ent.screenBox.x + ent.screenBox.w / 2;
-      }
-    });
-  }
-  return centers;
-};
-
-const validateSceneContinuity = (scene: Scene) => {
-  const shots = scene.shots || [];
-  if (shots.length < 2) return [];
-
-  const issues: ProductionQAIssue[] = [];
-  const continuityText = shots.map((shot) => shot.continuityNote || "").join("\n");
-
-  continuityCheckDefinitions.forEach((definition) => {
-    if (!definition.pattern.test(continuityText)) {
-      issues.push(
-        issue(
-          `scene.${scene.id}.continuity.${definition.key}`,
-          `场景「${scene.title}」缺少${definition.label}策略说明。`,
-          "warning",
-          "在 continuityNote 中说明轴线、视线、动作顺接和空间方位如何保持，或说明为何故意打破连续性。",
-        ),
-      );
-    }
-  });
-
-  for (let i = 0; i < shots.length - 1; i++) {
-    const shotA = shots[i];
-    const shotB = shots[i + 1];
-
-    const centersA = getCharCenters(shotA);
-    const centersB = getCharCenters(shotB);
-
-    const commonChars = Object.keys(centersA).filter((id) => id in centersB);
-
-    for (let j = 0; j < commonChars.length; j++) {
-      for (let k = j + 1; k < commonChars.length; k++) {
-        const char1 = commonChars[j];
-        const char2 = commonChars[k];
-
-        const posA1 = centersA[char1];
-        const posA2 = centersA[char2];
-        const posB1 = centersB[char1];
-        const posB2 = centersB[char2];
-
-        if (posA1 === posA2 || posB1 === posB2) continue;
-
-        const leftRightA = posA1 < posA2;
-        const leftRightB = posB1 < posB2;
-
-        if (leftRightA !== leftRightB) {
-          const noteText = `${shotA.continuityNote || ""} ${shotB.continuityNote || ""}`;
-          const exempt = isExempt(noteText);
-
-          if (!exempt) {
-            issues.push(
-              issue(
-                `scene.${scene.id}.continuity.geometryAxis`,
-                `镜头 ${i + 1} (ID: ${shotA.id || "无"}) 和镜头 ${i + 2} (ID: ${shotB.id || "无"}) 之间发生越轴：角色「${char1}」和「${char2}」的左右相对方位翻转，且缺少故意越轴的策略说明。`,
-                "warning",
-                "在 continuityNote 中写明「故意越轴」或「reverse angle」、「motivated axis break」、「deliberate screen direction reversal」以豁免此检查。",
-              ),
-            );
-          }
-        }
-      }
-    }
-  }
-
-  return issues;
+// Camera coordinates alone cannot prove an axis error. A cut may deliberately change
+// angle, time or subject; factual state and actual adjacent images require review.
+const validateSceneContinuity = (scene: Scene): ProductionQAIssue[] => {
+  const shots=scene.shots||[];
+  if(shots.length<2||shots.slice(1).every(shot=>(shot.motivation||shot.continuityNote||'').trim()))return [];
+  return [issue(`scene.${scene.id}.continuity.cutIntent`, `场景「${scene.title}」有切镜尚未记录叙事目的或承接线索。`, 'warning', '说明为何切镜，以及需要延续的空间、人物或事件状态；蒙太奇、时间省略与有意越轴均可，不要求动作无缝连续。')];
 };
 
 const validateShotGroupGrammar = (scene: Scene) => {
@@ -859,7 +755,7 @@ const validateShot = (scene: Scene, shot: Shot, project?: Project) => {
       "Storyboard 应声明景别、角度、运镜、焦距、布光、构图、blocking 和连续性备注，供 prompt 阶段继承。",
     ));
   }
-  if (!shot.duration || shot.duration <= 0 || shot.duration > 30) {
+  if (!Number.isFinite(shot.duration) || Number(shot.duration) <= 0) {
     issues.push(issue(`shot.${shot.id}.duration`, "镜头时长缺失或异常。", "warning"));
   } else {
     const durationPolicy = evaluateStandaloneShotDuration(shot);
@@ -868,7 +764,7 @@ const validateShot = (scene: Scene, shot: Shot, project?: Project) => {
         `shot.${shot.id}.duration`,
         durationPolicy.reason || "镜头时长不符合独立视频生成要求。",
         "blocking",
-        durationPolicy.requiresGrouping ? "优先与相邻短镜头编组成不少于 3 秒的视频生成单元。" : undefined,
+        undefined,
       ));
     }
   }

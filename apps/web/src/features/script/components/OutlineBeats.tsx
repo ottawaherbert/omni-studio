@@ -13,7 +13,7 @@ import {
   type StoryBeat,
 } from '../../../../../../packages/script/src/outlineGuides';
 import { updateBeatText } from '../../../../../../packages/script/src/storylinePlanning';
-import type { AssistantRequest } from '../scriptAssistantShortcuts';
+import type { WritingTaskRequest } from '../scriptTaskShortcuts';
 
 type BeatText = { title: string; change: string };
 const ownerLabels = { unit: '本集大纲', season: '季大纲', project: '整体大纲', story: '故事大纲' };
@@ -66,7 +66,7 @@ export function outlineBeatChangeRequest(
   beat: StoryBeat,
   unitId: string,
   editableOwner?: OutlineOwner,
-): AssistantRequest | undefined {
+): WritingTaskRequest | undefined {
   if (!sameOwner(editableOwner, guide.owner)) return;
   const liveGuide = getOutlineGuide(project, guide.owner),
     liveBeat = liveGuide?.beats.find((item) => item.id === beat.id);
@@ -88,7 +88,7 @@ export function outlineBeatChangeRequest(
     unitId: unit.id,
     stage: 'OUTLINE',
     draftOperation: 'outline_development',
-    operation: guide.owner.kind === 'unit' ? 'unit_outline' : 'outline',
+    operation: guide.owner.kind === 'unit' ? 'unit_outline' : guide.owner.kind === 'season' ? 'season_outline' : guide.owner.kind === 'story' ? 'story_outline' : 'outline',
     ...(guide.owner.kind !== 'unit'
       ? { scopeId: guide.owner.id, ...(guide.owner.kind === 'season' ? { seasonId: guide.owner.id } : {}) }
       : {}),
@@ -230,7 +230,7 @@ export function OutlineBeats({
   onLocate?: (guide: OutlineGuide, start: number) => void;
   onOpenScene?: (unitId: string, sceneId: string) => void;
   onOpenOwner?: (owner: OutlineOwner, beatId: string) => void;
-  onRequestChange?: (request: AssistantRequest) => void;
+  onRequestChange?: (request: WritingTaskRequest) => void;
 }) {
   const entries = guides
     .flatMap((guide) => {

@@ -10,3 +10,7 @@ export * from "../services/production/productionAssetReferenceMode";
 export * from "../services/production/productionBoardImageOverlay";
 export * from "../services/production/productionProjectAssets";
 export * from "../services/production/videoStoryboardAssetBoards";
+
+export * from "../services/production/locationViews";
+
+export * from '../services/production/characterReferenceLayouts';

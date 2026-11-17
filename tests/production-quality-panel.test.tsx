@@ -1,0 +1,102 @@
+import test from 'node:test';
+import assert from 'node:assert/strict';
+import React, { act } from 'react';
+import { JSDOM } from 'jsdom';
+import { qualityStages, qualityCheckLabels } from '../packages/domain/src/productionQuality';
+
+test('quality panel requires explicit observations and verdicts, previews current evidence, and handles changed sources', async () => {
+  const dom = new JSDOM('<div id="root"></div>', { url: 'http://fixture.invalid', pretendToBeVisual: true });
+  const globals = { window: dom.window, document: dom.window.document, HTMLElement: dom.window.HTMLElement, IS_REACT_ACT_ENVIRONMENT: true };
+  const previous = new Map(Object.keys(globals).map(k => [k, Object.getOwnPropertyDescriptor(globalThis, k)]));
+  for (const [k, v] of Object.entries(globals)) Object.defineProperty(globalThis, k, { value: v, configurable: true, writable: true });
+  const oldFetch = globalThis.fetch;
+  const calls: { path: string; body?: any }[] = [];
+  const status = { responsibility: { director: '导演甲', coordinator: '导演甲', intent: '故事', visualDirection: '视听', spatialMode: 'scene_plan' }, instruction: '先总体，再拆分，再总体。', stages: Object.entries(qualityStages).map(([stage, definition]) => ({ stage, label: definition.label, owner: definition.owner, status: stage === 'shot_plan' ? 'blocked' : 'pending', blockers: stage === 'shot_plan' ? ['整场设计未通过'] : [], checks: definition.checks.map(id => ({ id, label: qualityCheckLabels[id] })) })) };
+  globalThis.fetch = async (url, options) => {
+    const path = String(url), body = options?.body ? JSON.parse(String(options.body)) : undefined;
+    calls.push({ path, body });
+    if (path.includes('/status?')) return new Response(JSON.stringify(status));
+    if (path.endsWith('/review')) return new Response(JSON.stringify({ error: '本场布景已变化，请先复查当前布景。' }), { status: 409 });
+    return new Response(JSON.stringify({ inspection: { id: 'inspection', target: { projectId: 'p' }, stage: 'project_plan', sourceHash: 'secret-source-hash', createdAt: 1, snapshot: { title: '本次实际方案', revision: 45, sourceHash: 'secret-source-hash' }, evidence: [{ mediaUrl: '/actual.mp4', mediaKind: 'video', contentHash: 'secret-content-hash' }] } }));
+  };
+  const { createRoot } = await import('react-dom/client');
+  const { ProductionQualityPanel } = await import('../src/components/production/ProductionQualityPanel');
+  const root = createRoot(document.getElementById('root')!);
+  const click = async (label: string) => { const el = [...document.querySelectorAll('button')].find(b => b.textContent === label); assert.ok(el, label); await act(async () => el.click()); };
+  try {
+    await act(async () => root.render(<ProductionQualityPanel projectId="p" episodeId="e" sceneId="s" shots={[{ id: "s1", label: "镜头1 · 入场" }, { id: "s2", label: "镜头2 · 反应" }]} />));
+    assert.equal([...document.querySelectorAll('button')].find(b => b.textContent?.startsWith('拆镜与制作单元'))?.disabled, true);
+    assert.match(document.body.textContent!, /整场设计未通过/);
+    await click('读取当前检查对象');
+    assert.equal(document.querySelector('video')?.getAttribute('src'), '/actual.mp4');
+    assert.match(document.body.textContent!, /本次实际方案/);
+    assert.doesNotMatch(document.body.textContent!, /secret-source-hash|secret-content-hash/);
+    const submit = () => [...document.querySelectorAll('button')].find(b => b.textContent?.startsWith('提交'))!;
+    assert.equal(document.querySelectorAll('input[type="radio"]:checked').length, 0);
+    assert.equal(submit().disabled, true);
+    for (const textarea of [...document.querySelectorAll('textarea')]) await act(async () => {
+      Object.getOwnPropertyDescriptor(dom.window.HTMLTextAreaElement.prototype, 'value')!.set!.call(textarea, '看过实际方案，故事目标与空间安排有依据。');
+      textarea.dispatchEvent(new dom.window.Event('input', { bubbles: true }));
+    });
+    assert.equal(submit().disabled, true, 'notes alone cannot pass a check');
+    for (const radio of [...document.querySelectorAll<HTMLInputElement>('input[type="radio"]')].filter((_, i) => i % 2 === 0)) await act(async () => radio.click());
+    assert.equal(submit().disabled, false);
+    await act(async () => submit().click());
+    assert.match(document.querySelector('[role="alert"]')!.textContent!, /本场布景已变化，请先复查当前布景/);
+    assert.equal(document.querySelector('video'), null, 'stale inspection must be discarded');
+    assert.equal(calls.filter(c => c.path.endsWith('/review')).length, 1, 'does not automatically retry');
+    const payload = calls.find(c => c.path.endsWith('/review'))!.body;
+    assert.equal(payload.reviewerName, '导演甲');
+    assert.equal(payload.verdict, 'passed');
+    assert.equal(payload.findings.length, 3);
+    await click('读取当前检查对象');
+    for (const textarea of [...document.querySelectorAll('textarea')]) await act(async () => {
+      Object.getOwnPropertyDescriptor(dom.window.HTMLTextAreaElement.prototype, 'value')!.set!.call(textarea, '实际观察：本项未覆盖剧本转折，需修改。');
+      textarea.dispatchEvent(new dom.window.Event('input', { bubbles: true }));
+    });
+    const radios = [...document.querySelectorAll<HTMLInputElement>('input[type="radio"]')];
+    for (const index of [1, 2, 4]) await act(async () => radios[index].click());
+    await act(async () => submit().click());
+    const failedPayload = calls.filter(c => c.path.endsWith('/review')).at(-1)!.body;
+    assert.equal(failedPayload.verdict, 'failed');
+    assert.equal(failedPayload.findings[0].passed, false);
+    const selectStage = async (label: string) => { const el = [...document.querySelectorAll('button')].find(b => b.textContent?.startsWith(label))!; await act(async () => el.click()); };
+    const fillInput = async (label: string, value: string) => { const el = [...document.querySelectorAll('label')].find(l => l.textContent?.startsWith(label))!.querySelector('input')!; await act(async () => { Object.getOwnPropertyDescriptor(dom.window.HTMLInputElement.prototype, 'value')!.set!.call(el, value); el.dispatchEvent(new dom.window.Event('input', { bubbles: true })); }); };
+    await selectStage('资产、布景与调度');
+    await click('添加实际媒体');
+    assert.equal([...document.querySelectorAll('button')].find(b => b.textContent === '读取当前检查对象')!.disabled, true);
+    assert.equal(document.querySelectorAll('input[type="checkbox"]:checked').length, 2, 'default whole-scene mapping is visible');
+    await fillInput('媒体 1 地址', '/asset.jpg');
+    await act(async () => document.querySelectorAll<HTMLInputElement>('input[type="checkbox"]')[1].click());
+    await click('添加实际媒体');
+    await fillInput('媒体 2 地址', '/set.jpg');
+    await act(async () => document.querySelectorAll<HTMLInputElement>('input[type="checkbox"]')[2].click());
+    await click('读取当前检查对象');
+    const preparation = calls.filter(c => c.path.endsWith('/inspections')).at(-1)!.body;
+    assert.equal(preparation.stage, 'preparation');
+    assert.deepEqual(preparation.evidence.map((item: any) => item.shotIds), [['s1'], ['s2']]);
+    assert.deepEqual(preparation.evidence.map((item: any) => item.mediaUrl), ['/asset.jpg', '/set.jpg']);
+    assert.ok(preparation.evidence.every((item: any) => !('id' in item)), 'UI list identity is not sent as evidence');
+    await selectStage('整组画面总检');
+    await click('读取当前检查对象');
+    assert.equal('evidence' in calls.filter(c => c.path.endsWith('/inspections')).at(-1)!.body, false, 'empty list uses server current-media defaults');
+    assert.ok([...document.querySelectorAll('label')].some(label => label.textContent?.startsWith('总导演姓名')), 'visuals is an overall director review');
+    await selectStage('视频与声音质检');
+    await click('添加实际媒体');
+    await fillInput('媒体 1 地址', '/scene-unit.mp4');
+    await click('添加实际媒体');
+    await fillInput('媒体 2 地址', '/voice.wav');
+    const kinds = [...document.querySelectorAll<HTMLSelectElement>('select')].filter(select => select.closest('label')?.textContent?.includes('类型'));
+    assert.deepEqual([...kinds[1].options].map(option => option.value), ['video', 'audio']);
+    await act(async () => { kinds[1].value = 'audio'; kinds[1].dispatchEvent(new dom.window.Event('change', { bubbles: true })); });
+    await click('读取当前检查对象');
+    const segments = calls.filter(c => c.path.endsWith('/inspections')).at(-1)!.body;
+    assert.deepEqual(segments.evidence.map((item: any) => item.mediaKind), ['video', 'audio']);
+    assert.deepEqual(segments.evidence.map((item: any) => item.shotIds), [['s1', 's2'], ['s1', 's2']]);
+
+  } finally {
+    await act(async () => root.unmount()); globalThis.fetch = oldFetch;
+    for (const [k, descriptor] of previous) descriptor ? Object.defineProperty(globalThis, k, descriptor) : Reflect.deleteProperty(globalThis, k);
+    dom.window.close();
+  }
+});

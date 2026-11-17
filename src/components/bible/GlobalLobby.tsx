@@ -1,24 +1,35 @@
+import { StudioLibrary } from '../spatial/StudioLibrary';
+import { FolderOpen,Mic,Users,Map } from "lucide-react";
+import { AnimatePresence,motion } from "motion/react";
 import { useState } from "react";
-import { motion, AnimatePresence } from "motion/react";
-import { Users, Mic, FolderOpen } from "lucide-react";
 import { GlobalAssetList } from "./GlobalAssetList";
 import { GlobalVoiceLibrary } from "./GlobalVoiceLibrary";
-import { ProjectList } from "./ProjectList";
 import { ProjectAssetView } from "./ProjectAssetView";
+import { ProjectList } from "./ProjectList";
 
-import { AssetDetailView } from "./AssetDetailView";
+import { useNavigate } from "react-router-dom";
+import { useProjectStore } from "../../clients/stateClient";
+import { GlobalAssetDetailView } from "./GlobalAssetDetailView";
 
 export function GlobalLobby() {
-  const [activeTab, setActiveTab] = useState<"assets" | "voices" | "projects" | "project-assets">("assets");
+  const navigate = useNavigate();
+  const [activeTab, setActiveTab] = useState<"assets" | "voices" | "projects" | "project-assets" | "studios">("assets");
+  const [buildProjectPicker,setBuildProjectPicker]=useState(false);
   const [selectedAsset, setSelectedAsset] = useState<{ id: string; type: 'global' | 'project'; assetType: 'character' | 'asset' } | null>(null);
 
   const menuItems = [
     { id: "assets", icon: Users, label: "全局资产" },
+    { id: "studios", icon: Map, label: "3D影视城" },
     { id: "voices", icon: Mic, label: "音色库" },
     { id: "projects", icon: FolderOpen, label: "项目列表" },
   ];
 
   const handleAssetSelect = (id: string, type: 'global' | 'project', assetType: 'character' | 'asset') => {
+    if (type === 'project') {
+      const project = useProjectStore.getState().currentProject;
+      if (project) navigate(`/production/assets/${assetType}/${encodeURIComponent(id)}?${new URLSearchParams({ projectId: project.id, returnTo: '/assets' })}`);
+      return;
+    }
     setSelectedAsset({ id, type, assetType });
   };
 
@@ -57,7 +68,7 @@ export function GlobalLobby() {
       </header>
 
       {/* Main Content Area */}
-      <div className="max-w-7xl mx-auto w-full px-8 pb-8 pt-4 flex flex-col">
+      <div className={`${activeTab === "studios" ? "" : "max-w-7xl"} mx-auto w-full px-8 pb-8 pt-4 flex flex-col`}>
         <div className="w-full text-text-primary">
           <div className="w-full">
             <AnimatePresence mode="wait">
@@ -70,15 +81,14 @@ export function GlobalLobby() {
                 className="w-full"
               >
                 {selectedAsset ? (
-                  <AssetDetailView 
+                  <GlobalAssetDetailView
                     assetId={selectedAsset.id} 
-                    type={selectedAsset.type} 
-                    assetType={selectedAsset.assetType}
                     onBack={handleBackToList} 
                   />
                 ) : (
                   <>
                     {activeTab === "assets" && <GlobalAssetList onAssetSelect={(id) => handleAssetSelect(id, 'global', 'asset')} />}
+                    {activeTab === "studios" && (buildProjectPicker ? <section><div className="mb-5 flex items-center justify-between"><div><h2 className="text-sm font-semibold">为哪部剧构建影视城</h2><p className="mt-2 text-xs text-text-muted">选择已有项目，AI 将读取该剧剧本、资产和现有世界。</p></div><button className="text-xs text-gold" onClick={()=>setBuildProjectPicker(false)}>返回影视城库</button></div><ProjectList onProjectSelect={id=>navigate(`/production/world?${new URLSearchParams({projectId:id,build:"1"})}`)}/></section> : <StudioLibrary onBuild={()=>setBuildProjectPicker(true)} />)}
                     {activeTab === "voices" && <GlobalVoiceLibrary />}
                     {activeTab === "projects" && <ProjectList onProjectSelect={() => setActiveTab("project-assets")} />}
                     {activeTab === "project-assets" && (

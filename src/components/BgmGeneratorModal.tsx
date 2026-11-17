@@ -1,3 +1,4 @@
+import type { AudioGenerationContext } from '../../packages/domain/src/speech';
 import { useProjectStore } from "../clients/stateClient";
 import { isGeneralSkill } from "../clients/creativeDirectionClient";
 import { ManualAIResultField } from "./ManualAIResultField";
@@ -28,6 +29,7 @@ interface BgmGeneratorModalProps {
   onSave: (bgmAssetId: string) => void;
   onGenerated?: (result: BgmGenerationResult) => boolean | void;
   governedContext?: BgmGovernedContext;
+  audioContext?: AudioGenerationContext;
 }
 
 export const BgmGeneratorModal: React.FC<BgmGeneratorModalProps> = ({
@@ -38,6 +40,7 @@ export const BgmGeneratorModal: React.FC<BgmGeneratorModalProps> = ({
   onSave,
   onGenerated,
   governedContext,
+  audioContext = { purpose: 'preview' },
 }) => {
   const [manualResult, setManualResult] = useState<ManualAIResult>();
   const [resultUploading, setResultUploading] = useState(false);
@@ -101,6 +104,7 @@ export const BgmGeneratorModal: React.FC<BgmGeneratorModalProps> = ({
     try {
       const audioUrl = await withManualAIResult(finalPrompt, manualResult, () => generateAIBgm({
         prompt: finalPrompt,
+        ...audioContext,
       }));
       const result: BgmGenerationResult = {
         audioUrl,

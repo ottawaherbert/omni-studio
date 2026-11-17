@@ -5,6 +5,8 @@ export interface ContinuityShotEvidence {
   videoPrompt?: string;
   blocking?: string;
   continuityNote?: string;
+  motivation?: string;
+  editingNote?: string;
   cameraAngle?: string;
   cameraMovement?: string;
   lightingAtmo?: string;
@@ -17,6 +19,8 @@ const describe = (shot: ContinuityShotEvidence) => [
   shot.lightingAtmo ? `光影：${compact(shot.lightingAtmo)}` : "",
   shot.blocking ? `调度：${compact(shot.blocking)}` : '',
   shot.continuityNote ? `连续性要求：${compact(shot.continuityNote)}` : '',
+  shot.motivation ? `叙事目的：${compact(shot.motivation)}` : '',
+  shot.editingNote ? `切镜依据：${compact(shot.editingNote)}` : '',
   [shot.cameraAngle, shot.cameraMovement].filter(Boolean).length ? `摄影：${[shot.cameraAngle, shot.cameraMovement].filter(Boolean).map(compact).join('，')}` : '',
 ].filter(Boolean).join('；');
 

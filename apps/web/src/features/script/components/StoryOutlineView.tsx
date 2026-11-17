@@ -20,9 +20,8 @@ import { OutlineBeats } from './OutlineBeats';
 import { ScriptStructure } from '../ScriptStructure';
 import { ScriptStructureEditor } from './ScriptStructureEditor';
 import { ScriptUnitSettings } from './ScriptUnitSettings';
-import { ScriptAnalysisOutlet } from './ScriptAnalysisView';
-import type { OutlineEvidenceSource } from './StructureAnalysisCard';
-import type { AssistantRequest } from '../scriptAssistantShortcuts';
+import type { OutlineEvidenceSource } from '../scriptEvidence';
+import type { WritingTaskRequest } from '../scriptTaskShortcuts';
 
 export function focusOutlineEvidence(content: HTMLDivElement | null, editor: HTMLTextAreaElement | null, focus: OutlineEvidenceSource, offset = 0) {
   const target =
@@ -64,7 +63,7 @@ interface Props {
   onAddUnit: () => void;
   onSelectNode: (nodeId?: string, unitIndices?: number[]) => void;
   onRequestTask: (operation: ScriptOperation, unitId?: string, scopeId?: string, nodeId?: string, unitIndices?: number[], request?: string) => void;
-  onRequestBeatChange?: (request: AssistantRequest) => void;
+  onRequestBeatChange?: (request: WritingTaskRequest) => void;
 }
 
 export function StoryOutlineView({
@@ -258,7 +257,7 @@ export function StoryOutlineView({
         />
 
         {/* Center Content */}
-        <main className="script-work-main script-analysis-anchor flex-1 min-w-0 flex flex-col bg-bg-primary overflow-hidden">
+        <main className="script-work-main flex-1 min-w-0 flex flex-col bg-bg-primary overflow-hidden">
           {/* Sub Toolbar: Scope & Metrics & Actions */}
           <div className="script-work-toolbar px-5 py-2.5 border-b border-border-primary/10 flex flex-wrap items-center justify-between gap-3 bg-bg-surface/50 shrink-0">
             <div className="flex items-center gap-2.5 min-w-0">
@@ -609,7 +608,7 @@ export function StoryOutlineView({
             )}
           </div>
 
-          <ScriptAnalysisOutlet />
+
         </main>
       </div>
     </div>

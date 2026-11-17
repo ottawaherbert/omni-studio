@@ -19,7 +19,7 @@ test('共享 Skill 接受两种入口标识，拒绝重复或已删除的选择'
   assert.deepEqual(selectSharedMethods([],[]),[]);
 });
 
-test('共享 Skill HTTP：无需作品绑定、版本变化拒绝旧提示词、采用基线不变、历史 Agent 保持快照',async t=>{
+test('共享 Skill HTTP：无需作品绑定、版本变化拒绝旧提示词、采用基线不变、既有任务保持快照',async t=>{
   const db=new Database(':memory:');const repo=createScriptRepository(db);repo.ensureSchema();
   let catalog=[structuredClone(skill)];
   const app=express();app.use(express.json());registerScriptRoutes(app,repo,async ids=>selectSharedMethods(catalog,ids));
@@ -51,13 +51,8 @@ test('共享 Skill HTTP：无需作品绑定、版本变化拒绝旧提示词、
   assert.equal(adopted.status,200);assert.equal(repo.getProject(project.id)?.brief.theme,'人物通过行动承担选择的后果。');
   assert.deepEqual(repo.getProject(project.id)?.methods,[]);
 
-  const started=await post(`/${project.id}/agent-runs`,{unitId:unit.id,goal:'只补一场',strategy:'plan_only',maxScenes:1,methodIds:['dialogue'],methodVersions:{dialogue:'2'},workspace:'draft',executionMode:'manual'});
-  assert.equal(started.status,201);assert.equal(started.run.methods[0].version,'2');
   catalog=[];
   assert.equal((await post(`/${project.id}/jobs`,{...input,expectedRevision:repo.getProject(project.id)!.revision})).status,409);
-  const resumed=await post(`/${project.id}/agent-runs/${started.run.id}/transition`,{action:'resume',expectedVersion:started.run.version});
-  assert.equal(resumed.status,200);
-  const frozenStep=await post(`/${project.id}/agent-runs/${started.run.id}/steps`,{expectedVersion:resumed.run.version,job:{operation:'plan',unitId:unit.id,sceneId:scene.id,expectedRevision:repo.getProject(project.id)!.revision,prompt:'使用已保存的方法',methodIds:['skill:dialogue']}});
-  assert.equal(frozenStep.status,201);assert.equal(frozenStep.job.methods[0].content,'更新后的方法');
-  assert.deepEqual(repo.getProject(project.id)?.methods,[]);
+  assert.equal(repo.getJob(project.id,created.job.id).methods[0].content,'用动作表达潜台词。');
+
 });

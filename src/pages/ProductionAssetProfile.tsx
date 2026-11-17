@@ -1,68 +1,59 @@
+import { CharacterReferenceLayoutInfo } from '../components/production/CharacterReferenceLayoutInfo';
+import { LocationSpatialAnchorEditor } from '../components/production/LocationSpatialAnchorEditor';
+import {
+ArrowLeft,
+Box,
+Camera,
+CheckCircle2,
+CircleAlert,
+Clapperboard,
+FileText,
+Film,
+ImageIcon,
+Layers3,
+Link2,
+Loader2,
+MapPin,
+Pencil,
+Plus,
+ScanLine,
+Sparkles,
+Trash2,
+Upload,
+UserRound,
+Wand2,
+} from "lucide-react";
+import { useEffect,useMemo,useRef,useState } from "react";
+import toast from "react-hot-toast";
+import { useNavigate,useParams,useSearchParams } from "react-router-dom";
 import { appearanceVariantDisplayName } from "../clients/productionStoryboardWorkflowClient";
+import { AssetSourceMedia } from '../components/production/AssetSourceMedia';
 import { ProductionCreativeControls } from "../components/production/ProductionCreativeControls";
 import { formatAIExecutionProvenance } from "../utils/aiExecutionProvenance";
-import { useEffect, useMemo, useRef, useState } from "react";
-import { useNavigate, useParams, useSearchParams } from "react-router-dom";
-import toast from "react-hot-toast";
-import {
-  ArrowLeft,
-  Box,
-  Camera,
-  CheckCircle2,
-  CircleAlert,
-  Clapperboard,
-  Film,
-  FileText,
-  ImageIcon,
-  Layers3,
-  Link2,
-  Loader2,
-  MapPin,
-  Pencil,
-  Plus,
-  ScanLine,
-  Sparkles,
-  Trash2,
-  Upload,
-  UserRound,
-  Wand2,
-} from "lucide-react";
 
-import type { Asset, AssetVariant, Character, Project } from "../clients/domainTypes";
+import type { Asset,AssetVariant,Character,Project,LocationView } from "../clients/domainTypes";
+import {
+LOCATION_VIEWS,locationViewLabels,locationViewImage,locationViewCurrentIssue,locationViewDependencies,assetNeedsVisualDesign,assetVisualDescription,buildProductionAssetBoardPromptPreview,buildProductionAssetBoardPromptUpdate,
+buildProductionAssetBoardReferenceUpdate,buildProductionProjectAssetReadModel,buildVideoStoryboardAssetBoardPlan,productionAssetBoardPromptCore,referenceImageUrlForMode,resolveProductionAssetBoardGenerationReference,resolveProductionAssetReferenceModeSpec,
+type ProductionAssetReferenceMode,type VideoStoryboardAssetBoardItem
+} from "../clients/productionAssetWorkflowClient";
 import { useProjectStore } from "../clients/stateClient";
-import ImagePromptModal from "../components/ImagePromptModal";
+import { GenerationWorkbench } from '../components/generation/GenerationWorkbench';
 import { CharacterVoiceSettings } from '../components/production/CharacterVoiceSettings';
-import PromptEditorModal from "../components/PromptEditorModal";
 import { ProductionAssetBoardReviewModal } from "../components/production/ProductionAssetBoardReviewModal";
+import { ProductionAssetDesignDialogs } from "../components/production/ProductionAssetDesignDialogs";
 import { ProductionAssetProfileReviewModal } from "../components/production/ProductionAssetProfileReviewModal";
+import PromptEditorModal from "../components/PromptEditorModal";
 import { Button } from "../components/ui/Button";
-import { DebouncedInput, DebouncedTextarea } from "../components/ui/DebouncedInputs";
+import { DebouncedInput,DebouncedTextarea } from "../components/ui/DebouncedInputs";
 import { Modal } from "../components/ui/Modal";
 import { useProductionEpisodeAvailability } from "../features/production/preparation/useProductionEpisodeAvailability";
 import { useProductionAssetBoardImage } from "../hooks/useProductionAssetBoardImage";
 import { useProductionAssetDesignFlow } from "../hooks/useProductionAssetDesignFlow";
-import { ProductionAssetDesignDialogs } from "../components/production/ProductionAssetDesignDialogs";
-import { assetVisualDescription, assetNeedsVisualDesign } from "../clients/productionAssetWorkflowClient";
 import { useProductionAssetProfileAI } from "../hooks/useProductionAssetProfileAI";
 import { cn } from "../lib/utils";
-import {
-  buildProductionAssetBoardPromptUpdate,
-  buildProductionAssetBoardReferenceUpdate,
-  resolveProductionAssetBoardGenerationReference,
-} from "../clients/productionAssetWorkflowClient";
-import { buildProductionAssetBoardPromptPreview, productionAssetBoardPromptCore, withProductionAssetBoardStyle } from "../clients/productionAssetWorkflowClient";
-import {
-  referenceImageUrlForMode,
-  resolveProductionAssetReferenceModeSpec,
-  type ProductionAssetReferenceMode,
-} from "../clients/productionAssetWorkflowClient";
-import { buildProductionProjectAssetReadModel } from "../clients/productionAssetWorkflowClient";
-import {
-  buildVideoStoryboardAssetBoardPlan,
-  type VideoStoryboardAssetBoardItem,
-} from "../clients/productionAssetWorkflowClient";
 
-type ProfileTab = "board" | "profile" | "usage";
+type ProfileTab = "board" | "profile" | "usage" | "sources";
 
 const MBTI_OPTIONS = ["INTJ", "INTP", "ENTJ", "ENTP", "INFJ", "INFP", "ENFJ", "ENFP", "ISTJ", "ISFJ", "ESTJ", "ESFJ", "ISTP", "ISFP", "ESTP", "ESFP"];
 const boardTypeMeta = (board?: VideoStoryboardAssetBoardItem) => {
@@ -79,6 +70,7 @@ const boardReadiness = (
   referenceMode: ProductionAssetReferenceMode,
 ) => {
   if (!board) return { label: "无资产板", tone: "text-text-muted bg-bg-surface-soft" };
+  if (board.locationViewIssue) return { label: "视角需复核", tone: "text-accent-amber bg-amber-500/10" };
   if (referenceImageUrlForMode(board, referenceMode)) return { label: referenceMode === "clean_reference" ? "纯净参考已就绪" : "资料板已就绪", tone: "text-emerald-700 bg-emerald-500/10" };
   if (board.readiness === "prompt_ready" || referenceMode === "clean_reference") return { label: referenceMode === "clean_reference" ? "待生成纯净参考" : "待生成资料板", tone: "text-accent-amber bg-amber-500/10" };
   return { label: "待完善提示词", tone: "text-accent-red bg-red-500/10" };
@@ -107,14 +99,26 @@ export default function ProductionAssetProfile() {
   const character = isCharacter ? currentProject?.characters.find((item) => item.id === ownerId) : undefined;
   const asset = !isCharacter ? currentProject?.assets.find((item) => item.id === ownerId) : undefined;
   const owner = character || asset;
+  const selectedLocationView: LocationView = asset?.type === 'location' && LOCATION_VIEWS.includes(searchParams.get('locationView') as LocationView) ? searchParams.get('locationView') as LocationView : 'main';
+  const chooseLocationView = (view: LocationView) => {
+    const next = new URLSearchParams(searchParams); next.set('locationView', view); next.set('referenceMode', 'clean_reference');
+    setReferenceMode('clean_reference'); setSearchParams(next, { replace: true });
+  };
   useEffect(() => {
     setReferenceMode(searchParams.get("referenceMode") === "production_board" ? "production_board" : "clean_reference");
   }, [searchParams]);
   useEffect(() => { setSelectedVariantId(searchParams.get("variantId")); }, [ownerId, searchParams.get("variantId")]);
+  const chooseVariant = (id: string | null) => {
+    setSelectedVariantId(id);
+    const next = new URLSearchParams(searchParams);
+    if (id) next.set('variantId', id); else next.delete('variantId');
+    setSearchParams(next, { replace: true });
+  };
   const chooseReferenceMode = (mode: ProductionAssetReferenceMode) => {
     setReferenceMode(mode);
     const next = new URLSearchParams(searchParams);
     next.set("referenceMode", mode);
+    if (mode === "production_board") next.delete("locationView");
     setSearchParams(next, { replace: true });
   };
   const variants = owner?.variants || [];
@@ -134,9 +138,14 @@ export default function ProductionAssetProfile() {
     return [...boardPlan.characterBoards, ...boardPlan.sceneBoards, ...boardPlan.propBoards, ...boardPlan.vehicleBoards]
       .find((item) => item.assetId === ownerId);
   }, [boardPlan, ownerId]);
-  const selectedBoard = useMemo(() => selectedVariantId
+  const selectedCharacterLayout = 'body_face' as const;
+  const selectedBoard = useMemo(() => character && referenceMode === 'clean_reference'
+    ? boardPlan?.characterReferenceBoards.find(item=>item.assetId===ownerId && item.variantId === (selectedVariantId || undefined) && item.characterReferenceLayout===selectedCharacterLayout)
+    : selectedLocationView !== 'main'
+    ? boardPlan?.sceneViewBoards.find(item => item.assetId === ownerId && item.variantId === (selectedVariantId || undefined) && item.locationView === selectedLocationView)
+    : selectedVariantId
     ? boardPlan?.variantBoards.find((item) => item.assetId === ownerId && item.variantId === selectedVariantId)
-    : baseBoard, [baseBoard, boardPlan, ownerId, selectedVariantId]);
+    : baseBoard, [baseBoard, boardPlan, ownerId, selectedVariantId, selectedLocationView, character, referenceMode, selectedCharacterLayout]);
   const selectedVariant = selectedVariantId ? variants.find((item) => item.id === selectedVariantId) : undefined;
   const readModel = useMemo(
     () => currentProject ? buildProductionProjectAssetReadModel(currentProject, fullEpisodes) : undefined,
@@ -172,6 +181,7 @@ export default function ProductionAssetProfile() {
   const approvalCount = (currentProject?.manualProductionAssets?.approvals || [])
     .filter((item) => item.assetId === ownerId).length;
 
+  const [generationOpen, setGenerationOpen] = useState(() => new URLSearchParams(window.location.search).has('generationTaskId'));
   const assetBoardImage = useProductionAssetBoardImage({
     project: currentProject,
     board: selectedBoard,
@@ -186,7 +196,7 @@ export default function ProductionAssetProfile() {
     updateProject,
   });
 
-  const designFlow = useProductionAssetDesignFlow({ project: currentProject, episodes: fullEpisodes, updateProject, onReady: assetBoardImage.openPrompt, scopeKey: `${ownerId}:${selectedVariantId || ''}:${referenceMode}` });
+  const designFlow = useProductionAssetDesignFlow({ project: currentProject, episodes: fullEpisodes, updateProject, onReady: () => setGenerationOpen(true), scopeKey: `${ownerId}:${selectedVariantId || ''}:${referenceMode}` });
 
   if (!currentProject || !owner) {
     return (
@@ -263,6 +273,8 @@ export default function ProductionAssetProfile() {
         project: currentProject,
         assetId: ownerId,
         variantId: selectedVariantId || undefined,
+        locationView: selectedBoard?.locationView,
+        characterReferenceLayout: selectedBoard?.characterReferenceLayout,
         prompt: selectedBoard ? productionAssetBoardPromptCore(prompt, currentProject, selectedBoard) : prompt,
         referenceMode,
       }));
@@ -300,6 +312,8 @@ export default function ProductionAssetProfile() {
   };
 
   const supportsBoard = Boolean(baseBoard);
+
+  if (generationOpen && selectedBoard) return <main className="min-h-full bg-bg-primary px-4 py-5 text-text-primary sm:px-8"><GenerationWorkbench target={{ projectId: currentProject.id, kind: 'asset', assetId: selectedBoard.id, referenceMode, shotIds: [] }} operation="asset_image" onClose={() => setGenerationOpen(false)} /></main>;
 
   return (
     <main className="min-h-full bg-bg-primary text-text-primary">
@@ -339,6 +353,7 @@ export default function ProductionAssetProfile() {
           <nav className="flex min-w-0 flex-wrap items-center gap-3 sm:gap-6" aria-label="资产档案视图">
             {supportsBoard && <TabButton active={activeTab === "board"} onClick={() => setActiveTab("board")} icon={ImageIcon} label="参考板" />}
             <TabButton active={activeTab === "profile" || !supportsBoard} onClick={() => setActiveTab("profile")} icon={Pencil} label={character ? "角色资料" : "制作档案"} />
+            <TabButton active={activeTab === "sources"} onClick={() => setActiveTab("sources")} icon={ImageIcon} label="原始资料" />
             <TabButton active={activeTab === "usage"} onClick={() => setActiveTab("usage")} icon={Film} label="使用与连续性" />
           </nav>
           <div className="hidden pb-3 text-[10px] font-bold text-text-muted xl:block">项目资产 ID · {ownerId}</div>
@@ -362,7 +377,7 @@ export default function ProductionAssetProfile() {
                   imageUrl={baseBoard?.referenceImageUrl}
                   title={`基础${boardTypeMeta(baseBoard).label}`}
                   subtitle="Canonical identity"
-                  onClick={() => setSelectedVariantId(null)}
+                  onClick={() => chooseVariant(null)}
                 />
                 {variants.map((variant) => (
                   <VariantButton
@@ -371,7 +386,7 @@ export default function ProductionAssetProfile() {
                     imageUrl={variant.cleanReferenceImageUrl || variant.boardImageUrl || variant.imageUrl}
                     title={appearanceVariantDisplayName(variant, variants)}
                     subtitle={variant.description || "状态差异待补充"}
-                    onClick={() => setSelectedVariantId(variant.id)}
+                    onClick={() => chooseVariant(variant.id)}
                     actions={
                       <>
                         <button type="button" title="编辑变体" aria-label={`编辑${variant.name}`} onClick={(event) => { event.stopPropagation(); openVariantModal(variant); }} className="p-1 text-text-muted hover:text-text-primary"><Pencil className="h-3 w-3" /></button>
@@ -384,6 +399,21 @@ export default function ProductionAssetProfile() {
             </aside>
 
             <section className="min-w-0">
+              {character && referenceMode === 'clean_reference' && <CharacterReferenceLayoutInfo activeLayout={(selectedVariant || character).cleanReferenceImageUrl ? (selectedVariant || character).cleanReferenceLayout || 'standard' : undefined} />}
+              {asset?.type === 'location' && <div className="mb-5" aria-label="场景视角参考">
+                <p className="mb-2 text-xs leading-5 text-text-muted">先确定主图与方位，按镜头需要补互补斜角或反向图；两张覆盖充分就可继续。顶视仅在需要布局参考时制作，不必生成全部视角。</p>
+                <LocationSpatialAnchorEditor key={`${ownerId}:${selectedVariantId || 'base'}:${selectedLocationView}`} asset={asset} variantId={selectedVariantId || undefined} view={selectedLocationView} onChange={next => { void updateProject({ assets: currentProject.assets.map(a => a.id === next.id ? next : a) }); }} />
+                <div className="grid grid-cols-2 gap-2 xl:grid-cols-4">{LOCATION_VIEWS.map(view => {
+                  const url = locationViewImage(asset, view, selectedVariantId || undefined);
+                  const issue = view !== 'main' && locationViewCurrentIssue(currentProject, asset, view, selectedVariantId || undefined);
+                  return <button key={view} type="button" aria-pressed={selectedLocationView === view} onClick={() => chooseLocationView(view)} className={cn('overflow-hidden rounded-md border text-left', selectedLocationView === view ? 'border-gold bg-gold/5' : 'border-border-soft/40')}>
+                    {url ? <img src={url} alt={locationViewLabels[view]} className="aspect-video w-full object-cover" /> : <div className="flex aspect-video items-center justify-center bg-bg-surface-soft text-xs text-text-muted">按需补图</div>}
+                    <span className="block px-2 pt-2 text-xs font-bold">{locationViewLabels[view]}</span><span className={cn('block px-2 pb-2 pt-1 text-[10px]', url && issue ? 'text-accent-amber' : 'text-text-muted')}>{url ? issue ? '来源变化，需复核' : '已保存' : '未制作（可选）'}</span>
+                  </button>;
+                })}</div>
+                {selectedBoard?.locationView && <p className="mt-2 text-xs leading-5 text-text-muted">生成输入：{locationViewDependencies(selectedBoard.locationView).map(v => locationViewLabels[v]).join('、')}。{selectedBoard.locationView === 'top' ? '顶视图只交代布局，不作为视频首帧。' : '保持同一空间的结构、陈设与材质。'}</p>}
+                {(selectedBoard?.locationViewIssue || selectedBoard?.locationView && generationReference?.issue) && <p role="status" className="mt-2 text-xs text-accent-amber">{selectedBoard?.locationViewIssue || generationReference?.issue}</p>}
+              </div>}
               <div className="mb-4 flex flex-wrap items-start justify-between gap-5">
                 <div className="min-w-0">
                   <div className="flex items-center gap-2">
@@ -392,10 +422,10 @@ export default function ProductionAssetProfile() {
                   </div>
                   <p className="mt-1 text-xs text-text-muted">{referenceMode === "clean_reference"
                     ? selectedBoard?.assetType === "character"
-                      ? "正面、严格侧面、背面与上半身特写，供图像和视频模型直接读取。"
+                      ? "左侧去头身体三视图，右侧清晰完整脸部特写，供模型按职责读取。"
                       : selectedBoard?.assetType === "prop"
                         ? "同一道具的干净多视图，供图像和视频模型直接读取。"
-                        : "单张无文字空场主视图，供图像和视频模型直接读取。"
+                        : selectedBoard?.locationView ? `同一场景的${locationViewLabels[selectedBoard.locationView]}，供分镜按需参考。` : "单张无文字空场主视图，供图像和视频模型直接读取。"
                     : selectedBoard?.continuityRole}</p>
                   {selectedVariant && (
                     <p className={cn("mt-1 text-[10px] font-bold", generationReference?.issue ? "text-accent-amber" : "text-text-muted")}>
@@ -424,6 +454,7 @@ export default function ProductionAssetProfile() {
                       <ScanLine className="h-3.5 w-3.5" />纯净参考
                     </button>
                   </div>
+                  {character && referenceMode === 'clean_reference' && boardImageUrl && ((selectedVariant?.cleanReferenceLayout || (!selectedVariant ? character.cleanReferenceLayout : undefined) || 'standard') !== selectedCharacterLayout || (selectedVariant?.cleanReferenceImageUrl || (!selectedVariant ? character.cleanReferenceImageUrl : undefined)) !== boardImageUrl) && <Button variant="outline" size="sm" onClick={()=>void assetBoardImage.stageUpload(boardImageUrl,'existing')} disabled={assetBoardImage.isGenerating}>采用此版式</Button>}
                   <input ref={uploadInputRef} type="file" accept="image/*" className="hidden" onChange={(event) => { handleUpload(event.target.files?.[0]); event.currentTarget.value = ""; }} />
                   <Button variant="outline" size="sm" onClick={() => uploadInputRef.current?.click()} leftIcon={<Upload className="h-4 w-4" />}>导入{referenceMode === "clean_reference" ? "纯净参考" : "资料板"}</Button>
                   {referenceMode === "production_board" && selectedVariant && !boardImageUrl && generationReference?.imageUrl && !generationReference.issue && (
@@ -438,7 +469,7 @@ export default function ProductionAssetProfile() {
                       沿用继承板
                     </Button>
                   )}
-                  <Button size="sm" onClick={() => designFlow.start([ownerId])} disabled={assetBoardImage.isGenerating || designFlow.active} leftIcon={assetBoardImage.isGenerating ? <Loader2 className="h-4 w-4 animate-spin" /> : <Sparkles className="h-4 w-4" />}>
+                  <Button size="sm" onClick={() => designFlow.start([ownerId])} disabled={assetBoardImage.isGenerating || designFlow.active || !!(selectedBoard?.locationView && generationReference?.issue)} leftIcon={assetBoardImage.isGenerating ? <Loader2 className="h-4 w-4 animate-spin" /> : <Sparkles className="h-4 w-4" />}>
                     {assetNeedsVisualDesign(currentProject, ownerId) ? "设计形象并生成" : boardImageUrl ? "重新生成" : `生成${referenceModeSpec?.label || boardMeta.label}`}
                   </Button>
                 </div>
@@ -486,7 +517,7 @@ export default function ProductionAssetProfile() {
                     <div className="flex items-center justify-between gap-4">
                       <span>使用位置</span>
                       <span className="text-right font-bold text-text-secondary">
-                        {referenceMode === "clean_reference" ? "分镜画面、视频生成" : "剧本与场次、资产档案"}
+                        {referenceMode === "clean_reference" ? selectedBoard?.locationView === "top" ? "分镜布局参考" : "分镜画面、视频生成" : "剧本与场次、资产档案"}
                       </span>
                     </div>
                   </div>
@@ -504,6 +535,7 @@ export default function ProductionAssetProfile() {
           )
         )}
 
+        {activeTab === "sources" && <AssetSourceMedia key={owner.id} project={currentProject} owner={owner} character={Boolean(character)} />}
         {activeTab === "usage" && (
           <section className="grid grid-cols-[minmax(0,1fr)_340px] gap-8">
             <div>
@@ -558,15 +590,6 @@ export default function ProductionAssetProfile() {
       </div>
 
       <ProductionAssetDesignDialogs flow={designFlow} />
-      <ImagePromptModal
-        isOpen={assetBoardImage.isPromptOpen}
-        onClose={assetBoardImage.closePrompt}
-        initialPrompt={generationPrompt}
-        initialReferenceImage={generationReferenceUrl}
-        title={`${owner.name} · ${referenceModeSpec?.label || boardMeta.label}`}
-        confirmText="生成候选"
-        onConfirm={assetBoardImage.generateCandidate}
-      />
       <ProductionAssetBoardReviewModal
         candidate={assetBoardImage.candidate}
         isAdopting={assetBoardImage.isAdopting}

@@ -1,3 +1,5 @@
+import { characterReferenceOwner, characterReferenceBasis, characterReferenceSourceHash } from './characterReferenceLayouts';
+import { locationViewImage, locationViewInputIssue, locationViewSourceHash, locationViewOwner, updateLocationViews } from './locationViews';
 import type {
   Asset,
   AssetVariant,
@@ -24,6 +26,8 @@ const allBoardItems = (project: Project): VideoStoryboardAssetBoardItem[] => {
     ...plan.propBoards,
     ...plan.vehicleBoards,
     ...plan.variantBoards,
+    ...plan.sceneViewBoards,
+    ...plan.characterReferenceBoards,
   ];
 };
 
@@ -40,6 +44,15 @@ export const resolveProductionAssetBoardGenerationReference = (
   board: VideoStoryboardAssetBoardItem,
 ): ProductionAssetBoardGenerationReference => {
   const boards = allBoardItems(project);
+  if (board.characterReferenceLayout) {
+    const character = project.characters.find(c => c.id === board.assetId)!;
+    return { imageUrl: characterReferenceBasis(character, board.variantId), label: '原角色或当前状态参考', explicitVariantSource: false };
+  }
+  if (board.locationView) {
+    const asset = project.assets.find(a => a.id === board.assetId)!;
+    return { imageUrl: locationViewImage(asset, 'main', board.variantId), label: `${board.variantName || '当前场景'} · 主视图`, explicitVariantSource: false,
+      issue: locationViewInputIssue(project, asset, board.locationView, board.variantId) };
+  }
   if (board.variantId) {
     const owner = board.assetType === "character"
       ? project.characters.find((item) => item.id === board.assetId)
@@ -127,12 +140,16 @@ export const buildProductionAssetBoardPromptUpdate = ({
   project,
   assetId,
   variantId,
+  locationView,
+  characterReferenceLayout,
   prompt,
   referenceMode = "production_board",
 }: {
   project: Project;
   assetId: string;
   variantId?: string;
+  locationView?: import("../../types/project").LocationSupplementaryView;
+  characterReferenceLayout?: import("../../types/project").CharacterReferenceLayout;
   prompt: string;
   referenceMode?: ProductionAssetReferenceMode;
 }): Pick<Project, "characters" | "assets"> => {
@@ -140,6 +157,18 @@ export const buildProductionAssetBoardPromptUpdate = ({
     throw new Error("找不到对应的角色板、场景板、道具板或变体板。");
   }
   const normalizedPrompt = prompt.trim();
+  if (characterReferenceLayout || (referenceMode === 'clean_reference' && project.characters.some(c => c.id === assetId))) {
+    characterReferenceLayout ||= 'body_face';
+    if (characterReferenceLayout !== 'body_face') throw new Error('角色参考版式无效。');
+    const patch = (owner: Character | AssetVariant) => ({ ...owner, characterReferenceLayouts: { ...owner.characterReferenceLayouts, [characterReferenceLayout]: { ...owner.characterReferenceLayouts?.[characterReferenceLayout], prompt: normalizedPrompt } } });
+    return {characters: project.characters.map(c => c.id !== assetId ? c : variantId ? {...c, variants:c.variants?.map(v => v.id === variantId ? patch(v) as AssetVariant : v)} : patch(c) as Character), assets:project.assets};
+  }
+  if (locationView) {
+    if (!['reverse', 'oblique', 'top'].includes(locationView)) throw new Error('无效的场景视角。');
+    return { characters: project.characters, assets: project.assets.map(asset => asset.id !== assetId ? asset : updateLocationViews(asset, variantId, {
+      [locationView]: { ...locationViewOwner(asset, variantId)?.locationViews?.[locationView], prompt: normalizedPrompt },
+    })) };
+  }
   const promptUpdate = referenceMode === "clean_reference"
     ? { cleanReferencePrompt: normalizedPrompt }
     : { boardPrompt: normalizedPrompt };
@@ -178,6 +207,7 @@ export const projectSceneIdsForBoard = (project: Project, board: VideoStoryboard
 
 export const buildProductionAssetBoardReferenceUpdate = ({
   project,
+  adoptedBy = 'user',
   boardItemId,
   imageUrl,
   source,
@@ -202,6 +232,7 @@ export const buildProductionAssetBoardReferenceUpdate = ({
   createdAt = Date.now(),
 }: {
   project: Project;
+  adoptedBy?: 'user' | 'external_agent';
   boardItemId: string;
   imageUrl: string;
   source: ManualProductionAssetReferenceAudit["source"];
@@ -229,9 +260,26 @@ export const buildProductionAssetBoardReferenceUpdate = ({
   if (!board) throw new Error("找不到当前资产板，无法采用参考图。");
   if (!imageUrl.trim()) throw new Error("参考图为空，无法采用。");
 
+  if (board.characterReferenceLayout) {
+    referenceMode = 'clean_reference';
+    const character = project.characters.find(c => c.id === board.assetId)!;
+    const hash = characterReferenceSourceHash(project, character, board.characterReferenceLayout, board.variantId);
+    if (sourceContentHash && sourceContentHash !== hash) throw new Error('角色外观、状态或参考来源已变化，请重新核对候选；旧图保留。');
+  }
   let characters: Character[] = project.characters;
   let assets: Asset[] = project.assets;
-  if (board.assetType === "character") {
+  if (board.locationView) {
+    const asset = project.assets.find(a => a.id === board.assetId)!;
+    const issue = locationViewInputIssue(project, asset, board.locationView, board.variantId);
+    if (issue) throw new Error(issue);
+    const currentHash = locationViewSourceHash(project, asset, board.locationView, board.variantId);
+    if (sourceContentHash && sourceContentHash !== currentHash) throw new Error('场景视角的来源已变化，请重新准备候选并核对；原候选保留。');
+    if (review?.status !== 'approved') throw new Error('请先核对场景视角的门窗、固定陈设和光线，再采用。');
+    assets = project.assets.map(a => a.id !== asset.id ? a : updateLocationViews(a, board.variantId, {
+      [board.locationView!]: { ...locationViewOwner(a, board.variantId)?.locationViews?.[board.locationView!], imageUrl, sourceHash: currentHash, reviewedAt: createdAt },
+    }));
+    referenceMode = 'clean_reference';
+  } else if (board.assetType === "character") {
     characters = project.characters.map((character) => character.id !== board.assetId ? character : board.variantId
       ? {
           ...character,
@@ -283,6 +331,19 @@ export const buildProductionAssetBoardReferenceUpdate = ({
           });
   }
 
+  if (board.assetType === 'character' && referenceMode === 'clean_reference') {
+    const character = project.characters.find(c => c.id === board.assetId)!;
+    const owner = characterReferenceOwner(character, board.variantId)!;
+    const layout = 'body_face' as const;
+    const previousLayout = owner.cleanReferenceLayout || 'standard';
+    const fields = { cleanReferenceLayout: layout, characterReferenceBasisUrl: board.characterReferenceLayout ? characterReferenceBasis(character, board.variantId) : imageUrl,
+      characterReferenceLayouts: { ...owner.characterReferenceLayouts,
+        ...(owner.cleanReferenceImageUrl ? { [previousLayout]: {...owner.characterReferenceLayouts?.[previousLayout], imageUrl:owner.cleanReferenceImageUrl} } : {}),
+        [layout]: {...owner.characterReferenceLayouts?.[layout], imageUrl, sourceHash:characterReferenceSourceHash(project,character,layout,board.variantId)} } };
+    characters = characters.map(c => c.id !== board.assetId ? c : board.variantId ? {...c,variants:c.variants?.map(v => v.id === board.variantId ? {...v,...fields} : v)} : {...c,...fields});
+    const updated = characters.find(c=>c.id===board.assetId)!;
+    assets = assets.map(a=>a.id === `char-${board.assetId}` ? {...a,cleanReferenceImageUrl:updated.cleanReferenceImageUrl,multiViewUrl:updated.multiViewUrl,variants:updated.variants} : a);
+  }
   const modeSpec = resolveProductionAssetReferenceModeSpec(board, referenceMode);
 
   const audit: ManualProductionAssetReferenceAudit = {
@@ -291,6 +352,8 @@ export const buildProductionAssetBoardReferenceUpdate = ({
     assetId: board.assetId,
     assetType: board.assetType,
     variantId: board.variantId,
+    locationView: board.locationView,
+    characterReferenceLayout: board.characterReferenceLayout,
     imageUrl,
     source,
     sourceRunId,
@@ -314,7 +377,7 @@ export const buildProductionAssetBoardReferenceUpdate = ({
     sourceSceneIds: projectSceneIdsForBoard(project, board),
     generatedAt: generatedAt || createdAt,
     adoptedAt: createdAt,
-    adoptedBy: "user",
+    adoptedBy,
     createdAt,
     updatedAt: createdAt,
   };

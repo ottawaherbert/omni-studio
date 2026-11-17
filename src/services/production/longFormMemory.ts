@@ -305,7 +305,7 @@ const derivePhaseMap = (project: Project): LongFormMemoryPhase[] => {
         id: `phase-${index + 1}`,
         episodes: `${start}-${end}`,
         title: `阶段 ${index + 1}`,
-        promise: "待在 productionMemory.skeletonMemory.phaseMap 中锁定本阶段商业承诺、剧情转折和偿付。",
+        promise: "待在 productionMemory.skeletonMemory.phaseMap 中明确本阶段叙事承诺、剧情转折和偿付。",
         status: "derived_missing_detail",
       };
     });
@@ -336,7 +336,7 @@ export const normalizeProductionMemory = (project: Project): {
       phaseMap: derivePhaseMap(project),
     },
     continuityMemory: {
-      shotContinuityRule: "每场分镜必须交代 180 度轴线、视线匹配、动作顺接、空间方位连续性。",
+      shotContinuityRule: "按整场核对人物、空间、光影、道具状态与叙事因果；切镜有理由，仅在动作承接需要时检查视线和动势。",
     },
     qaCouncil: {
       continuityScriptSupervisorQA: "缺少正式 productionMemory 时只能派生基础上下文，生成前必须补齐长篇记忆。",
@@ -470,7 +470,7 @@ export const buildLongFormMemoryContext = (
     assetContinuity,
     requiredBeforeGeneration: [
       "第 2 集及以后开始生成前，必须读取持久化的长篇记忆。",
-      "进入场景、剧本或分镜任务前，必须刷新商业记忆、骨架记忆、连续性记忆和当前分集窗口。",
+      "进入场景、剧本或分镜任务前，读取与本次范围相关的故事、状态和分集依据；商业目标仅在项目要求包含时使用。",
       "进入分镜、视觉提示词、图片生成或跨集资产变更前，必须刷新资产连续性。",
       "写入下游分集或分镜产物前，必须先提交对应的记忆更新。",
     ],
@@ -479,7 +479,7 @@ export const buildLongFormMemoryContext = (
       "长篇记忆只以项目持久化数据为事实源，不以测试脚本或聊天记录为事实源。",
       "开启新阶段时延续既有偿付和台账，不得重置前序状态。",
       "跨集复用已确认资产；服装、妆发、伤势、损坏、场景状态或道具用途变化时创建状态变体，不复制新资产。",
-      "外部或导入剧本同样必须遵守轴线、视线、动作承接、道具流转、状态台账和时长连续性。",
+      "外部或导入剧本同样核对人物、物件状态、空间和时间依据；不同机位、时间省略与蒙太奇不要求逐镜动作连续。",
     ],
     windowPolicy: policy,
   };
@@ -565,9 +565,8 @@ export const collectLongFormMemoryGaps = (
   if (target >= 100 && phaseMap.length < 5) {
     gaps.push("100-episode projects must define five phase ledgers.");
   }
-  if (!memory.commercialMemory?.targetAudience || !memory.commercialMemory?.monetizationPromise) {
-    gaps.push("commercialMemory must define targetAudience and monetizationPromise.");
-  }
+  // Commercial requirements belong to the author's brief. Episode count alone
+  // cannot establish a monetization goal or make that goal a generation gate.
   if (!memory.skeletonMemory?.finaleContract && !memory.skeletonMemory?.seriesPromise100) {
     gaps.push("skeletonMemory must define a finaleContract or seriesPromise100.");
   }
@@ -610,7 +609,7 @@ export const validateLongFormMemoryRules = (
       "project.productionMemory.longForm",
       gap,
       target >= 100 ? "blocking" : "warning",
-      "补齐 commercialMemory、skeletonMemory.phaseMap、continuityMemory 和禁忌设定清单。",
+      "按缺项补齐故事阶段、结局约定、连续性和禁忌设定；商业目标仅在作者要求包含时记录。",
     ));
   });
 

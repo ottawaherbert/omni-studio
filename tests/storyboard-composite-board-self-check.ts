@@ -11,6 +11,7 @@ import type {
 } from "../src/types/project";
 import {
   adoptStoryboardBoardVisualTake,
+  rejectStoryboardBoardVisualTake,
   buildStoryboardCompositeBoardPrompt,
   buildStoryboardCompositeBoardQAPrompt,
   buildStoryboardCompositeBoardSourceHash,
@@ -292,6 +293,12 @@ assert.deepEqual(shotCellManifest.map((cell) => [cell.shotId, cell.order, cell.s
   ["shot-b", 2, "ready"],
 ]);
 assert.deepEqual(validateStoryboardCompositeBoardContract({ board, pages, shots }), []);
+const directorBoard: ManualStoryboardBoard = { ...board, visualReferenceMode: "director_board" };
+const directorPages = buildStoryboardCompositeVisualPages(directorBoard);
+assert.deepEqual(directorPages.flatMap(page => page.panelIds), board.panels.map(panel => panel.id), "joint director boards retain different key states of the same Shot");
+assert.deepEqual(validateStoryboardCompositeBoardContract({ board: directorBoard, pages: directorPages, shots }), []);
+assert.ok(validateStoryboardCompositeBoardContract({ board: directorBoard, pages, shots }).some(issue => issue.code === "COMPOSITE_BOARD_PAGE_COVERAGE"));
+assert.ok(validateStoryboardCompositeBoardContract({ board: directorBoard, pages: directorPages.map(page => ({ ...page, panelIds: [...page.panelIds].reverse() })), shots }).some(issue => issue.code === "COMPOSITE_BOARD_PAGE_COVERAGE"));
 const overlaySpec = buildStoryboardBoardOverlaySpec({ project, scene, board, page: pages[0] });
 assert.equal(overlaySpec.columns, 2);
 assert.equal(overlaySpec.rows, 1);
@@ -661,6 +668,7 @@ assert.deepEqual(selectStoryboardCompositeBoardReferences({ project: stateProjec
 const boardBeforeImages = { ...board, shotCellManifest: buildStoryboardShotCellManifest({ board, shots: shots.map((item) => ({ ...item, imageUrl: undefined, takes: [], activeTakeId: undefined })) }) };
 const generatedAfterImagesHash = buildStoryboardCompositeBoardSourceHash({ project, board: { ...boardBeforeImages, shotCellManifest: buildStoryboardShotCellManifest({ board, shots }) }, page: pages[0], references: references.selected, shots });
 const adoptedAfterImagesHash = buildStoryboardCompositeBoardSourceHash({ project, board: boardBeforeImages, page: pages[0], references: references.selected, shots });
+assert.notEqual(adoptedAfterImagesHash, buildStoryboardCompositeBoardSourceHash({ project, board: boardBeforeImages, page: pages[0], references: references.selected, shots: shots.map((item, index) => index ? item : { ...item, editingNote: '通过声桥进入反应镜头，允许正反打' }) }), 'A changed cut plan must require rechecking the old board');
 assert.equal(adoptedAfterImagesHash, generatedAfterImagesHash, "fresh pictures must be adoptable even when the stored board manifest predates them");
 assert.notEqual(adoptedAfterImagesHash, buildStoryboardCompositeBoardSourceHash({ project, board: boardBeforeImages, page: pages[0], references: references.selected, shots: shots.map((item, index) => index ? item : { ...item, imageUrl: "https://example.com/replaced-shot.jpg" }) }));
 
@@ -940,6 +948,13 @@ const take = {
 const adoptedPage = adoptStoryboardBoardVisualTake({ page: pages[0], take, adoptedAt: 2 });
 assert.equal(adoptedPage.activeVisualTakeId, take.id);
 assert.equal(getActiveStoryboardBoardVisualTake(adoptedPage)?.status, "adopted");
+const rejectedPage = rejectStoryboardBoardVisualTake({ page: adoptedPage, takeId: take.id, reviewer: 'external_agent', notes: '3D 取景需要重拍', reviewedAt: 3 });
+assert.equal(rejectedPage.activeVisualTakeId, undefined);
+assert.equal(rejectedPage.visualTakes?.[0].status, 'rejected');
+assert.equal(rejectedPage.visualTakes?.[0].imageUrl, take.imageUrl);
+assert.equal(rejectedPage.visualTakes?.[0].adoptedAt, 2);
+assert.equal(rejectedPage.visualTakes?.[0].review?.reviewer, 'external_agent');
+assert.equal(rejectStoryboardBoardVisualTake({ page: adoptedPage, takeId: 'other', reviewer: 'external_agent', notes: 'other' }).activeVisualTakeId, take.id);
 
 let gridRenderCalls = 0;
 let gridSaveCalls = 0;

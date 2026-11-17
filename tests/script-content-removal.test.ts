@@ -29,6 +29,10 @@ test('移除内容分类：新作品无分类；旧字段原样保存，但所�
   assert.equal(Object.hasOwn(fresh.profile,'contentKind'),false);
   for(const kind of ['fiction','nonfiction','hybrid']){
     const project=oldProject(kind),unit=project.units[0];
+    // Exercise every operation with an actual target owner, including season/story outlines.
+    unit.scopeId='story-1';unit.seasonId='season-1';
+    project.storyOutlines=[{scopeId:'story-1',outline:'本故事原文'}];
+    project.seasons=[{id:'season-1',title:'第一季',arc:'本季原文'}];
     assert.deepEqual(parseScriptProject(project),project);
     assert.doesNotThrow(()=>createMockProposal(project,unit.id,unit.scenes[0].id));
     for(const operation of SCRIPT_OPERATIONS){
@@ -56,25 +60,6 @@ test('移除内容分类：旧作品无需资料校验即可选段改写和保�
     assert.equal(JSON.parse(JSON.stringify(reparsed.blocks[0])).evidence.confirmedHash,'old-confirmation');
     assert.deepEqual(repo.getProject(project.id),project);
     assert.equal('restoreProject' in repo,false);
-  }finally{db.close();}
-});
-
-test('移除内容分类：逐步与 Agent 共用普通正文合同，退休字段不能成为新提案',()=>{
-  const db=new Database(':memory:');const repo=createScriptRepository(db);repo.ensureSchema();
-  try{
-    const draft=oldProject('hybrid');draft.units[0].scenes[0].blocks=[{id:'blank',type:'action',text:''}];
-    const project=repo.saveProject(draft,0),unit=project.units[0];
-    const standalone=repo.createJob(project.id,{operation:'scene',unitId:unit.id,sceneId:unit.scenes[0].id,prompt:'本场正文',expectedRevision:project.revision});
-    const bad=JSON.stringify({summary:'旧合同返回',blocks:[{type:'action',text:'门被推开。',evidence:{kind:'quote',sourceIds:[]}}]});
-    const failed=repo.submitJob(project.id,standalone.id,bad,provenance);
-    assert.equal(failed.status,'failed');assert.equal(failed.rawResult,bad);
-    let run=repo.createAgentRun(project.id,{unitId:unit.id,goal:'写本场',strategy:'write_existing',maxScenes:1,executionMode:'manual'});
-    run=repo.transitionAgentRun(project.id,run.id,{action:'resume',expectedVersion:run.version});
-    const step=repo.createAgentStep(project.id,run.id,run.version,{operation:'scene',unitId:unit.id,sceneId:unit.scenes[0].id,prompt:'写本场，不需要资料认证',expectedRevision:project.revision});
-    const returned=repo.submitJob(project.id,step.job.id,JSON.stringify({summary:'完整本场',blocks:[{type:'action',text:'老人撑开伞，雨水沿伞沿落下。'}]}),provenance);
-    assert.equal(returned.status,'ready');repo.transition(project.id,step.job.id,'approve');
-    assert.equal(repo.getAgentDraft(project.id,run.id).units[0].scenes[0].blocks[0].text,'老人撑开伞，雨水沿伞沿落下。');
-    assert.deepEqual(repo.getProject(project.id),project);
   }finally{db.close();}
 });
 

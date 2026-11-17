@@ -1,6 +1,8 @@
 import crypto from "crypto";
 
 import { db } from "./db";
+import type { ComfyExecutionEvidence } from './providers/comfyExecutionEvidence';
+import type { DispatchReservationRelease } from '../../packages/domain/src/generation';
 
 export type PersistedVideoGenerationTaskStatus =
   | "submitting"
@@ -12,15 +14,19 @@ export type PersistedVideoGenerationTaskStatus =
   | "unknown";
 
 export interface PersistedVideoGenerationTask {
+  dispatchReservationRelease?: DispatchReservationRelease;
   id: string;
   idempotencyKey: string;
-  provider: "minimax_h3" | "kie_grok" | "comfyui_h3";
+  provider: "minimax_h3" | "kie_grok" | "comfyui_h3" | "comfyui";
   channelId: string;
   modelConfigId: string;
   projectId?: string;
   status: PersistedVideoGenerationTaskStatus;
   providerTaskId?: string;
   videoUrl?: string;
+  outputs?: Array<{ url: string; kind: "image" | "video" | "audio"; filename: string; technicalIssues?: string[]; executionEvidence?: ComfyExecutionEvidence }>;
+  nextAttemptAt?: number;
+  attempts?: number;
   embeddedAudio: boolean;
   requestHash: string;
   request: Record<string, unknown>;
@@ -32,6 +38,7 @@ export interface PersistedVideoGenerationTask {
 }
 
 export interface VideoGenerationTaskRepository {
+  listComfyTasks?(): PersistedVideoGenerationTask[];
   getById(id: string): PersistedVideoGenerationTask | undefined;
   findByIdempotencyKey(idempotencyKey: string): PersistedVideoGenerationTask | undefined;
   create(input: Omit<PersistedVideoGenerationTask, "id" | "createdAt" | "updatedAt">): PersistedVideoGenerationTask;
@@ -44,7 +51,9 @@ export const publicVideoGenerationTask = (task: PersistedVideoGenerationTask, du
   provider: task.provider,
   providerTaskId: task.providerTaskId,
   status: task.status,
+  dispatchReservationRelease: task.dispatchReservationRelease,
   videoUrl: task.videoUrl,
+  outputs: task.outputs,
   embeddedAudio: task.embeddedAudio,
   requestHash: task.requestHash,
   audit: task.audit,
@@ -120,6 +129,7 @@ const writeTask = (task: PersistedVideoGenerationTask) => {
 };
 
 export const videoGenerationTaskRepository: VideoGenerationTaskRepository = {
+  listComfyTasks: () => db.prepare("SELECT * FROM video_generation_tasks WHERE provider = 'comfyui' AND (status IN ('queued','running','submitting','unknown') OR id IN (SELECT id FROM video_generation_tasks WHERE provider = 'comfyui' ORDER BY created_at DESC LIMIT 100)) ORDER BY created_at DESC").all().map(rowToTask).filter(Boolean) as PersistedVideoGenerationTask[],
   getById: (id) => rowToTask(db.prepare("SELECT * FROM video_generation_tasks WHERE id = ?").get(id)),
   findByIdempotencyKey: (idempotencyKey) => rowToTask(
     db.prepare("SELECT * FROM video_generation_tasks WHERE idempotency_key = ?").get(idempotencyKey),

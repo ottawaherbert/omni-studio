@@ -1,0 +1,348 @@
+{
+  "36": {
+    "inputs": {
+      "vae_name": "minimax_h3_video_vae_int8_convrot.safetensors"
+    },
+    "class_type": "VAELoader"
+  },
+  "37": {
+    "inputs": {
+      "vae_name": "minimax_h3_audio_vae_fp32.safetensors"
+    },
+    "class_type": "VAELoader"
+  },
+  "38": {
+    "inputs": {
+      "clip_name": "qwen3vl_32b_minimax_h3_nvfp4_awq.safetensors",
+      "type": "minimax",
+      "device": "default"
+    },
+    "class_type": "CLIPLoader"
+  },
+  "53": {
+    "inputs": {
+      "lora_name": "minimax_h3_dmad_full_dareties_v4_step600_comfy_fro.safetensors",
+      "strength_model": 0.8000000000000002,
+      "model": [
+        "192",
+        0
+      ]
+    },
+    "class_type": "LoraLoaderModelOnly"
+  },
+  "192": {
+    "inputs": {
+      "unet_name": "minimax_h3_hybrid_fl2va_ref2va_b25-49_pruned_int8_convrot.safetensors",
+      "weight_dtype": "default"
+    },
+    "class_type": "UNETLoader"
+  },
+  "250": {
+    "inputs": {
+      "expression": "min(328, max(5, round(a * 24)) + (5 - (max(5, round(a * 24)) % 17)) % 17)",
+      "values.a": [
+        "259",
+        0
+      ]
+    },
+    "class_type": "ComfyMathExpression"
+  },
+  "252": {
+    "inputs": {
+      "aspect_ratio": "16:9 (Widescreen)",
+      "megapixels": 2.0,
+      "multiple": 32
+    },
+    "class_type": "ResolutionSelector"
+  },
+  "253": {
+    "inputs": {
+      "samples": [
+        "397",
+        0
+      ],
+      "vae": [
+        "36",
+        0
+      ]
+    },
+    "class_type": "VAEDecode"
+  },
+  "254": {
+    "inputs": {
+      "samples": [
+        "397",
+        0
+      ],
+      "vae": [
+        "37",
+        0
+      ]
+    },
+    "class_type": "VAEDecodeAudio"
+  },
+  "255": {
+    "inputs": {
+      "sampler_name": "euler"
+    },
+    "class_type": "KSamplerSelect"
+  },
+  "259": {
+    "inputs": {
+      "value": 10
+    },
+    "class_type": "PrimitiveFloat"
+  },
+  "261": {
+    "inputs": {
+      "scheduler": "simple",
+      "steps": 12,
+      "denoise": 1,
+      "model": [
+        "329",
+        0
+      ]
+    },
+    "class_type": "BasicScheduler"
+  },
+  "263": {
+    "inputs": {
+      "value": "summary:\nA cinematic xianxia scene. An adult swordswoman in layered white and pale blue robes stands on a mountain terrace above clouds at sunrise. Her expression is calm and determined.\n\nshot_list:\n0-5 seconds: Medium-wide shot, slow camera push-in. She turns toward the rising sun, her sleeves moving gently in the wind.\n5-10 seconds: She slowly draws her sword and holds a steady poised stance. Maintain the same face, costume and location throughout.\n\naudio:\nSoft mountain wind, faint fabric rustle and a clear metallic sword sound. No dialogue. Natural cinematic lighting, realistic movement."
+    },
+    "class_type": "PrimitiveStringMultiline"
+  },
+  "265": {
+    "inputs": {
+      "prompt": [
+        "263",
+        0
+      ],
+      "width": [
+        "252",
+        0
+      ],
+      "height": [
+        "252",
+        1
+      ],
+      "length": [
+        "250",
+        1
+      ],
+      "ref_image_size": "match",
+      "clip": [
+        "38",
+        0
+      ],
+      "vae": [
+        "36",
+        0
+      ],
+      "audio_vae": [
+        "37",
+        0
+      ],
+      "ref_images.ref_image_0": [
+        "900",
+        0
+      ],
+      "ref_images.ref_image_1": [
+        "901",
+        0
+      ],
+      "ref_images.ref_image_2": [
+        "902",
+        0
+      ]
+    },
+    "class_type": "MiniMaxH3ReferenceToVideo"
+  },
+  "328": {
+    "inputs": {
+      "conditioning": [
+        "265",
+        0
+      ]
+    },
+    "class_type": "ConditioningZeroOut"
+  },
+  "329": {
+    "inputs": {
+      "max_resolution": 768,
+      "jpeg_quality": 80,
+      "suppress_default_preview": true,
+      "preview_frames": 12,
+      "preview_fps": 12,
+      "tiny_vae": "taeh3.safetensors",
+      "model": [
+        "401",
+        0
+      ],
+      "vae": [
+        "36",
+        0
+      ]
+    },
+    "class_type": "ModelPreviewOverrideKJ"
+  },
+  "331": {
+    "inputs": {
+      "attention": "pytorch attention",
+      "model": [
+        "343",
+        0
+      ]
+    },
+    "class_type": "ModelAttentionBackend"
+  },
+  "333": {
+    "inputs": {
+      "shift_video": 12,
+      "shift_audio": 3.0000000000000004,
+      "model": [
+        "331",
+        0
+      ]
+    },
+    "class_type": "MiniMaxH3SigmaShift"
+  },
+  "364": {
+    "inputs": {
+      "frame_rate": 24,
+      "loop_count": 0,
+      "filename_prefix": "video/Omni_H3_reference",
+      "format": "video/h264-mp4",
+      "pix_fmt": "yuv420p",
+      "crf": 19,
+      "save_metadata": true,
+      "trim_to_audio": false,
+      "pingpong": false,
+      "save_output": true,
+      "images": [
+        "253",
+        0
+      ],
+      "audio": [
+        "254",
+        0
+      ]
+    },
+    "class_type": "VHS_VideoCombine"
+  },
+  "397": {
+    "inputs": {
+      "seed": 29732110694208,
+      "cfg": 1,
+      "transition_step": 6,
+      "lowres_scale": 0.6000000000000001,
+      "rho": 0,
+      "w_min": 0.5,
+      "w_max": 1,
+      "upscaler_model": "h3_upscaler_lms_v0.1.safetensors",
+      "highres_tiling": true,
+      "upscaler_unload": true,
+      "model": [
+        "329",
+        0
+      ],
+      "positive": [
+        "265",
+        0
+      ],
+      "negative": [
+        "328",
+        0
+      ],
+      "vae": [
+        "36",
+        0
+      ],
+      "latent_image": [
+        "265",
+        1
+      ],
+      "sampler": [
+        "255",
+        0
+      ],
+      "sigmas": [
+        "261",
+        0
+      ]
+    },
+    "class_type": "SelfLiftH3Sampler"
+  },
+  "401": {
+    "inputs": {
+      "chunks": 2,
+      "seq_threshold": 4096,
+      "model": [
+        "333",
+        0
+      ]
+    },
+    "class_type": "MiniMaxChunkFeedForward"
+  },
+  "900": {
+    "class_type": "LoadImage",
+    "inputs": {
+      "image": "__UPLOADED_IMAGE__"
+    }
+  },
+  "901": {
+    "class_type": "LoadImage",
+    "inputs": {
+      "image": "__UPLOADED_IMAGE__"
+    }
+  },
+  "902": {
+    "class_type": "LoadImage",
+    "inputs": {
+      "image": "__UPLOADED_IMAGE__"
+    }
+  },
+  "342": {
+    "class_type": "LoraLoaderModelOnly",
+    "inputs": {
+      "lora_name": "H3_Combat_V2.safetensors",
+      "strength_model": 0.65,
+      "model": [
+        "53",
+        0
+      ]
+    }
+  },
+  "345": {
+    "class_type": "LoraLoaderModelOnly",
+    "inputs": {
+      "lora_name": "H3_Fight_Flow_V1.safetensors",
+      "strength_model": 0.35,
+      "model": [
+        "342",
+        0
+      ]
+    }
+  },
+  "344": {
+    "class_type": "LoraLoaderModelOnly",
+    "inputs": {
+      "lora_name": "Motion_Repair_V2.safetensors",
+      "strength_model": 0.35,
+      "model": [
+        "345",
+        0
+      ]
+    }
+  },
+  "343": {
+    "class_type": "LoraLoaderModelOnly",
+    "inputs": {
+      "lora_name": "H3_speed_slider_1.1.safetensors",
+      "strength_model": 3,
+      "model": [
+        "344",
+        0
+      ]
+    }
+  }
+}

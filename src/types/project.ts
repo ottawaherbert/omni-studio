@@ -1,3 +1,4 @@
+import type { AssetProductionUse, ProductionObservation, ProductionWorkRecord, ProductionEventState, SceneEdit } from "../../packages/domain/src/productionCollaboration";
 import type { CreativeDirectionBindings, CreativeStyleVersion } from "../../packages/domain/src/creativeDirection";
 import type { SceneDirectorPlan, ShotDirecting } from "../../packages/domain/src/directorPlan";
 import type { ReferenceGovernanceMetadata } from "./referenceGovernance";
@@ -426,7 +427,32 @@ export interface ShotAppearance {
   states: ShotAppearanceState[];
 }
 
-export interface AssetVariant {
+export type CharacterReferenceLayout = 'standard' | 'body_face';
+export interface CharacterReferenceLayoutImage { imageUrl?: string; prompt?: string; sourceHash?: string; }
+export interface CharacterReferenceLayoutFields {
+  cleanReferenceLayout?: CharacterReferenceLayout;
+  characterReferenceBasisUrl?: string;
+  characterReferenceLayouts?: Partial<Record<CharacterReferenceLayout, CharacterReferenceLayoutImage>>;
+}
+export type LocationView = 'main' | 'reverse' | 'oblique' | 'top';
+export type LocationSupplementaryView = Exclude<LocationView, 'main'>;
+export interface LocationSpatialAnchor {
+  /** Shared author-defined directions and fixed landmarks; never inferred from image left/right. */
+  layout?: string;
+  cameras?: Partial<Record<LocationView, { position?: string; lookAt?: string }>>;
+}
+export interface LocationViewImage {
+  prompt?: string;
+  imageUrl?: string;
+  /** Authored space and upstream images checked when this view was adopted. */
+  sourceHash?: string;
+  reviewedAt?: number;
+}
+export type LocationViews = Partial<Record<LocationSupplementaryView, LocationViewImage>>;
+
+export interface AssetVariant extends CharacterReferenceLayoutFields {
+  locationSpatialAnchor?: LocationSpatialAnchor;
+  locationViews?: LocationViews;
   appearanceFields?: AppearanceFields;
   appearanceFingerprint?: string;
   id: string;
@@ -450,6 +476,8 @@ export interface AssetVariant {
 }
 
 export interface VisualImageCandidate {
+  /** Exact generation-engine evidence, alternative to the legacy prompt compiler audit. */
+  generationPlan?: import('../../packages/domain/src/generation').GenerationPlanRevision;
   id: string;
   kind: "base" | "multiview" | "variant";
   variantId?: string;
@@ -477,7 +505,8 @@ export interface VisualImageAdoptionAudit extends VisualImageCandidate {
   adoptedAt: number;
 }
 
-export interface Character {
+export interface Character extends CharacterReferenceLayoutFields {
+  productionUse?: AssetProductionUse;
   aliases?: string[];
   visualFacts?: ProductionAssetVisualFact[];
   visualDesignNeedsReview?: boolean;
@@ -538,6 +567,7 @@ export interface Character {
 }
 
 export interface AudioTrack {
+  clipAnchor?: { clipId: string; offsetSeconds: number };
   directorCue?: { planId?: string; cueId?: string; lineIndex?: number };
   id: string;
   type: 'dialogue' | 'bgm' | 'sfx';
@@ -683,6 +713,10 @@ export interface SpatialComposition {
 }
 
 export interface Shot {
+  /** Views of this shot's location/state, not narrative keyframes. Omitted means main. */
+  locationReferenceViews?: LocationView[];
+  beatIds?: string[];
+  eventIds?: string[];
   directing?: ShotDirecting;
   creativeDirection?: CreativeDirectionBindings;
   appearance?: ShotAppearance;
@@ -703,7 +737,7 @@ export interface Shot {
   visualAction?: string;
   lightingAtmo?: string;
   duration?: number;
-  /** Required when an editorial shot shorter than the normal standalone generation minimum is intentional. */
+  /** Historical annotation, preserved for compatibility; short editorial shots no longer require an override. */
   shortDurationOverride?: {
     purpose: "flash_cut" | "insert" | "impact_frame" | "transition";
     reason: string;
@@ -829,7 +863,7 @@ export interface ManualStudioTakeAudit {
   videoGenerationMode?: string;
   videoResolution?: string;
   videoTaskId?: string;
-  videoTaskProvider?: "minimax_h3" | "kie_grok" | "comfyui_h3";
+  videoTaskProvider?: "minimax_h3" | "kie_grok" | "comfyui_h3" | "comfyui";
   videoProviderTaskId?: string;
   videoTaskStatus?: "submitting" | "queued" | "running" | "succeeded" | "failed" | "cancelled" | "unknown";
   videoIdempotencyKey?: string;
@@ -911,6 +945,7 @@ export interface ScriptBlock {
 }
 
 export interface ScriptBreakdown {
+  beats?: { id: string; action: string; visibleChange?: string }[];
   assetVisualFacts?: Array<Omit<ProductionAssetVisualFact, 'sceneId'> & { assetType: 'character' | 'location' | 'prop'; name: string; assetId?: string }>;
   setting: "INT." | "EXT." | "INT./EXT.";
   location: string | { name: string; state?: string; assetId?: string };
@@ -1132,6 +1167,8 @@ export interface AIExecutionProvenance {
 }
 
 export interface ManualProductionAssetReferenceAudit {
+  characterReferenceLayout?: CharacterReferenceLayout;
+  locationView?: LocationSupplementaryView;
   candidateId?: string;
   boardItemId: string;
   assetId: string;
@@ -1168,12 +1205,14 @@ export interface ManualProductionAssetReferenceAudit {
     executionProvenance?: AIExecutionProvenance;
     mode: "automatic" | "manual";
     status: "approved" | "pending";
+    reviewer?: "creator" | "external_agent";
+    notes?: string;
     reviewedAt?: number;
   };
   sourceSceneIds: string[];
   generatedAt?: number;
   adoptedAt?: number;
-  adoptedBy?: "user";
+  adoptedBy?: "user" | "external_agent";
   createdAt: number;
   updatedAt: number;
 }
@@ -1457,7 +1496,7 @@ export interface ManualStoryboardPanelVisualTake {
   review?: {
     mode: "automatic" | "manual";
     status: "pending" | "approved" | "rejected";
-    reviewer?: "creator";
+    reviewer?: "creator" | "external_agent";
     notes?: string;
     reviewedAt?: number;
   };
@@ -1502,7 +1541,7 @@ export interface ManualStoryboardBoardVisualTake {
   review?: {
     mode: "automatic" | "manual";
     status: "pending" | "approved" | "rejected";
-    reviewer?: "creator";
+    reviewer?: "creator" | "external_agent";
     notes?: string;
     reviewedAt?: number;
   };
@@ -1568,6 +1607,8 @@ export interface ManualStoryboardPerformanceBeat {
 }
 
 export interface ManualStoryboardBoard {
+  /** Shared scene facts, copied on plan save; changes invalidate reference takes. */
+  continuityBasis?: SceneContinuityBasis;
   id: string;
   episodeId: string;
   sceneId: string;
@@ -1680,6 +1721,8 @@ export interface ManualStoryboardBoardWorkflow {
 }
 
 export interface ManualStoryboardWorkspace {
+  /** Complete previous units, including media, retained when regrouping. */
+  unitHistory?: Array<{ at: number; boards: ManualStoryboardBoardWorkflow[] }>;
   directorPlan?: SceneDirectorPlan;
   schemaVersion: "manual-storyboard.v1";
   /** Creator-selected default for StoryboardUnits created in this scene. */
@@ -1752,6 +1795,8 @@ export interface ProductionPreparationAssetBinding {
 }
 
 export interface ProductionPreparationWorkspace {
+  observations?: ProductionObservation[];
+  workRecords?: ProductionWorkRecord[];
   schemaVersion: "production-preparation.v1";
   sceneId: string;
   assetBindings?: ProductionPreparationAssetBinding[];
@@ -1761,7 +1806,36 @@ export interface ProductionPreparationWorkspace {
   updatedAt: number;
 }
 
+export interface SceneContinuityBasis {
+  eventStates?: ProductionEventState[];
+  geography: string;
+  lighting: string;
+  entryState: string;
+  exitState: string;
+  transition: {
+    kind: 'unspecified' | 'continuous' | 'time_jump' | 'parallel' | 'flashback' | 'independent';
+    sourceSceneId?: string;
+    carryOver: string;
+    changes: string;
+    cue: string;
+  };
+  references: Array<{ id: string; imageUrl: string; role: 'space' | 'boundary'; note: string; beforeShotId?: string }>;
+}
+
+export interface SceneVisualPlan extends SceneContinuityBasis {
+  schemaVersion: 'scene-visual-plan.v1';
+  targetVideoModelConfigId?: string;
+  /** Explicit cuts after these shots; undefined preserves existing grouping. */
+  breakAfterShotIds?: string[];
+  overview?: { imageUrl: string; width: number; height: number; columns: number; rows: number; shotIds: string[]; candidateId?: string; sourceHash?: string; contentHash?: string };
+  overviewHistory?: Array<NonNullable<SceneVisualPlan['overview']>>;
+  review?: { sourceHash: string; notes: string; checkedAt: number; reviewer: 'creator' };
+  updatedAt: number;
+}
+
 export interface Scene {
+  edit?: SceneEdit;
+  visualPlan?: SceneVisualPlan;
   creativeDirection?: CreativeDirectionBindings;
   id: string;
   shotHistory?: Array<{ at: number; shots: Shot[]; audioTracks?: AudioTrack[]; manualStoryboard?: ManualStoryboardWorkspace }>;
@@ -1894,6 +1968,9 @@ export interface ProductionAssetVisualFact {
 }
 
 export interface Asset {
+  locationSpatialAnchor?: LocationSpatialAnchor;
+  locationViews?: LocationViews;
+  productionUse?: AssetProductionUse;
   aliases?: string[];
   visualFacts?: ProductionAssetVisualFact[];
   visualDesignNeedsReview?: boolean;
@@ -2272,6 +2349,9 @@ export interface LongFormProductionMemory {
 export type ProjectType = "single-work" | "series-work" | "movie" | "tv-series" | "short-drama" | "micro-short-drama";
 
 export interface Project {
+  /** Author-agreed candidate counts, coarse-review/fix limits and handoff preferences.
+   * Plain project instructions, not a generation grant or automatic retry policy. */
+  productionWorkingAgreement?: string;
   creativeDirection?: CreativeDirectionBindings;
   id: string;
   title: string;

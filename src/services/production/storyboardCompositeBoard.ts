@@ -1,3 +1,7 @@
+import { withCharacterReferenceUsage, characterReferenceOwner, characterReferenceUsage } from './characterReferenceLayouts';
+import { renderLocationSpatialAnchor, locationViewUsage } from './locationViews';
+import { locationViewBoards } from './locationViewReferences';
+import { renderSceneContinuityBasis } from "./sceneVisualPlan";
 import type {
   ManualStoryboardAgentQuality,
   ManualStoryboardBoard,
@@ -15,6 +19,7 @@ import type {
   ManualProductionAssetReadModel,
 } from "./manualProductionAssets";
 import { manualStoryboardHash } from "./manualStoryboard";
+import { SCENE_VISUAL_COHERENCE_CONTRACT, projectShotEditingEvidence } from "../../../packages/production/src/services/production/sceneVisualCoherence";
 import type { StoryboardBoard as ProductionStoryboardBoard } from "./videoStoryboardArtifacts";
 import { renderStoryboardBoardPrompt } from "./videoStoryboardTemplateRenderer";
 import { STORYBOARD_VIDEO_REFERENCE_SANITIZER_VERSION } from "./productionBoardImageOverlay";
@@ -456,8 +461,8 @@ export const splitStoryboardUnitWorkflow = ({
 /**
  * Projects an adopted scene-level board into provider-sized execution units.
  * The persisted storyboard is never rewritten: model switching only changes
- * this read model, while each derived unit keeps the adopted board image and
- * only the panels/assets belonging to its own consecutive shots.
+ * this read model. Derived units retain original images as history, but a
+ * partial page must be cropped/reviewed before it can become an active reference.
  */
 export const planStoryboardStudioVideoUnits = ({
   workflow,
@@ -506,7 +511,10 @@ export const planStoryboardStudioVideoUnits = ({
       ? workflow.board!.visualPages
       : buildStoryboardCompositeVisualPages(workflow.board!);
     const visualPages = sourcePages
-      .map((page) => ({ ...page, panelIds: page.panelIds.filter((panelId) => unitPanelIds.has(panelId)) }))
+      .map((page) => {
+        const panelIds = page.panelIds.filter(panelId => unitPanelIds.has(panelId));
+        return panelIds.length === page.panelIds.length ? page : { ...page, panelIds, activeVisualTakeId: undefined, activeShotGridTakeId: undefined, visualTakes: page.visualTakes?.map(take => ({ ...take, status: "stale" as const })) };
+      })
       .filter((page) => page.panelIds.length > 0);
     return unit.board ? {
       ...unit,
@@ -686,7 +694,10 @@ export const buildStoryboardCompositeVisualPages = (
   board: ManualStoryboardBoard,
   annotationMode: ManualStoryboardBoardVisualPage["annotationMode"] = "director_annotated_sheet",
 ): ManualStoryboardBoardVisualPage[] => {
-  const shotPanels = listStoryboardShotRepresentativePanels(board);
+  // Shot grids deliberately keep one cell per Shot. A jointly generated
+  // director board also needs the ordered key states within a continuous Shot.
+  const shotPanels = board.visualReferenceMode === "director_board"
+    ? board.panels : listStoryboardShotRepresentativePanels(board);
   const pagePanels = shotPanels.reduce<Array<typeof board.panels>>((pages, panel) => {
     const previous = pages[pages.length - 1];
     if (previous?.length && previous.length < STORYBOARD_COMPOSITE_BOARD_MAX_VISUAL_PANELS_PER_PAGE) {
@@ -757,17 +768,13 @@ export const selectStoryboardCompositeBoardReferences = ({
   const requestedAssetIds = boardAssetIds(board, shots);
   // Resolve each Shot independently: the same character may wear different
   // clothes in adjacent cells, and a legacy Shot still retains its own references.
-  const resolvedBoards = project && shots.some((shot) => shot.appearance?.states.some((state) => state.decision === "accepted"))
-    ? shots.flatMap((shot) => {
-        const shotAssetIds = new Set([
-          ...appearanceVisibleIds(shot),
-          ...(shot.vehicleIds || []),
-          ...board.panels.filter((panel) => panel.shotId === shot.id).flatMap((panel) => panel.assetRefs || []),
-        ]);
-        return [
-          ...appearanceBoards(project, [shot], assets.assetBoards, "image"),
-          ...assets.assetBoards.filter((item) => item.assetType === "vehicles"),
-        ].filter((item) => shotAssetIds.has(item.assetId));
+  const resolvedBoards = project && shots.some(shot => shot.locationReferenceViews?.length || shot.appearance?.states.some(state => state.decision === "accepted"))
+    ? shots.flatMap(shot => {
+        const shotAssetIds = new Set([...appearanceVisibleIds(shot), ...(shot.vehicleIds || []),
+          ...board.panels.filter(panel => panel.shotId === shot.id).flatMap(panel => panel.assetRefs || [])]);
+        const appearance = appearanceBoards(project, [shot], assets.assetBoards, "image");
+        return (shot.locationReferenceViews?.length ? locationViewBoards(project, [shot], appearance) : appearance)
+          .filter(item => shotAssetIds.has(item.assetId));
       })
     : assets.assetBoards;
   const groups: ManualProductionAssetBoard[][] = [];
@@ -787,7 +794,7 @@ export const selectStoryboardCompositeBoardReferences = ({
     list.findIndex((candidate) => candidate.referenceImageUrl === item.referenceImageUrl) === index,
   );
   return {
-    selected: deduped.slice(0, referenceLimit),
+    selected: project ? withCharacterReferenceUsage(project, deduped.slice(0, referenceLimit)) : deduped.slice(0, referenceLimit),
     omitted: deduped.slice(referenceLimit),
     missingAssetIds,
   };
@@ -845,6 +852,9 @@ export const buildStoryboardCompositeBoardSourceHash = ({
   shots?: Shot[];
 }) => manualStoryboardHash({
   contractVersion: STORYBOARD_COMPOSITE_BOARD_CONTRACT_VERSION,
+  sceneCoherenceContract: SCENE_VISUAL_COHERENCE_CONTRACT,
+  continuityBasis: board.continuityBasis,
+  editingEvidence: shots.map((shot) => ({ id: shot.id, ...projectShotEditingEvidence(shot) })),
   videoReferenceSanitizerVersion: STORYBOARD_VIDEO_REFERENCE_SANITIZER_VERSION,
   project: {
     id: project.id,
@@ -858,7 +868,7 @@ export const buildStoryboardCompositeBoardSourceHash = ({
     ...board,
     shotCellManifest: buildStoryboardShotCellManifest({ board: scopeStoryboardCompositeBoardToPage(board, page), shots }),
   } : board),
-  imagePrompts: shots.map((shot) => ({ id: shot.id, imagePrompt: shot.imagePrompt || "", ...(shot.appearance ? { appearance: appearancePrompt(shot, "image") } : {}) })),
+  imagePrompts: shots.map((shot) => ({ id: shot.id, imagePrompt: shot.imagePrompt || "", ...(shot.locationReferenceViews ? { locationReferenceViews: shot.locationReferenceViews } : {}), ...(shot.appearance ? { appearance: appearancePrompt(shot, "image") } : {}) })),
   page: {
     id: page.id,
     pageIndex: page.pageIndex,
@@ -871,6 +881,8 @@ export const buildStoryboardCompositeBoardSourceHash = ({
     boardItemId: item.boardItemId,
     assetId: item.assetId,
     variantId: item.variantId || "",
+    ...(item.assetType === 'location' && project.assets.find(a => a.id === item.assetId) ? { spatialAnchor: renderLocationSpatialAnchor(project.assets.find(a => a.id === item.assetId)!, item.locationView || 'main', item.variantId) || undefined } : {}),
+    ...(item.characterReferenceLayout ? {characterReferenceLayout:item.characterReferenceLayout} : {}),
     promptHash: item.promptHash,
     referenceImageUrl: item.referenceImageUrl || "",
   })),
@@ -885,7 +897,8 @@ const panelLine = (board: ManualStoryboardBoard, panelId: string) => {
     panel.framePurpose,
     panel.visualBeat || panel.subjectAction || "",
     panel.cameraNote || panel.cameraMove || "",
-    panel.continuityOut || "",
+    panel.continuityIn ? `入格状态：${panel.continuityIn}` : "",
+    panel.continuityOut ? `出格状态：${panel.continuityOut}` : "",
   ].filter(Boolean).join(" | ");
 };
 
@@ -939,11 +952,21 @@ export const buildStoryboardCompositeBoardPrompt = ({
   strategyNames.length ? `【故事板方法】\n${strategyNames.join("；")}` : "",
   strategyRender.promptSections.departments ? `【当前页专业约束】\n${strategyRender.promptSections.departments}` : "",
   "【最终复合画布合同】",
+  SCENE_VISUAL_COHERENCE_CONTRACT,
+  renderSceneContinuityBasis(board.continuityBasis || scene.visualPlan, board.panels.filter(p => page.panelIds.includes(p.id)).map(p => p.shotId)),
+  `【本页切镜与状态依据，仅用于绘制，不画出文字】\n${page.panelIds.flatMap((panelId) => {
+    const panel = board.panels.find((item) => item.id === panelId);
+    const shot = shots.find((item) => item.id === panel?.shotId);
+    return panel && shot ? [`P${panel.panelNumber}：${[shot.motivation, shot.editingNote, shot.continuityNote].filter(Boolean).join("；")}`] : [];
+  }).join("\n")}`,
   "生成一张完整的专业电影制作故事板控制图，不是单格画面，不是剧照，也不是多张独立图片。",
   `整张画布采用复合版式，严格为 ${page.layout}，共 ${page.panelIds.length} 格，按从左到右、从上到下的自然视觉阅读顺序排列；原始画面不写编号。`,
   `${storyboardPanelFrameShape(project.aspectRatio || "16:9")}；每个 panel 都保持与已确认 Shot 相同的构图、屏幕方向和视觉信息层级；故事板成品必须便于一次查看全部格子。`,
   scene.title ? `场次：${scene.title}；首状态：${board.startState}；尾状态：${board.endState}。` : `首状态：${board.startState}；尾状态：${board.endState}。`,
   "全部 panel 保持人物身份、场景空间、线条、灰度底色和标注语言一致。服装、污损、伤势与道具状态逐格服从对应镜头已采用的时刻；剧情明确的换装或受伤必须保留，不能为了整板一致而抹去变化。",
+  ...references.filter(item => item.assetType === 'location').map(item => { const asset = project.assets.find(a => a.id === item.assetId); return asset ? renderLocationSpatialAnchor(asset, item.locationView || 'main', item.variantId) : ''; }),
+  ...references.filter(item => item.locationView).map(item => `【场景视角用途】${item.assetName}：${locationViewUsage(item.locationView!)}`),
+  ...references.filter(item => item.assetType === 'character').map(item => { const character = project.characters.find(c=>c.id===item.assetId); return character ? `【角色参考职责】${item.assetName}：${characterReferenceUsage(characterReferenceOwner(character,item.variantId)?.cleanReferenceLayout,item.variantName)}` : ''; }),
   references.some((item) => item.assetType === "vehicles") ? `【交通工具连续性】${references.filter((item) => item.assetType === "vehicles").map((item) => `${item.assetName}：保持轮廓、比例、左右方位、出入口和已声明状态与正式参考图一致；仅在对应画格出现时描绘，不把参考板版式画入分镜。`).join("；")}` : "",
   "红色箭头表达人物/武器/道具动作，蓝色箭头表达摄影机/画框运动，绿色表达视线/注意力，橙色表达冲击/能量，紫色表达声音/情绪节拍；静态格不要滥画箭头。",
   "画面必须清楚表现镜头景别、机位、动作因果、空间距离和首尾连续性。不得把多个 panel 融成一张蒙太奇，不得漏格、重复格、错序或把同一动作机械复制。",
@@ -987,17 +1010,19 @@ export const buildStoryboardCompositeBoardQAPrompt = ({
   });
   return [
   "你是独立的电影故事板整板视觉质检总监。只做质检，不生成内容。",
+  SCENE_VISUAL_COHERENCE_CONTRACT,
   "【输入图1职责】待验收的完整多格故事板页，只检查其结果，不把它当成正式身份来源。",
   ...references.map((item, index) => `【输入图${index + 2}职责】${item.assetName}${item.variantName ? `（${item.variantName}）` : ""}的${item.assetType === "character" ? "角色身份与服装状态" : item.assetType === "location" ? "场景布局、固定陈设与材质" : item.assetType === "vehicles" ? "交通工具轮廓、结构与方位" : "道具几何、比例与材质"}参考；必须用于核对对应资产，但不得复制参考板排版、文字、背景或无关构图。`),
   `必须确认第一张图是一张 ${page.layout} 的完整故事板控制图，共 ${page.panelIds.length} 格，而不是单格分镜、剧照、角色板或多张散图。`,
   `项目：${project.title || ""}；场次：${scene.title || ""}；${storyboardPanelFrameShape(project.aspectRatio || "16:9")}。`,
   "检查：格数与顺序；每格内容是否与 panel 计划对应；镜头景别/机位/运动是否可读；动作因果、屏幕方向、轴线、视线、道具归属与首尾状态是否连续；人物、服装、场景、道具与正式参考板是否一致；当前策略要求的动作/对白/情绪/揭示节拍是否真正可见；整板是否能与视频提示词和资产参考图共同指导一个视频生成单元。",
-  "以下问题必须 blocking：漏格、重复格、错序、把多个格融合、人物或资产身份错误、动作方向矛盾、关键道具跳变、首尾状态断裂、完全不是故事板整板。可定向重绘的问题用 warning；纯审美偏好只能 advisory。",
+  "以下问题必须 blocking：漏格、重复格、错序、把多个格融合、人物或资产身份错误、无依据的动作方向矛盾、关键道具跳变或首尾状态断裂、完全不是故事板整板。作者明确的反打、插入、时间省略或有意越轴按其承接依据检查，不因画面左右变化就判错。可定向重绘的问题用 warning；纯审美偏好只能 advisory。",
   "不得因为图片没有大段中文技术文字而扣分；长文字由系统确定性叠加。不得要求把 panel 拆成多张独立图片。",
   `当前策略与组合规则：\n${strategyRender.promptSections.strategy}\n${strategyRender.promptSections.renderRules}`,
   `本页 panel 计划：\n${page.panelIds.map((panelId) => panelLine(board, panelId)).join("\n")}`,
   panelAppearancePlan(board, page, shots) ? `【逐格已采用外观】\n${panelAppearancePlan(board, page, shots)}\n按各格指定时刻核对状态；明确的换装或伤势变化不属于不一致，提前出现伤势或误用另一格服装才是问题。` : "",
   `来源 Shot：\n${shots.map((shot) => `${shot.id} | ${shot.shotSize || ""} | ${shot.cameraAngle || ""} | ${shot.visualAction || shot.blocking || ""}`).join("\n")}`,
+  `切镜与状态依据：\n${JSON.stringify(shots.map((shot) => ({ id: shot.id, ...projectShotEditingEvidence(shot) })))}`,
   references.length ? `正式参考顺序：${references.map((item, index) => `输入图${index + 2}=${item.assetName}${item.variantName ? `(${item.variantName})` : ""}`).join("；")}` : "",
   "严格返回 JSON：score(0-100)、verdict(pass/revise)、summary、strengths[]、issues[]。每条 issue 包含 severity(blocking/warning/advisory)、targetShotId、description、suggestion。",
 ].filter(Boolean).join("\n\n");
@@ -1044,12 +1069,14 @@ export const validateStoryboardCompositeBoardContract = ({
       issues.push({ severity: "blocking", code: "COMPOSITE_BOARD_PAGE_PANEL_UNKNOWN", message: `故事板页面 ${page.id} 包含未知 panel。` });
     }
   }
-  const representativePanelIds = listStoryboardShotRepresentativePanels(board).map((panel) => panel.id);
+  const representativePanelIds = (board.visualReferenceMode === "director_board"
+    ? board.panels : listStoryboardShotRepresentativePanels(board)).map((panel) => panel.id);
   if (
     pagePanelIds.length !== representativePanelIds.length
     || representativePanelIds.some((panelId) => !pagePanelIds.includes(panelId))
+    || board.visualReferenceMode === "director_board" && representativePanelIds.some((panelId, index) => pagePanelIds[index] !== panelId)
   ) {
-    issues.push({ severity: "blocking", code: "COMPOSITE_BOARD_PAGE_COVERAGE", message: "视频参考页没有做到每个 Shot 恰好一个代表格。" });
+    issues.push({ severity: "blocking", code: "COMPOSITE_BOARD_PAGE_COVERAGE", message: board.visualReferenceMode === "director_board" ? "联合导演板参考页必须按顺序完整覆盖所有关键状态画格。" : "视频参考页没有做到每个 Shot 恰好一个代表格。" });
   }
   const panelDuration = board.panels.reduce((sum, panel) => sum + Number(panel.durationSeconds || 0), 0);
   const expectedDuration = Number(board.strategyDecision.expectedVideoUnitDurationSeconds || 0);
@@ -1275,4 +1302,18 @@ export const adoptStoryboardBoardVisualTake = ({
     { ...take, status: "adopted" as const, adoptedAt },
   ],
   activeVisualTakeId: take.id,
+});
+
+export const rejectStoryboardBoardVisualTake = ({ page, takeId, reviewer, notes, reviewedAt = Date.now() }: {
+  page: ManualStoryboardBoardVisualPage;
+  takeId: string;
+  reviewer: 'creator' | 'external_agent';
+  notes: string;
+  reviewedAt?: number;
+}): ManualStoryboardBoardVisualPage => ({
+  ...page,
+  activeVisualTakeId: page.activeVisualTakeId === takeId ? undefined : page.activeVisualTakeId,
+  visualTakes: (page.visualTakes || []).map(take => take.id === takeId
+    ? { ...take, status: 'rejected', review: { mode: 'manual', status: 'rejected', reviewer, notes, reviewedAt } }
+    : take),
 });

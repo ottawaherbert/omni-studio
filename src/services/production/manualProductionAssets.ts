@@ -34,6 +34,10 @@ export interface ManualProductionAssetUsageRef {
 }
 
 export interface ManualProductionAssetBoard {
+  referenceUsageNote?: string;
+  characterReferenceLayout?: import('../../types/project').CharacterReferenceLayout;
+  locationView?: import("../../types/project").LocationView;
+  locationViewIssue?: string;
   boardItemId: string;
   assetId: string;
   assetType: "character" | "location" | "prop" | "vehicles";

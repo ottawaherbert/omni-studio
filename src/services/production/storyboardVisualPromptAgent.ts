@@ -50,6 +50,7 @@ export interface StoryboardVisualPromptSourceShot {
   id: string;
   duration?: number;
   motivation?: string;
+  editingNote?: string;
   visualAction?: string;
   microExpression?: string;
   shotSize?: string;
@@ -73,6 +74,7 @@ export const projectStoryboardVisualPromptSourceShot = (shot: StoryboardVisualPr
   id: shot.id,
   duration: shot.duration || 0,
   motivation: shot.motivation || "",
+  editingNote: shot.editingNote || "",
   visualAction: shot.visualAction || "",
   microExpression: shot.microExpression || "",
   shotSize: shot.shotSize || "",

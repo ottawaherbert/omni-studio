@@ -1,14 +1,34 @@
 import { useProjectStore } from "../../clients/stateClient";
+import { useEffect, useState } from "react";
+import toast from "react-hot-toast";
+import { legacyProjectClient } from "../../clients/legacyProjectClient";
+import type { Project } from "../../clients/domainTypes";
 import { FolderOpen, Calendar, Clock } from "lucide-react";
 import { useNavigate } from "react-router-dom";
 import { Card } from "../ui/Card";
 
 export function ProjectList({ onProjectSelect }: { onProjectSelect?: (id: string) => void }) {
-  const { projects, loadProject } = useProjectStore();
+  const { loadProject } = useProjectStore();
+  const [projects, setProjects] = useState<Project[]>([]);
+  const [search,setSearch]=useState('');
+  const visibleProjects=projects.filter(p=>`${p.title||''} ${p.logline||''}`.toLowerCase().includes(search.trim().toLowerCase()));
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState('');
+  const [retry, setRetry] = useState(0);
+  useEffect(() => {
+    let active = true;
+    setLoading(true); setError('');
+    void legacyProjectClient.listProjects().then(items => { if (active) setProjects(items); })
+      .catch(reason => { if (active) setError(reason instanceof Error ? reason.message : '项目读取失败'); })
+      .finally(() => { if (active) setLoading(false); });
+    return () => { active = false; };
+  }, [retry]);
   const navigate = useNavigate();
 
   const handleLoadProject = async (id: string) => {
-    await loadProject(id);
+    try { await loadProject(id); }
+    catch (reason) { toast.error(reason instanceof Error ? reason.message : '项目读取失败'); return; }
+    if (useProjectStore.getState().currentProject?.id !== id) { toast.error('项目尚未读取，请重试'); return; }
     if (onProjectSelect) {
       onProjectSelect(id);
     } else {
@@ -20,10 +40,12 @@ export function ProjectList({ onProjectSelect }: { onProjectSelect?: (id: string
     <div className="flex flex-col">
       <div className="flex justify-between items-center mb-6 shrink-0">
         <h2 className="text-sm font-bold text-text-primary uppercase tracking-widest">所有项目 PROJECTS</h2>
+        <input aria-label="搜索项目" value={search} onChange={e=>setSearch(e.target.value)} placeholder="搜索项目名称或简介" className="w-72 rounded-lg border border-border-soft/30 bg-bg-surface px-3 py-2 text-xs" />
       </div>
 
+      {!loading&&projects.length>0&&!visibleProjects.length&&<p className="py-6 text-sm text-text-muted">没有匹配的项目，请换个关键词。</p>}
       <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-6 pb-20">
-        {projects.map((project) => (
+        {visibleProjects.map((project) => (
           <Card
             key={project.id}
             onClick={() => handleLoadProject(project.id)}
@@ -53,7 +75,9 @@ export function ProjectList({ onProjectSelect }: { onProjectSelect?: (id: string
             </div>
           </Card>
         ))}
-        {projects.length === 0 && (
+        {loading && <p role="status" className="col-span-full text-sm text-text-muted">正在读取项目…</p>}
+        {error && <div role="alert" className="col-span-full text-sm text-text-muted">{error}<button className="ml-3 text-gold" onClick={() => setRetry(n => n + 1)}>重新读取</button></div>}
+        {!loading && !error && projects.length === 0 && (
           <div className="col-span-full py-12 text-center text-text-muted text-sm">
             暂无项目，请先在首页创建
           </div>

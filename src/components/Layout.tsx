@@ -1,4 +1,3 @@
-import { ProductionWorkflowGuide } from "./production/ProductionWorkflowGuide";
 import { Outlet, Link, useLocation, useNavigate } from "react-router-dom";
 import {
   Clapperboard,
@@ -31,6 +30,7 @@ import {
   GitBranch,
   Sparkles,
   UserRound,
+  Box,
 } from "lucide-react";
 import { cn } from "../lib/utils";
 import { useProjectStore, useSettingsStore } from "../clients/stateClient";
@@ -38,15 +38,6 @@ import { lazy, Suspense, useState, useRef, useEffect } from "react";
 import { useTranslation } from "react-i18next";
 import { motion } from "motion/react";
 import SaveConflictModal from "./SaveConflictModal";
-import type { AssistantPageFocus, AssistantProjectRef } from "../clients/domainTypes";
-import {
-  GLOBAL_ASSISTANT_COMMAND_EVENT,
-  openGlobalAssistant,
-  type GlobalAssistantCommand,
-} from "./assistant/assistantEvents";
-
-const GlobalAssistant = lazy(() => import("./assistant/GlobalAssistant")
-  .then((module) => ({ default: module.GlobalAssistant })));
 const GlobalGenerationParamsModal = lazy(() => import("./GlobalGenerationParamsModal"));
 
 export default function Layout() {
@@ -57,11 +48,6 @@ export default function Layout() {
   const [isMobileMenuOpen, setIsMobileMenuOpen] = useState(false);
   const [isSettingsMenuOpen, setIsSettingsMenuOpen] = useState(false);
   const [isProjectGenerationSettingsOpen, setIsProjectGenerationSettingsOpen] = useState(false);
-  const [assistantLaunchRequest, setAssistantLaunchRequest] = useState<{
-    id: number;
-    command?: GlobalAssistantCommand;
-  } | null>(null);
-  const assistantLaunchIdRef = useRef(0);
   const settingsMenuRef = useRef<HTMLDivElement>(null);
   const { t, i18n } = useTranslation();
   
@@ -79,17 +65,6 @@ export default function Layout() {
     return () => document.removeEventListener("mousedown", handleClickOutside);
   }, []);
 
-  useEffect(() => {
-    const handleAssistantCommand = (event: Event) => {
-      assistantLaunchIdRef.current += 1;
-      setAssistantLaunchRequest({
-        id: assistantLaunchIdRef.current,
-        command: (event as CustomEvent<GlobalAssistantCommand | undefined>).detail,
-      });
-    };
-    window.addEventListener(GLOBAL_ASSISTANT_COMMAND_EVENT, handleAssistantCommand);
-    return () => window.removeEventListener(GLOBAL_ASSISTANT_COMMAND_EVENT, handleAssistantCommand);
-  }, []);
 
   useEffect(() => {
     if (isEditingTitle && titleInputRef.current) {
@@ -144,6 +119,7 @@ export default function Layout() {
     { name: "Skill 库", path: "/skills", icon: Wand2 },
   ];
 
+  const isDirectorProjectWorkspace = ['/production/preparation','/production/assets','/production/storyboard','/production/studio'].some(path=>location.pathname.startsWith(path));
   const isDirectorProductionRoute = location.pathname.startsWith("/production");
   const isInteractiveProductionRoute = location.pathname.startsWith("/interactive");
   const productionWorkspaceContext = new URLSearchParams(location.search);
@@ -190,35 +166,6 @@ export default function Layout() {
   const isWritingActive =
     location.pathname.startsWith("/writing") &&
     new URLSearchParams(location.search).has("projectId");
-  const assistantSearch = new URLSearchParams(location.search);
-  const writingProjectId = location.pathname.startsWith("/writing") ? assistantSearch.get("projectId") : null;
-  const isDirectorProjectWorkspace = location.pathname.startsWith("/production/preparation")
-    || location.pathname.startsWith("/production/assets")
-    || location.pathname.startsWith("/production/storyboard")
-    || location.pathname.startsWith("/production/studio");
-  const interactiveExperienceId = location.pathname.match(/\/interactive\/experiences\/([^/]+)/)?.[1];
-  const assistantProjectRef: AssistantProjectRef | undefined = writingProjectId
-    ? { namespace: "writing", projectId: writingProjectId }
-    : isDirectorProjectWorkspace && currentProject
-      ? { namespace: "production", projectId: currentProject.id }
-      : isInteractiveProductionRoute && interactiveExperienceId
-        ? { namespace: "interactive", projectId: interactiveExperienceId }
-        : undefined;
-  const assistantEpisodeId = assistantSearch.get("episodeId")
-    || location.pathname.match(/\/(?:episodes|episode)\/([^/]+)/)?.[1]
-    || (assistantProjectRef && assistantProjectRef.namespace !== "writing" ? activeEpisodeId : undefined)
-    || undefined;
-  const assistantPageFocus: AssistantPageFocus = {
-    module: assistantProjectRef?.namespace || "shared",
-    route: `${location.pathname}${location.search}`,
-    projectRef: assistantProjectRef,
-    episodeId: assistantEpisodeId,
-    sceneId: assistantSearch.get("sceneId") || undefined,
-    shotId: assistantSearch.get("shotId") || undefined,
-    nodeId: assistantSearch.get("nodeId") || undefined,
-    capturedAt: Date.now(),
-  };
-
   const closeMobileMenu = () => setIsMobileMenuOpen(false);
 
   return (
@@ -311,15 +258,6 @@ export default function Layout() {
 
         {/* Bottom Menu Navigation */}
         <div className="w-full flex flex-col items-center gap-4 pb-2">
-          <button
-            type="button"
-            onClick={() => openGlobalAssistant()}
-            className="group relative flex h-10 w-10 items-center justify-center rounded-xl bg-gold text-bg-primary shadow-lg shadow-black/10 transition-transform hover:scale-105"
-            title="全站助手"
-          >
-            <Bot className="h-[18px] w-[18px]" />
-            <span className="pointer-events-none absolute right-full mr-3 whitespace-nowrap border border-border-soft/20 bg-bg-surface px-2.5 py-1.5 text-[10px] font-bold text-text-primary opacity-0 shadow-lg transition-opacity group-hover:opacity-100">全站助手</span>
-          </button>
 
           {/* Theme Toggle Button */}
           <button
@@ -330,6 +268,7 @@ export default function Layout() {
             {theme === 'dark' ? <Sun className="w-4 h-4 text-text-muted hover:text-text-primary" /> : <Moon className="w-4 h-4 text-text-muted hover:text-text-primary" />}
           </button>
 
+          <Link to="/guide" title="使用指南" aria-label="使用指南" className="flex h-9 w-9 items-center justify-center rounded-xl text-text-muted hover:bg-bg-surface-soft hover:text-text-primary"><span className="flex h-4 w-4 items-center justify-center rounded-full border border-current text-xs">?</span></Link>
           {/* Settings Button */}
           <Link
             to="/settings"
@@ -348,7 +287,7 @@ export default function Layout() {
       {/* Main Container Area */}
       <div className="flex-1 h-screen flex flex-col min-w-0 overflow-hidden bg-bg-primary text-text-primary">
         {/* Inner Header for Project Context (only when isProjectRoute is true and we have currentProject) */}
-        {isProjectRoute && !location.pathname.startsWith("/interactive") && projectNavItems.length > 0 && (currentProject || isInteractiveProductionRoute) && (
+        {isProjectRoute && !location.pathname.startsWith("/production/world") && !location.pathname.startsWith("/interactive") && projectNavItems.length > 0 && (currentProject || isInteractiveProductionRoute) && (
           <header className="h-16 bg-bg-primary border-b border-border-soft/10 flex items-center shrink-0 z-40">
             <div className="mx-auto w-full max-w-7xl flex items-center justify-between gap-3 px-4 h-full">
               {/* Left: Project Title & Breadcrumb */}
@@ -391,6 +330,7 @@ export default function Layout() {
 
               {/* Right: Actions */}
               <div className="flex items-center gap-3 justify-end shrink-0">
+                {isDirectorProjectWorkspace && currentProject && <Link to={`/production/world?${new URLSearchParams({ projectId: currentProject.id })}`} className="inline-flex h-8 items-center gap-2 rounded-md border border-border-soft/25 px-2.5 text-[11px] text-text-secondary hover:text-gold" title="高级功能：全剧共用影视城、机位与白模预演"><Box className="h-3.5 w-3.5" />3D 影视城<span className="text-text-muted">高级</span></Link>}
                 {isDirectorProjectWorkspace && currentProject && (
                   <button
                     type="button"
@@ -419,8 +359,6 @@ export default function Layout() {
           </header>
         )}
 
-        {isDirectorProductionRoute && currentProject && <ProductionWorkflowGuide pathname={location.pathname} href={productionWorkspaceHref} />}
-
         {/* Content Page Window */}
         <main data-production-canvas className={`flex-1 overflow-y-auto min-w-0 bg-bg-primary text-text-primary custom-scrollbar ${isDirectorProductionRoute ? "[scrollbar-gutter:stable]" : ""}`}>
           <Outlet />
@@ -442,16 +380,6 @@ export default function Layout() {
           <GlobalGenerationParamsModal
             isOpen
             onClose={() => setIsProjectGenerationSettingsOpen(false)}
-          />
-        </Suspense>
-      )}
-      {assistantLaunchRequest && (
-        <Suspense fallback={null}>
-          <GlobalAssistant
-            projectRef={assistantProjectRef}
-            projectTitle={assistantProjectRef ? (assistantProjectRef.namespace === "writing" ? "剧本项目" : currentProject?.title) : undefined}
-            pageFocus={assistantPageFocus}
-            launchRequest={assistantLaunchRequest}
           />
         </Suspense>
       )}

@@ -1,4 +1,4 @@
-export const OPERATOR_HANDBOOK_VERSION = "2026-09-20.operator-v48";
+export const OPERATOR_HANDBOOK_VERSION = "2026-11-09.operator-v71";
 
 export type OperatorProvider = "codex" | "claude_desktop" | "cursor" | "chatgpt_desktop" | "other";
 
@@ -207,8 +207,10 @@ export interface OperatorProjectContext {
     logline?: string;
     coreConflict?: string;
     seasonArc?: string;
+    productionWorkingAgreement?: string;
   };
   productionState: {
+    collaboration?: Array<{sceneId:string;episodeId:string;workRecords:import('../../../packages/domain/src/productionCollaboration').ProductionWorkRecord[];notices:import('../../../packages/domain/src/productionCollaboration').ProductionObservation[];nextActions:Array<{scopeKey:string;action:string;description:string}>}>;
     currentWorkflow?: string;
     currentStage?: string;
     completedStages: string[];

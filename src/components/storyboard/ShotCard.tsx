@@ -42,6 +42,8 @@ const takeHasImage = (take: NonNullable<Shot['takes']>[number]) => Boolean(take.
 
 interface ShotCardProps {
   shot: Shot;
+  compact?: boolean;
+  previewFallback?: React.ReactNode;
   index: number;
   activeScene: Scene;
   activeEpisodeId: string;
@@ -63,6 +65,8 @@ interface ShotCardProps {
 
 export const ShotCard: React.FC<ShotCardProps> = ({
   shot,
+  compact = false,
+  previewFallback,
   index,
   activeScene,
   activeEpisodeId,
@@ -81,11 +85,26 @@ export const ShotCard: React.FC<ShotCardProps> = ({
   batchSelected = false,
   onToggleBatchSelection,
 }) => {
+  const currentProject = useProjectStore(state => state.currentProject);
+  const draftKey = `shot-author-draft:${currentProject?.id}:${activeEpisodeId}:${activeScene.id}:${shot.id}`;
+  const [restoredDraft] = useState<{ base: Shot; draft: Partial<Shot> } | null>(() => {
+    if (!compact) return null;
+    try { const value = JSON.parse(sessionStorage.getItem(draftKey) || 'null'); return value?.base?.id === shot.id && value?.draft?.id === shot.id ? value : null; } catch { return null; }
+  });
   const [isDeleting, setIsDeleting] = useState(false);
-  const [isEditing, setIsEditing] = useState(false);
+  const [isEditing, setIsEditing] = useState(!!restoredDraft);
   const [isSaving, setIsSaving] = useState(false);
-  const [editingData, setEditingData] = useState<Partial<Shot>>({});
-  const originalEditShot = useRef<Shot>(shot);
+  const [editingData, setEditingData] = useState<Partial<Shot>>(restoredDraft?.draft || {});
+  const originalEditShot = useRef<Shot>(restoredDraft?.base || shot);
+  useEffect(() => {
+    if (!compact) return;
+    try { if (isEditing) sessionStorage.setItem(draftKey, JSON.stringify({ base: originalEditShot.current, draft: editingData })); else sessionStorage.removeItem(draftKey); } catch { /* Storage unavailable; keep the visible draft. */ }
+  }, [compact, draftKey, isEditing, editingData]);
+  useEffect(() => {
+    if (!compact || !isEditing) return;
+    const prevent = (event: BeforeUnloadEvent) => { event.preventDefault(); event.returnValue = ''; };
+    window.addEventListener('beforeunload', prevent); return () => window.removeEventListener('beforeunload', prevent);
+  }, [compact, isEditing]);
   const [isSpatialModalOpen, setIsSpatialModalOpen] = useState(false);
   const [isFullscreen, setIsFullscreen] = useState(false);
   const [isUploadingImage, setIsUploadingImage] = useState(false);
@@ -95,7 +114,6 @@ export const ShotCard: React.FC<ShotCardProps> = ({
   const fullscreenInfoViewportRef = useRef<HTMLDivElement>(null);
   const fullscreenInfoContentRef = useRef<HTMLDivElement>(null);
   const imageUploadInputRef = useRef<HTMLInputElement>(null);
-  const currentProject = useProjectStore(state => state.currentProject);
   const clearEntities = useSpatialStore(state => state.clearEntities);
   const addEntity = useSpatialStore(state => state.addEntity);
   const imageTakes = (shot.takes || []).filter(takeHasImage);
@@ -462,7 +480,7 @@ export const ShotCard: React.FC<ShotCardProps> = ({
         isInteractiveLoop 
           ? 'border-purple-500/30 shadow-purple-900/5' 
           : 'border-border-soft/20 hover:border-border-soft/40'
-      } ${selected ? 'border-gold/40 ring-1 ring-inset ring-gold/30' : ''} ${batchSelected ? 'border-cyan-500/70 ring-2 ring-inset ring-cyan-500/35' : ''} ${isFullscreen ? 'flex h-full w-full flex-col rounded-lg md:flex-row' : 'flex h-[460px] flex-col rounded-2xl'} overflow-hidden transition-all group relative shadow-sm`}
+      } ${selected ? 'border-gold/40 ring-1 ring-inset ring-gold/30' : ''} ${batchSelected ? 'border-cyan-500/70 ring-2 ring-inset ring-cyan-500/35' : ''} ${isFullscreen ? 'flex h-full w-full flex-col rounded-lg md:flex-row' : compact ? 'flex min-h-[420px] flex-col rounded-md' : 'flex h-[460px] flex-col rounded-2xl'} overflow-hidden transition-all group relative shadow-sm`}
     >
       {/* 顶部画面预览区（去纯黑，柔和背景） */}
       <div className={`${isFullscreen ? 'h-[46%] w-full border-b md:h-full md:w-[52%] md:border-r md:border-b-0' : 'h-48 w-full border-b'} bg-bg-surface-soft relative flex items-center justify-center overflow-hidden shrink-0 border-border-soft/10`}>
@@ -474,7 +492,7 @@ export const ShotCard: React.FC<ShotCardProps> = ({
             referrerPolicy="no-referrer"
           />
         ) : (
-          <div className="flex flex-col items-center gap-2 text-text-muted/40">
+          previewFallback ? <div className="h-full w-full">{previewFallback}<span className="absolute bottom-3 left-3 rounded bg-bg-surface/95 px-2 py-1 text-[10px] text-text-secondary">宫格代表画面 · 请核对候选</span></div> : <div className="flex flex-col items-center gap-2 text-text-muted/40">
             <Camera className="w-9 h-9 stroke-1" />
             <span className="text-[10px] font-mono tracking-widest uppercase">等待生成画面</span>
           </div>
@@ -631,7 +649,7 @@ export const ShotCard: React.FC<ShotCardProps> = ({
       <div ref={fullscreenInfoViewportRef} className="flex min-h-0 flex-1 flex-col gap-3 overflow-hidden p-4">
         <div
           ref={fullscreenInfoContentRef}
-          className={`flex-1 min-h-0 pr-1 ${isFullscreen && !isEditing ? 'grid grid-cols-1 content-start gap-2 overflow-visible xl:grid-cols-2' : 'space-y-3 overflow-y-auto custom-scrollbar'}`}
+          className={`flex-1 min-h-0 pr-1 ${isFullscreen && !isEditing ? 'grid grid-cols-1 content-start gap-2 overflow-visible xl:grid-cols-2' : compact ? 'space-y-3 overflow-visible' : 'space-y-3 overflow-y-auto custom-scrollbar'}`}
           style={isFullscreen && !isEditing ? {
             transform: `scale(${fullscreenInfoScale})`,
             transformOrigin: 'top left',
@@ -816,7 +834,7 @@ export const ShotCard: React.FC<ShotCardProps> = ({
                 </div>
               )}
 
-              {/* 提示词 (Prompts) */}
+              <details open={!compact || isFullscreen}><summary className={compact && !isFullscreen ? "cursor-pointer text-xs text-text-secondary" : "hidden"}>提示词与生成资料</summary>
               <div className="space-y-2 rounded-lg border border-border-soft/15 bg-bg-surface/40 p-2.5">
                 <div>
                   <div className="mb-1 flex items-center justify-between gap-2">
@@ -871,6 +889,7 @@ export const ShotCard: React.FC<ShotCardProps> = ({
                   ))}
                 </div>
               )}
+              </details>
             </>
           )}
         </div>
@@ -1007,7 +1026,7 @@ export const ShotCard: React.FC<ShotCardProps> = ({
 
       </div>
 
-      {currentProject && <div className="shrink-0 px-3 pb-2"><ProductionCreativeControls project={currentProject} episode={useProjectStore.getState().activeEpisode || currentProject.episodes.find(item => item.id === activeEpisodeId)} scene={activeScene} shot={shot} compact /></div>}
+      {currentProject && <details open={!compact} className="shrink-0 px-3 pb-2"><summary className={compact ? "cursor-pointer text-xs text-text-muted" : "hidden"}>本镜导演与画风</summary><div className="mt-2"><ProductionCreativeControls project={currentProject} episode={useProjectStore.getState().activeEpisode || currentProject.episodes.find(item => item.id === activeEpisodeId)} scene={activeScene} shot={shot} compact /></div></details>}
 
       <SpatialModal
         isOpen={isSpatialModalOpen}

@@ -26,6 +26,15 @@ const handbookSource = read("doc/design.md");
 
 assert.equal(capabilityManifest.handbookVersion, OPERATOR_HANDBOOK_VERSION);
 assert.equal(extractHandbookVersion(handbookSource), OPERATOR_HANDBOOK_VERSION);
+assert.deepEqual(capabilityManifest.productionQuality.stages, [
+  'project_plan', 'scene_plan', 'shot_plan', 'preparation', 'visuals', 'segments', 'scene_cut', 'episode_cut',
+]);
+assert.equal(capabilityManifest.productionQuality.basePath, '/api/operator/quality');
+assert.ok(capabilityManifest.productionQuality.commands.includes('POST /deliveries'));
+assert.match(capabilityManifest.productionQuality.inspection, /Every criterion needs an explicit decision and actual observation/);
+assert.match(capabilityManifest.productionQuality.delivery, /without re-encoding/);
+assert.match(read('doc/agent-guide.md'), /production-quality-workflow.md/);
+
 
 for (const relativePath of OPERATOR_CORE_DOCUMENTS) {
   assert.equal(fs.existsSync(path.join(rootDir, relativePath)), true, `${relativePath} must exist`);

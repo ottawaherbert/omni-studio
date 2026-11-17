@@ -1,46 +1,44 @@
-import React, { useEffect, useState } from 'react';
-import { LocalSpeechSetup } from '../components/LocalSpeechSetup';
+import { Cpu,Network,Plus,RefreshCw,Settings2,Trash2,Wand2,X } from 'lucide-react';
 import { motion } from 'motion/react';
-import { RefreshCw, Wand2, Settings2, Cpu, Network, Plus, Trash2, X } from 'lucide-react';
+import { useEffect,useState } from 'react';
 import toast from 'react-hot-toast';
-import { useSettingsStore } from '../clients/stateClient';
-import { useAIConfigStore, AIChannel, AIModel } from '../clients/stateClient';
-import { useGlobalStore } from '../clients/stateClient';
-import SkillForge from '../components/SkillForge';
 import { aiConfigClient } from '../clients/aiConfigClient';
-import { comfyUIClient, type ComfyUIConnectionStatus } from '../clients/comfyUIClient';
-import { systemClient } from '../clients/systemClient';
+import { comfyUIClient,type ComfyUIConnectionStatus } from '../clients/comfyUIClient';
 import {
-  channelPresetForType,
-  channelPresets,
-  COMFYUI_MINIMAX_H3_REFERENCE_DEFAULT_SETTINGS,
-  COMFYUI_MINIMAX_H3_REFERENCE_WORKFLOW_KIND,
-  KIE_GPT_IMAGE_2_DEFAULT_SETTINGS,
-  KIE_GPT_IMAGE_2_ADAPTER_ID,
-  KIE_GPT_IMAGE_2_FAMILY_ID,
-  KIE_GPT_IMAGE_2_RESOLUTIONS,
-  KIE_GROK_IMAGE_ADAPTER_ID,
-  KIE_GROK_IMAGE_FAMILY_ID,
-  MINIMAX_H3_MODEL_ID,
-  MINIMAX_H3_VIDEO_DEFAULT_SETTINGS,
-  KIE_GROK_VIDEO_1_5_PREVIEW_MODEL_ID,
-  KIE_GROK_VIDEO_DEFAULT_SETTINGS,
-  KIE_GROK_VIDEO_MAX_DURATION_SECONDS,
-  KIE_GROK_VIDEO_MIN_DURATION_SECONDS,
-  KIE_GROK_VIDEO_RESOLUTIONS,
-  REASONING_EFFORT_OPTIONS,
-  taskCapabilityRequirements,
-  type ChannelType,
-  VIDEO_MODEL_ADAPTER_OPTIONS,
-  isKieGrokImageModelId,
-  isKieGptImage2ModelId,
-  isKieGrokVideoModelId,
-  isOpenAICompatibleTextChannelType,
-} from '../config/aiConfigDefaults';
-import {
-  imageModelCapabilitySummary,
-  resolveImageModelCapabilities,
+imageModelCapabilitySummary,
+resolveImageModelCapabilities,
 } from '../clients/productionStudioWorkflowClient';
+import { AIChannel,AIModel,useAIConfigStore,useGlobalStore,useSettingsStore } from '../clients/stateClient';
+import { systemClient } from '../clients/systemClient';
+import { ComfyGatewaySettings } from '../components/ComfyGatewaySettings';
+import { LocalSpeechSetup } from '../components/LocalSpeechSetup';
+import SkillForge from '../components/SkillForge';
+import {
+channelPresetForType,
+channelPresets,
+COMFYUI_MINIMAX_H3_REFERENCE_DEFAULT_SETTINGS,
+COMFYUI_MINIMAX_H3_REFERENCE_WORKFLOW_KIND,
+isKieGptImage2ModelId,
+isKieGrokImageModelId,
+isKieGrokVideoModelId,
+isOpenAICompatibleTextChannelType,
+KIE_GPT_IMAGE_2_ADAPTER_ID,
+KIE_GPT_IMAGE_2_DEFAULT_SETTINGS,
+KIE_GPT_IMAGE_2_FAMILY_ID,
+KIE_GPT_IMAGE_2_RESOLUTIONS,
+KIE_GROK_IMAGE_ADAPTER_ID,
+KIE_GROK_IMAGE_FAMILY_ID,
+KIE_GROK_VIDEO_DEFAULT_SETTINGS,
+KIE_GROK_VIDEO_MAX_DURATION_SECONDS,
+KIE_GROK_VIDEO_MIN_DURATION_SECONDS,
+KIE_GROK_VIDEO_RESOLUTIONS,
+MINIMAX_H3_MODEL_ID,
+MINIMAX_H3_VIDEO_DEFAULT_SETTINGS,
+REASONING_EFFORT_OPTIONS,
+taskCapabilityRequirements,
+VIDEO_MODEL_ADAPTER_OPTIONS,
+type ChannelType
+} from '../config/aiConfigDefaults';
 
 const imageModelRouteLabel = (model: AIModel, channel?: AIChannel) => {
   if (model.managedBy === 'comfyui_h3_workflow') return `${model.alias} · 本地 ComfyUI 工作流`;
@@ -58,12 +56,6 @@ export default function Settings() {
   const {
     isTestMode,
     setIsTestMode,
-    isFastMode,
-    setIsFastMode,
-    isAutoProductionModeEnabled,
-    setIsAutoProductionModeEnabled,
-    isStoryChapterGateEnabled,
-    setIsStoryChapterGateEnabled,
   } = useSettingsStore();
 
   const menuGroups = [
@@ -478,54 +470,9 @@ export default function Settings() {
 
                   <div className="flex items-center justify-between group">
                     <div className="max-w-md">
-                      <h3 className="text-sm font-medium text-gray-900 dark:text-neutral-200 mb-1">快速模式 (Fast Mode)</h3>
-                      <p className="text-xs text-gray-500 dark:text-neutral-500 leading-relaxed">
-                        隐藏复杂的集数管理，使用扁平化的大纲板进行创作，适合快速灵感捕捉。
-                      </p>
-                    </div>
-                    <button 
-                      onClick={() => setIsFastMode(!isFastMode)}
-                      className={`relative w-10 h-5 rounded-full transition-colors duration-200 focus:outline-none ${isFastMode ? 'bg-violet-600' : 'bg-gray-200 dark:bg-neutral-800'}`}
-                    >
-                      <div className={`absolute top-1 left-1 w-3 h-3 rounded-full bg-white transition-transform duration-200 ${isFastMode ? 'translate-x-5' : 'translate-x-0'}`} />
-                    </button>
-                  </div>
-
-                  <div className="flex items-center justify-between group">
-                    <div className="max-w-md">
-                      <h3 className="text-sm font-medium text-gray-900 dark:text-neutral-200 mb-1">自动制片模式实验开关</h3>
-                      <p className="text-xs text-gray-500 dark:text-neutral-500 leading-relaxed">
-                        控制创建项目页是否显示 Auto Production 入口。关闭后不会删除已有 ProductionRun，只是不再从新项目入口启动。
-                      </p>
-                    </div>
-                    <button
-                      onClick={() => setIsAutoProductionModeEnabled(!isAutoProductionModeEnabled)}
-                      className={`relative w-10 h-5 rounded-full transition-colors duration-200 focus:outline-none ${isAutoProductionModeEnabled ? 'bg-violet-600' : 'bg-gray-200 dark:bg-neutral-800'}`}
-                    >
-                      <div className={`absolute top-1 left-1 w-3 h-3 rounded-full bg-white transition-transform duration-200 ${isAutoProductionModeEnabled ? 'translate-x-5' : 'translate-x-0'}`} />
-                    </button>
-                  </div>
-
-                  <div className="flex items-center justify-between group">
-                    <div className="max-w-md">
-                      <h3 className="text-sm font-medium text-gray-900 dark:text-neutral-200 mb-1">优先准备故事材料</h3>
-                      <p className="text-xs text-gray-500 dark:text-neutral-500 leading-relaxed">
-                        开启后优先推荐故事章。不影响手动选择写作任务、分场或正文，质量检查结果仅供参考。
-                      </p>
-                    </div>
-                    <button
-                      onClick={() => setIsStoryChapterGateEnabled(!isStoryChapterGateEnabled)}
-                      className={`relative w-10 h-5 rounded-full transition-colors duration-200 focus:outline-none ${isStoryChapterGateEnabled ? 'bg-violet-600' : 'bg-gray-200 dark:bg-neutral-800'}`}
-                    >
-                      <div className={`absolute top-1 left-1 w-3 h-3 rounded-full bg-white transition-transform duration-200 ${isStoryChapterGateEnabled ? 'translate-x-5' : 'translate-x-0'}`} />
-                    </button>
-                  </div>
-
-                  <div className="flex items-center justify-between group">
-                    <div className="max-w-md">
                       <h3 className="text-sm font-medium text-gray-900 dark:text-neutral-200 mb-1">未使用的素材</h3>
                       <p className="text-xs text-gray-500 dark:text-neutral-500 leading-relaxed">
-                        查看未被项目使用的素材。清理后保留在回收区；最近 24 小时的文件不会移动。
+                        查看未被作品记录引用的素材。移入回收区可恢复，暂不释放磁盘；最近 24 小时的文件、3D 作品与续拍素材不在清理范围。
                       </p>
                     </div>
                     <button 
@@ -598,7 +545,7 @@ export default function Settings() {
                     };
                     const displayName = taskNames[task] || task;
                     const requiredCapability = taskCapabilityRequirements[task as keyof typeof taskCapabilityRequirements];
-                    const compatibleModels = models.filter((model) => model.capabilities.includes(requiredCapability));
+                    const compatibleModels = models.filter((model) => model.capabilities.includes(requiredCapability) && channels.some(c => c.id === model.channelId && c.enabled !== false) && !comfyWorkflows.some(w => w.id === model.comfyWorkflowId && w.enabled === false));
                     const selectedModel = compatibleModels.find((model) => model.id === modelId);
                     const selectedChannel = selectedModel ? channels.find((channel) => channel.id === selectedModel.channelId) : undefined;
                     const imageCapabilities = task === 'imageGen' && selectedModel && selectedChannel
@@ -974,7 +921,10 @@ export default function Settings() {
 
           {activeTab === 'comfyui' && (
             <div className="space-y-10 pb-8">
-              <div>
+              <ComfyGatewaySettings />
+              <details className="border-t border-border-soft pt-6">
+                <summary className="cursor-pointer text-sm font-medium">旧版本地 H3 与图片工作流兼容配置</summary>
+              <div className="mt-6">
                 <h2 className="text-lg font-medium text-gray-900 dark:text-white">本地视频工作流</h2>
                 <p className="mt-2 max-w-2xl text-xs leading-5 text-gray-500 dark:text-neutral-400">
                   连接局域网里的 ComfyUI。保存后会创建一个可在“视频生成”路由中选择的本地 MiniMax H3 模型。
@@ -1067,7 +1017,7 @@ export default function Settings() {
                       新建图片工作流
                     </button>
                   </div>
-                  {comfyWorkflows.filter((workflow) => workflow.kind !== COMFYUI_MINIMAX_H3_REFERENCE_WORKFLOW_KIND).map((workflow) => (
+                  {comfyWorkflows.filter((workflow) => workflow.kind !== COMFYUI_MINIMAX_H3_REFERENCE_WORKFLOW_KIND && workflow.kind !== 'api_graph').map((workflow) => (
                     <div key={workflow.id} className="space-y-6 border-t border-gray-100 pt-6 dark:border-neutral-800/60">
                       <div className="flex items-center justify-between gap-4">
                         <input
@@ -1148,6 +1098,7 @@ export default function Settings() {
                     </div>
                   ))}
                 </div>
+              </details>
               </details>
             </div>
           )}
@@ -1329,6 +1280,7 @@ export default function Settings() {
                   className="w-full bg-transparent border-b border-gray-100 dark:border-neutral-800 text-sm py-2 focus:outline-none focus:border-violet-500 transition-colors"
                 />
               </div>
+              {modelFormSupportsReasoning && <div className="space-y-2"><label htmlFor="model-thinking" className="text-[10px] font-bold text-gray-400">思考模式</label><select id="model-thinking" value={modelForm.enableThinking===undefined?'default':String(modelForm.enableThinking)} onChange={e=>setModelForm({...modelForm,enableThinking:e.target.value==='default'?undefined:e.target.value==='true'})} className="w-full border-b border-gray-100 bg-transparent py-2 text-sm dark:border-neutral-800"><option value="default">跟随服务默认</option><option value="true">开启思考</option><option value="false">关闭思考，直接输出</option></select><p className="text-[11px] leading-5 text-gray-400">用于支持思考开关的兼容服务（如 Qwen/vLLM）。不支持时保持默认；关闭可避免思考占满正文额度。</p></div>}
               {modelFormSupportsReasoning && (
                 <div className="space-y-2">
                   <label className="text-[10px] font-bold text-gray-400 dark:text-neutral-600 uppercase tracking-widest">思考强度</label>
@@ -1349,6 +1301,7 @@ export default function Settings() {
                   <p className="text-[11px] leading-5 text-gray-400">仅在该模型明确支持时启用；请求将使用 chat_template_kwargs.reasoning_effort。</p>
                 </div>
               )}
+              {modelForm.capabilities?.includes('text')&&<div className="space-y-2"><label htmlFor="model-max-output" className="text-[10px] font-bold text-gray-400">最大输出 Token</label><input id="model-max-output" type="number" min={128} max={131072} step={128} value={modelForm.maxOutputTokens||''} onChange={e=>setModelForm({...modelForm,maxOutputTokens:e.target.value?Number(e.target.value):undefined})} placeholder="留空跟随服务默认" className="w-full border-b border-gray-100 bg-transparent py-2 text-sm dark:border-neutral-800"/><p className="text-[11px] leading-5 text-gray-400">须在模型支持范围内。较长的世界布局需要足够正文额度，超出服务限制会被拒绝。</p></div>}
               {modelForm.capabilities?.includes('text') && (
                 <div className="space-y-2">
                   <label htmlFor="text-output-mode" className="text-[10px] font-bold text-gray-400 dark:text-neutral-600 uppercase tracking-widest">结构化返回</label>
@@ -1477,6 +1430,8 @@ export default function Settings() {
                       capabilities: (modelFormKieGptImage2 || modelFormKieGrokImage) ? ['image'] : modelForm.capabilities,
                       apiKeyOverride: modelForm.apiKeyOverride?.trim() || '',
                       textOutputMode: modelForm.textOutputMode || 'auto',
+                      enableThinking:modelFormSupportsReasoning?modelForm.enableThinking:undefined,
+                      maxOutputTokens:modelForm.maxOutputTokens,
                       reasoningEffort: modelFormSupportsReasoning
                         ? modelForm.reasoningEffort || 'provider_default'
                         : 'provider_default',

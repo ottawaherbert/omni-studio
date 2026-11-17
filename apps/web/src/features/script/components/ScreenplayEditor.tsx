@@ -250,7 +250,7 @@ export function ScreenplayEditor({
                   onClick={onDiscuss}
                   className="px-4 py-2 rounded-xl text-xs font-medium bg-bg-surface-soft hover:bg-bg-surface-hover text-text-secondary hover:text-text-primary transition-all cursor-pointer shadow-2xs"
                 >
-                  先讨论本场
+                  分析本场
                 </button>
               </div>
             </div>

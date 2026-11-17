@@ -2,6 +2,7 @@ import type { KeyboardEvent } from "react";
 import { ArrowRight, Clapperboard, Film, Loader2, LoaderCircle, Smartphone, Trash2, Tv } from "lucide-react";
 
 import type { Project, ProjectType } from "../../clients/domainTypes";
+import { isInteractiveProductionProject } from '../../features/production/productionProjectIdentity';
 
 const typeLabels: Record<ProjectType, string> = {
   "single-work": "单部作品",
@@ -38,7 +39,7 @@ export const ProductionProjectCard = ({
   compact?: boolean;
 }) => {
   const Icon = formatIcon(project.type);
-  const sourceLabel = project.productionSourceSnapshot?.sourceType === "writing_export" ? "系统剧本" : "魔法导入";
+  const sourceLabel = isInteractiveProductionProject(project) ? "互动制片" : project.productionSourceSnapshot?.sourceType === "writing_export" ? "系统剧本" : "魔法导入";
   const unitCount = Array.isArray(project.episodes) ? project.episodes.length : project.targetEpisodeCount || 0;
   const onKeyDown = (event: KeyboardEvent<HTMLElement>) => {
     if (event.key !== "Enter" && event.key !== " ") return;

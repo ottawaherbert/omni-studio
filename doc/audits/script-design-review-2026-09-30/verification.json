@@ -1,0 +1,69 @@
+{
+  "date": "2026-09-30",
+  "baselineCommit": "3a83565c",
+  "environment": "内存或隔离临时SQLite；真实HTTP worker仅监听本机；模型为机械协议回填，未调用外部provider；真实数据库和作品未修改",
+  "runs": [
+    {
+      "label": "最终版本剧本全套",
+      "command": "node --import tsx --test --test-concurrency=2 tests/script*.test.ts tests/script-goal-progress.test.tsx",
+      "result": {
+        "tests": 547,
+        "pass": 547,
+        "fail": 0,
+        "cancelled": 0,
+        "skipped": 0,
+        "todo": 0,
+        "duration_ms": 263604.438917
+      }
+    },
+    {
+      "label": "最终版本Agent兼容",
+      "command": "node --import tsx --test --test-concurrency=2 tests/agent-script-contract.test.ts tests/agent-script-http.test.ts tests/agent-conversation-context-review.test.ts tests/agent-goal-review.test.ts",
+      "result": {
+        "tests": 22,
+        "pass": 22,
+        "fail": 0,
+        "cancelled": 0,
+        "skipped": 0,
+        "todo": 0,
+        "duration_ms": 37087.476333
+      }
+    }
+  ],
+  "resolvedFailure": {
+    "initialRun": {
+      "tests": 22,
+      "pass": 21,
+      "fail": 1,
+      "cancelled": 0,
+      "skipped": 0,
+      "todo": 0,
+      "duration_ms": 41160.215291
+    },
+    "case": "real worker respects pause and cancellation after a durable return",
+    "failure": "POST /api/scripts returned database is locked",
+    "reproduction": "两个真实WAL连接稳定复现SQLITE_BUSY及SQLITE_BUSY_SNAPSHOT；不是通过重跑掩盖失败",
+    "fix": "saveDocument、transition、publishAgentRun三处写事务改为immediate；6项双连接回归包含在最终547项中"
+  },
+  "finalChecks": {
+    "typeScript": "npm run lint; exit 0",
+    "build": "npm run build; exit 0; 16.36s; existing >500 kB chunk warning",
+    "format": "git -c core.fsmonitor=false diff --check; exit 0"
+  },
+  "browser": {
+    "url": "http://127.0.0.1:3014/writing",
+    "projectId": "script_4a87ecde-243a-4d39-ad06-659719453e54",
+    "verified": [
+      "项目总纲归属与OUTLINE停点",
+      "零场景单元分批规划",
+      "保存v2→v3后实际创建任务",
+      "部分批次采用v3→v4，只创建返回的第二集",
+      "刷新后历史显示第1、3集未返回"
+    ]
+  },
+  "limits": [
+    "未执行真实模型长片、多集及短剧创作质量试用",
+    "文字选区走精确单次候选；连续审阅限整单元或幕/段落"
+  ],
+  "note": "用例轮次有重叠，不相加报独立测试总数。最终两套测试均在全部业务修复完成后运行。"
+}

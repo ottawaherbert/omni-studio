@@ -111,7 +111,7 @@ assert.equal(studio.includes('摄影棚尚未解锁'), false, 'Missing media ref
 assert.ok(studio.includes('媒体生成暂不可用'), 'Studio should scope missing-reference guidance to media generation');
 assert.ok(/productionPreparationGate\.readyForShotPlanning\s*&& productionPreparationGate\.assetPackConfirmed\s*&& productionPreparationGate\.coordinationConfirmed\s*\? "媒体生成暂不可用"/.test(studio), 'Studio should scope confirmed-preparation warnings to media generation rather than mark preparation incomplete');
 assert.ok(sourceOverview.includes('interactiveProductionPrepProfile'), 'Shared preparation overview must expose interactive planning context without a second production editor');
-assert.ok(read('src/components/storyboard/StoryboardHeader.tsx').includes('返回互动制片'), 'Shared storyboard must expose a contextual return action only for Interactive handoffs');
+assert.ok(read('src/pages/Storyboard.tsx').includes('返回互动制片'), 'Shared storyboard must expose a contextual return action only for Interactive handoffs');
 assert.ok(sourceOverview.includes('互动路径约束 · 本剧本单元'), 'Shared preparation overview must explain the node path and state constraints for the active source unit');
 assert.ok(sourceOverview.includes('interactivePlanningContext'), 'Shared preparation scene planning must inject the active interactive contract into the prompt variables');
 assert.ok(sourceOverview.includes('candidateHasCompleteInteractiveCoverage'), 'Interactive scene-plan adoption must reject candidates that drop a locked node');

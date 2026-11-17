@@ -1,5 +1,4 @@
 export type * from "../../../../packages/domain/src/game";
-export type * from "../../../../packages/domain/src/assistant";
 export type * from "../../../../packages/domain/src/production";
 export type * from "../../../../packages/domain/src/project";
 export type * from "../../../../packages/domain/src/skill";

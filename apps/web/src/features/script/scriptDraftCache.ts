@@ -1,6 +1,6 @@
 import { parseScriptProject, type ScriptProject } from '../../../../../packages/script/src/schema';
 import { sha256 } from 'js-sha256';
-import { stableJson } from '../../../../../packages/agent-core/src/identity';
+import { stableJson } from '../../../../../packages/domain/src/contentIdentity';
 
 export type ScriptDraftSnapshot = { key: string; id: string; project: ScriptProject; updatedAt: number; raw: string };
 export class ScriptRecoveryConflict extends Error {}

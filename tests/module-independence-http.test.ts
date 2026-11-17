@@ -121,6 +121,9 @@ test('three modules exchange fixed content without writing back or silently foll
   assert.deepEqual(dbHelpers.getProjectById(imported.id), productionBefore, 'the old whole-unit target and its user scene remain untouched');
   assert.deepEqual(scripts.getProject(author.id), author, 'preparing interactive production never edits the author manuscript');
   const scopedProject = dbHelpers.getProjectById(target.productionProjectId)!;
+  const catalog = await request('/api/projects');
+  assert.equal(catalog.find((item: any) => item.id === target.productionProjectId)?.interactiveExperienceId, experienceId,
+    'lightweight catalogs must identify independent interactive targets without exposing their full profile');
   assert.equal(scopedProject.productionSourceSnapshot?.sourceType, 'writing_export');
   assert.equal(scopedProject.productionSourceSnapshot?.package.sourceRevision, author.revision);
   assert.deepEqual(scopedProject.productionSourceSnapshot?.package.units[0].scenes?.map(scene => scene.id), [fixedScene.sceneId]);

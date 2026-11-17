@@ -38,6 +38,7 @@ export const assetDesignContext = (project: Project, owner: Character | Asset) =
         && (block.id !== 'visual.treatment' || Object.values(projection.treatment).some(value => value?.length))).map(block => block.content).join('\n\n'),
     existingVisualDescriptionUsage: '以下为已保存的外观参考，可能含旧画风。保留具体身份和造型特征；其中的画风表述不作为本次画风要求，也不写回新外观。',
     existingVisualDescription: assetVisualDescription(owner),
+    productionUse: owner.productionUse,
     referenceImageProvided: Boolean(assetIdentityReference(owner)),
     sourceFacts: owner.visualFacts || [],
     ...(directorReference ? {

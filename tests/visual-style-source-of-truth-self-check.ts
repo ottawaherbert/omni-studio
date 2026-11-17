@@ -103,24 +103,15 @@ assert.match(
   /CREATIVE_ONLY_MAGENTA/,
 );
 
-const bibleHookSource = fs.readFileSync(new URL("../src/hooks/useBibleAI.ts", import.meta.url), "utf8");
-const assetViewSource = fs.readFileSync(new URL("../src/components/bible/AssetDetailView.tsx", import.meta.url), "utf8");
+const sourceMedia = fs.readFileSync(new URL("../src/components/production/AssetSourceMedia.tsx", import.meta.url), "utf8");
+assert.match(sourceMedia, /buildImageVisualStyleProjection\(\{ project, intent: 'asset_identity'/);
+assert.match(sourceMedia, /visualStyle: style.instruction/);
 const storyboardHookSource = fs.readFileSync(new URL("../src/hooks/useStoryboardAI.ts", import.meta.url), "utf8");
 const legacyVisualPromptSource = fs.readFileSync(new URL("../src/config/prompts/visuals.ts", import.meta.url), "utf8");
 assert.doesNotMatch(
   legacyVisualPromptSource,
   /character turnaround sheet, concept art|cinematic lighting, photorealistic detail/i,
   "legacy prompt helpers must not force live-action or concept-art rendering over the declared project medium",
-);
-assert.equal(
-  (bibleHookSource.match(/visualStyle: resolveCreativeVisionVisualFallback\(latestProject\)/g) || []).length,
-  5,
-  "all Bible image prompt entry points must resolve the canonical style source before composing promptCore",
-);
-assert.equal(
-  (assetViewSource.match(/visualStyle: resolveCreativeVisionVisualFallback\(type === 'project' \? currentProject : undefined\)/g) || []).length,
-  2,
-  "base and variant image prompts must share the canonical style-source resolver",
 );
 assert.equal(
   (storyboardHookSource.match(/resolveCreativeVisionVisualFallback\(currentProject\)/g) || []).length,

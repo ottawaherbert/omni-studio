@@ -74,7 +74,8 @@ try {
  episode.creativeDirection={visual:{mode:'adjust',stylePrompt:'赛博朋克配色'}};
  episode.scenes[0].shots[0].creativeDirection={visual:{mode:'replace',stylePrompt:'黑白漫画风格'}};
  project.characters[0].creativeDirection={visual:{mode:'replace',stylePrompt:'卡通风格'}};
- await request('/api/projects',project);
+ project.episodes[0].productionRevision=(await request(`/api/projects/${project.id}/episodes/${episode.id}`)).productionRevision;
+ await request(`/api/projects/${project.id}`,project,'PUT');
  const plainShell=await request(`/api/projects/${project.id}?view=shell`);
  assert.equal(plainShell.visualStyleLock.stylePrompt,plain.stylePrompt);
  assert.equal(plainShell.creativeDirection.visual.skill,undefined);
@@ -89,7 +90,8 @@ try {
  const invalidProfile = await fetch(base+'/api/skills', { method:'POST', headers:{'content-type':'application/json'}, body:JSON.stringify({title:'invalid',kind:'director',profile:{director:{...structuredProfile,methods:[]}}}) });
  assert.equal(invalidProfile.status,400);
  project.creativeDirection.director = { mode:'replace', skill:snapshotCreativeSkill(structuredSaved.skill) };
- await request('/api/projects',project);
+ project.episodes[0].productionRevision=(await request(`/api/projects/${project.id}/episodes/${episode.id}`)).productionRevision;
+ await request(`/api/projects/${project.id}`,project,'PUT');
  const v2Shell=await request(`/api/projects/${project.id}?view=shell`);
  assert.deepEqual(v2Shell.creativeDirection.director.skill.profile.director, structuredProfile);
  const pinned=JSON.stringify(v2Shell.creativeDirection.director.skill);
@@ -98,5 +100,21 @@ try {
  assert.equal(JSON.stringify((await request(`/api/projects/${project.id}?view=shell`)).creativeDirection.director.skill), pinned, 'library updates never silently replace a project snapshot');
  const removedCreate=await fetch(base+'/api/skills',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({kind:'visual_style',title:'removed',content:'removed'})});
  assert.equal(removedCreate.status,400);
+ const simple=createProductionProjectFromMagicSource({projectId:'simple-direction',importId:'simple-import',title:'无Skill筹备',sourceFormat:'script',targetFormat:'movie',sourceDocuments:[{id:'simple-doc',order:1,kind:'episode',title:'第一集',content:'林渊站在池边。',sourceHash:'simple',isWorkRange:true,createdAt:1}]});
+ (simple.episodes[0] as Episode).scenes=[{id:'simple-scene',title:'池边',script:'林渊站在池边。',shots:[]} as any];
+ await request('/api/projects',simple);
+ const scenePath=`/api/projects/${simple.id}/episodes/${simple.episodes[0].id}/scenes/simple-scene/director-plan`;
+ const savedBrief=await request(scenePath,{intent:'先建立人物与洗剑池的关系',rhythm:'先静后动'},'PATCH');
+ assert.equal(savedBrief.scenes[0].manualStoryboard.directorPlan.intent,'先建立人物与洗剑池的关系');
+ assert.equal(savedBrief.scenes[0].manualStoryboard.directorPlan.skillId,undefined);
+ assert.equal(savedBrief.scenes[0].shots.length,0);
+ assert.equal(savedBrief.scenes[0].script,'林渊站在池边。');
+ savedBrief.title='其他编辑刚更新的标题';
+ await request(`/api/projects/${simple.id}/episodes/${simple.episodes[0].id}`,savedBrief,'PUT');
+ const secondBrief=await request(scenePath,{intent:'最后看清人物反应',rhythm:'留出反应'},'PATCH');
+ assert.equal(secondBrief.title,'其他编辑刚更新的标题');
+ assert.equal(secondBrief.scenes[0].manualStoryboard.directorPlan.intent,'最后看清人物反应');
+ const simpleContext=await request(`/api/projects/${simple.id}/episodes/${simple.episodes[0].id}/storyboard-team-context?sceneId=simple-scene`);
+ assert.equal(JSON.parse(simpleContext.productionTeamContext).productionBasis.direction.intent,'最后看清人物反应');
  console.log('creative-direction-http-self-check: project/episode/scene/shot persistence, workspace reload, generation context and Skill CRUD passed');
 } finally {await new Promise<void>(resolve=>server.close(()=>resolve()));db.close();if(!process.env.OMNI_CREATIVE_UI_FIXTURE)fs.rmSync(dir,{recursive:true,force:true});}

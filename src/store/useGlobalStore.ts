@@ -3,6 +3,8 @@ import { persist } from 'zustand/middleware';
 import type { VisualImageAdoptionAudit, VisualImageCandidate } from '../types/project';
 
 export interface VoiceProfile {
+  /** Reusable native speech preset. Legacy API templates remain intact until explicitly mapped. */
+  settings?: import('../../packages/domain/src/speech').VoiceSettings;
   id: string;
   name: string;
   description: string;
@@ -21,6 +23,8 @@ export interface GlobalAsset {
   name: string;
   description: string;
   imageUrls: string[];
+  multiViewUrl?: string;
+  panoramaUrl?: string;
   /** Generated previews awaiting an explicit human adoption action. */
   visualImageCandidates?: VisualImageCandidate[];
   /** Immutable audit snapshots retained after a generated candidate is adopted. */

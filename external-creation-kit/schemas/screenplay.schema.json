@@ -1,0 +1,250 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:omni-external:screenplay:v1",
+  "title": "Omni external screenplay v1",
+  "type": "object",
+  "additionalProperties": false,
+  "properties": {
+    "format": {
+      "const": "omni-external-screenplay.v1"
+    },
+    "projectId": {
+      "type": "string",
+      "pattern": "^[A-Za-z][A-Za-z0-9_-]{0,119}$"
+    },
+    "deliveryId": {
+      "type": "string",
+      "pattern": "^[A-Za-z][A-Za-z0-9_-]{0,119}$"
+    },
+    "partId": {
+      "type": "string",
+      "pattern": "^[A-Za-z][A-Za-z0-9_-]{0,119}$"
+    },
+    "scenes": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "id": {
+            "type": "string",
+            "pattern": "^[A-Za-z][A-Za-z0-9_-]{0,119}$"
+          },
+          "unitId": {
+            "type": "string",
+            "pattern": "^[A-Za-z][A-Za-z0-9_-]{0,119}$"
+          },
+          "order": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "title": {
+            "type": "string",
+            "minLength": 1,
+            "pattern": "\\S"
+          },
+          "location": {
+            "type": "string",
+            "minLength": 1,
+            "pattern": "\\S"
+          },
+          "timeOfDay": {
+            "type": "string",
+            "minLength": 1,
+            "pattern": "\\S"
+          },
+          "storyTime": {
+            "type": "string",
+            "minLength": 1,
+            "pattern": "\\S"
+          },
+          "route": {
+            "type": "string",
+            "minLength": 1,
+            "pattern": "\\S"
+          },
+          "summary": {
+            "type": "string",
+            "minLength": 1,
+            "pattern": "\\S"
+          },
+          "purpose": {
+            "type": "string",
+            "minLength": 1,
+            "pattern": "\\S"
+          },
+          "characterIds": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "pattern": "^[A-Za-z][A-Za-z0-9_-]{0,119}$"
+            },
+            "minItems": 0,
+            "uniqueItems": true
+          },
+          "entryState": {
+            "type": "string",
+            "minLength": 1,
+            "pattern": "\\S"
+          },
+          "exitState": {
+            "type": "string",
+            "minLength": 1,
+            "pattern": "\\S"
+          },
+          "status": {
+            "enum": [
+              "planned",
+              "complete"
+            ]
+          },
+          "estimatedSeconds": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "blocks": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "additionalProperties": false,
+              "properties": {
+                "id": {
+                  "type": "string",
+                  "pattern": "^[A-Za-z][A-Za-z0-9_-]{0,119}$"
+                },
+                "type": {
+                  "enum": [
+                    "action",
+                    "dialogue",
+                    "parenthetical",
+                    "transition",
+                    "note"
+                  ]
+                },
+                "text": {
+                  "type": "string",
+                  "minLength": 1,
+                  "pattern": "\\S"
+                },
+                "speakerId": {
+                  "type": "string",
+                  "pattern": "^[A-Za-z][A-Za-z0-9_-]{0,119}$"
+                }
+              },
+              "required": [
+                "id",
+                "type",
+                "text"
+              ],
+              "allOf": [
+                {
+                  "if": {
+                    "properties": {
+                      "type": {
+                        "const": "dialogue"
+                      }
+                    }
+                  },
+                  "then": {
+                    "required": [
+                      "speakerId"
+                    ]
+                  }
+                }
+              ]
+            },
+            "minItems": 0
+          },
+          "continuity": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "additionalProperties": false,
+              "properties": {
+                "kind": {
+                  "enum": [
+                    "knowledge",
+                    "prop",
+                    "relationship",
+                    "plant",
+                    "payoff",
+                    "time"
+                  ]
+                },
+                "subjectIds": {
+                  "type": "array",
+                  "items": {
+                    "type": "string",
+                    "pattern": "^[A-Za-z][A-Za-z0-9_-]{0,119}$"
+                  },
+                  "minItems": 0,
+                  "uniqueItems": true
+                },
+                "factIds": {
+                  "type": "array",
+                  "items": {
+                    "type": "string",
+                    "pattern": "^[A-Za-z][A-Za-z0-9_-]{0,119}$"
+                  },
+                  "minItems": 0,
+                  "uniqueItems": true
+                },
+                "incoming": {
+                  "type": "string",
+                  "minLength": 1,
+                  "pattern": "\\S"
+                },
+                "outgoing": {
+                  "type": "string",
+                  "minLength": 1,
+                  "pattern": "\\S"
+                },
+                "routeNote": {
+                  "type": "string",
+                  "minLength": 1,
+                  "pattern": "\\S"
+                }
+              },
+              "required": [
+                "kind",
+                "subjectIds",
+                "factIds",
+                "incoming",
+                "outgoing",
+                "routeNote"
+              ]
+            },
+            "minItems": 0
+          }
+        },
+        "required": [
+          "id",
+          "unitId",
+          "order",
+          "title",
+          "location",
+          "timeOfDay",
+          "storyTime",
+          "route",
+          "summary",
+          "purpose",
+          "characterIds",
+          "entryState",
+          "exitState",
+          "status",
+          "estimatedSeconds",
+          "blocks",
+          "continuity"
+        ]
+      },
+      "minItems": 1
+    }
+  },
+  "required": [
+    "format",
+    "projectId",
+    "deliveryId",
+    "partId",
+    "scenes"
+  ]
+}

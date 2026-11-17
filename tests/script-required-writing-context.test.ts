@@ -1,7 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import Database from 'better-sqlite3';
-import { createScriptAgentHost } from '../apps/api/src/agent/scriptHost';
 import { buildRequiredWritingContext } from '../packages/script/src/writingContext';
 import { resolveStoryOutline } from '../packages/script/src/outlines';
 import { createScriptProject, newScene, newUnit } from '../packages/script/src/project';
@@ -52,78 +51,8 @@ test('procedural initial recurring canon is shared, anthology initial canon rema
   }
 });
 
-function hostFixture(t:any){
-  const db=new Database(':memory:');t.after(()=>db.close());const host=createScriptAgentHost(db,{sendOnce:async()=>{throw new Error('NO_EXTERNAL_MODEL');}},'required-context-fixture',{trustedLegacyProjectOwner:'author'});
-  const thread=host.conversations.open('author','script:home','required-context'),fixture=anthology();
-  const workspace=host.workspaces.create({ownerId:'author',threadId:thread.id,requestId:'create',source:{document:fixture.p}});
-  return {db,host,thread,workspace,...fixture};
-}
-
-test('actual frozen narrow proposal receives required context without another anthology story or unselected target block',async t=>{
-  const h=hostFixture(t),w=h.host.workspaces.read(h.workspace.id,'author'),document=structuredClone(w.document),unit=document.units[2],scene=unit.scenes[0];
-  scene.blocks.push({id:'unselected',type:'action',text:'UNSELECTED_TARGET_FORBIDDEN'});
-  const updated=h.host.workspaces.saveAuthor({ownerId:'author',workspaceId:w.id,requestId:'edit',expectedRevision:w.revision,expectedEpoch:w.writerEpoch,document});
-  const receipt=await h.host.commands.submit('author',{kind:'PROPOSE',requestId:'narrow',threadId:h.thread.id,expectedConversationVersion:1,source:{kind:'WORKSPACE',workspaceId:w.id,expectedRevision:updated.revision},operation:'replace_blocks',instruction:'改写所选段落',target:{unitId:unit.id,sceneId:scene.id,blockIds:[scene.blocks[0].id]},methodIds:[],executionChannel:'external'},{resolveMethods:async()=>[],resolveExecution:()=>({channel:'external',routeRef:'mechanical-only'})});
-  await h.host.worker.runOnce(receipt.runId);await h.host.childWorker.runOnce(receipt.runId);
-  const frozen=h.host.journal.listExternal(receipt.runId,'author')[0];assert.ok(frozen,JSON.stringify(h.host.store.readRun(receipt.runId)));
-  assert.match(frozen.request.prompt,/A_PREVIOUS_END/);assert.match(frozen.request.prompt,/A_FULL_STORY_PLAN/);assert.match(frozen.request.prompt,/90000/);
-  assert.match(frozen.request.prompt,/A_CURRENT_BODY/);assert.doesNotMatch(frozen.request.prompt,/FORBIDDEN/);
-  assert.equal((frozen.request.inputManifest as any).scriptDraft.workspaceRef.version,String(updated.revision));
-});
-
-test('actual frozen story-outline candidate reads and targets only the selected story owner',async t=>{
-  const h=hostFixture(t),receipt=await h.host.commands.submit('author',{kind:'PROPOSE',requestId:'story-outline',threadId:h.thread.id,expectedConversationVersion:1,source:{kind:'WORKSPACE',workspaceId:h.workspace.id,expectedRevision:1},operation:'story_outline',instruction:'修订故事完整走向',target:{unitId:h.current.id,scopeId:'story_a'},methodIds:[],executionChannel:'external'},{resolveMethods:async()=>[],resolveExecution:()=>({channel:'external',routeRef:'mechanical-only'})});
-  await h.host.worker.runOnce(receipt.runId);await h.host.childWorker.runOnce(receipt.runId);
-  const frozen=h.host.journal.listExternal(receipt.runId,'author')[0];assert.ok(frozen,JSON.stringify(h.host.store.readRun(receipt.runId)));
-  assert.match(frozen.request.prompt,/A_FULL_STORY_PLAN/);assert.doesNotMatch(frozen.request.prompt,/FORBIDDEN/);
-  assert.equal((frozen.request.inputManifest as any).scriptDraft.scopeId,'story_a');
-});
-
 
 test('changing the sole story owner cannot orphan or overwrite its saved complete outline',()=>{
   const {p,other}=anthology(),before=JSON.stringify(p);
   assert.throws(()=>changeUnitStoryScope(p,other.id,'story_a'),/已有完整大纲/);assert.equal(JSON.stringify(p),before);
-});
-
-for(const range of ['whole','parent','before','scene'] as const)test(`frozen ${range} scene planning uses authorized outline IDs and the actual insertion predecessor`,async t=>{
-  const db=new Database(':memory:');t.after(()=>db.close());let providerCalls=0;
-  const host=createScriptAgentHost(db,{sendOnce:async()=>{providerCalls++;throw new Error('NO_EXTERNAL_MODEL');}},`planning-context-${range}`);
-  const thread=host.conversations.open('author','script:home',`planning-${range}`);
-  const project=createScriptProject('机械分场衔接',createScriptCreationProfile('feature-film',1,90)),unit=project.units[0];
-  project.brief.outline='FULL_FILM_REQUIREMENT';
-  unit.structureNodes=[{id:'parent',title:'父段',purpose:'PARENT_REQUIREMENT'},
-    {id:'empty_child',parentId:'parent',title:'空子段',purpose:'CHILD_REQUIREMENT'},
-    {id:'unrelated',title:'其他段',purpose:'UNRELATED_REQUIREMENT'}];
-  unit.scenes=[{...newScene('父段已有场'),structureNodeId:'parent'},newScene('未归组尾场')];
-  unit.scenes[0].blocks[0].text='ACTUAL_INSERTION_PREDECESSOR';
-  unit.scenes[1].blocks[0].text='LATER_TAIL_MUST_NOT_BE_PREDECESSOR';
-  const workspace=host.workspaces.create({ownerId:'author',threadId:thread.id,requestId:'base',source:{document:project}});
-  const receipt=await host.commands.submit('author',{kind:'GOAL_START',requestId:'plan',threadId:thread.id,expectedConversationVersion:1,
-    source:{kind:'WORKSPACE',workspaceId:workspace.id,expectedRevision:1},objective:'展开约定范围，完成分场即停',task:'WRITE',stopAfter:'SCENES',
-    target:{unitIds:[unit.id],maxNewScenes:[{unitId:unit.id,count:2}],...(['parent','scene'].includes(range)?{structureTargets:[{unitId:unit.id,nodeId:'parent'}]}:{wholeUnitIds:[unit.id]})},methodIds:[]},
-    {resolveMethods:async()=>[],resolveExecution:()=>({channel:'external',routeRef:'mechanical-only'})});
-  async function waiting(){
-    for(let i=0;i<12;i++){
-      const next=host.journal.listExternal(receipt.runId,'author').find(item=>item.status==='WAITING');if(next)return next;
-      await host.worker.runOnce(receipt.runId);await host.childWorker.runOnce(receipt.runId);
-    }
-    assert.fail(JSON.stringify(host.store.readRun(receipt.runId)));
-  }
-  const decision=await waiting();assert.match(decision.request.operationKey,/^decision:/);
-  host.journal.submitExternal(decision.id,'author',decision.inputHash,JSON.stringify({kind:'CALL',capabilityId:'script.propose',capabilityVersion:'1',
-    arguments:{authorizationRef:receipt.authorizationRef,operation:range==='scene'?'scene_plan':'plan_scenes',instruction:'只展开已约定范围',unitId:unit.id,
-      sceneId:range==='scene'?unit.scenes[0].id:null,slotId:null,scopeId:null,entityId:null,blockIds:null,selection:null,
-      ...(range==='before'?{beforeSceneId:unit.scenes[1].id}:{nodeId:range==='scene'?'unrelated':'empty_child'})},
-    planUpdate:null,message:null,choices:null,artifactRefs:null,summary:null,reason:null,remainingWork:null}),{name:'MECHANICAL_PROTOCOL_NO_EXTERNAL_MODEL',model:'fixture'});
-  await host.worker.runOnce(receipt.runId);
-  const draft=await waiting();assert.equal(draft.request.operationKey,'draft');
-  const frozen=draft.request.prompt.split('\n\n').map(part=>{try{return JSON.parse(part);}catch{return null;}}).find(part=>part?.context&&part?.operation);
-  assert.ok(frozen,'actual frozen draft context');
-  const requirements=frozen.context.project.outlineRequirements.items.map((item:any)=>item.text);
-  if(['parent','scene'].includes(range))assert.deepEqual(requirements,['PARENT_REQUIREMENT','CHILD_REQUIREMENT']);
-  else {assert.ok(requirements.includes('FULL_FILM_REQUIREMENT'));if(range==='whole')assert.ok(requirements.includes('CHILD_REQUIREMENT'));}
-  if(range==='scene')assert.equal(frozen.context.targetScene.id,unit.scenes[0].id);
-  else {assert.equal(frozen.planningAnchor.id,unit.scenes[0].id);assert.match(JSON.stringify(frozen.planningAnchor),/ACTUAL_INSERTION_PREDECESSOR/);}
-  assert.doesNotMatch(draft.request.prompt,/LATER_TAIL_MUST_NOT_BE_PREDECESSOR/);
-  assert.equal(providerCalls,0);assert.deepEqual(host.workspaces.read(workspace.id,'author').document,workspace.document);
 });

@@ -6,7 +6,7 @@ import {createScriptProject,newUnit} from '../packages/script/src/project';
 import {parseScriptProject,type ProjectProfile,type ScriptProject} from '../packages/script/src/schema';
 import {anchorFor,getOutlineGuide,outlineGuideId,outlineText,ownerUnits,type OutlineGuide,type OutlineOwner} from '../packages/script/src/outlineGuides';
 import {OutlineBeats,OutlineBeatTextEditor,outlineBeatChangeRequest,outlineNodesForBeat} from '../apps/web/src/features/script/components/OutlineBeats';
-import type {AssistantRequest} from '../apps/web/src/features/script/scriptAssistantShortcuts';
+import type {WritingTaskRequest} from '../apps/web/src/features/script/scriptTaskShortcuts';
 
 const profile:ProjectProfile={organization:'episodic',continuity:'mixed',workType:'电视剧',genres:['剧情'],language:'zh-CN',plannedUnits:2,targetDurationMs:60000,toleranceMs:5000,includeCredits:false,aspectRatio:'16:9',productionMode:'live-action'};
 const source='雨停了。她决定离开。中间这句原文必须保留。她选择回来。最后兑现承诺。';
@@ -108,7 +108,7 @@ test('default and a different owner remain read only, but a visible upper beat c
 });
 
 test('AI action emits a single beat allowlist and the exact current source without mutating the document',()=>{
-  const {project,unit,guide,owner}=fixture(),before=structuredClone(project);let received:AssistantRequest|undefined;
+  const {project,unit,guide,owner}=fixture(),before=structuredClone(project);let received:WritingTaskRequest|undefined;
   guide.beats[1].anchors=structuredClone(guide.beats[0].anchors);before.outlineGuides![0].beats[1].anchors=structuredClone(guide.beats[0].anchors);
   const tree=OutlineBeats({project,guides:[guide],unitId:unit.id,editableOwner:owner,onChange:()=>assert.fail('staging is not adoption'),onRequestChange:request=>{received=request;}});
   const action=button(beatArticle(tree),'与 AI 修改这一变化');assert.equal(action.props.disabled,false);action.props.onClick();
@@ -120,7 +120,8 @@ test('AI action emits a single beat allowlist and the exact current source witho
 
 for(const kind of ['project','season','story','unit'] as const)test(`AI request preserves explicit ${kind} owner and needs no structure or scene-order grant`,()=>{
   const {project,unit,guide,owner}=fixture(kind),request=outlineBeatChangeRequest(project,guide,guide.beats[0],unit.id,owner);assert.ok(request);
-  assert.equal(request.unitId,unit.id);assert.equal(request.operation,kind==='unit'?'unit_outline':'outline');assert.equal(request.scopeId,kind==='unit'?undefined:owner.id);assert.equal(request.seasonId,kind==='season'?owner.id:undefined);
+  const operationByOwner={project:'outline',season:'season_outline',story:'story_outline',unit:'unit_outline'} as const;
+  assert.equal(request.unitId,unit.id);assert.equal(request.operation,operationByOwner[kind]);assert.equal(request.scopeId,kind==='unit'?undefined:owner.id);assert.equal(request.seasonId,kind==='season'?owner.id:undefined);
   assert.equal(request.outlineStructure,false);assert.equal(request.outlineSceneOrder,false);assert.deepEqual(request.outlineBeatIds,['beat_leave']);
   assert.equal(outlineBeatChangeRequest(project,guide,guide.beats[0],unit.id),undefined,'omitted owner cannot write');
 });

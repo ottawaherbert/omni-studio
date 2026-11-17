@@ -17,7 +17,6 @@ const projectStoreImport = /from\s+["'][^"']*store\/useProjectStore["']/;
 const productionStoreImport = /from\s+["'][^"']*store\/useProductionStore["']/;
 const directProjectStoreAllowlist = new Set([
   "src/components/Layout.tsx",
-  "src/components/assistant/GlobalAssistant.tsx",
 ]);
 
 for (const filePath of frontendRoots.flatMap(collectFiles)) {

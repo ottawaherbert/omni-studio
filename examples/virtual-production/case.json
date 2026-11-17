@@ -1,0 +1,514 @@
+{
+  "scope": "local-set-study",
+  "models": [
+    {
+      "model": {
+        "id": "model-8e1e4abc69446898a55593fd3791cc98e1332983d8f6640915ba417393b666ef",
+        "hash": "8e1e4abc69446898a55593fd3791cc98e1332983d8f6640915ba417393b666ef",
+        "name": "局部修理铺与街边陈设",
+        "size": [
+          60,
+          12.150000002980232,
+          43.5
+        ],
+        "sourceBytes": 273968,
+        "createdAt": 0,
+        "license": "Original example, reusable with this repository",
+        "lods": [
+          {
+            "hash": "8e1e4abc69446898a55593fd3791cc98e1332983d8f6640915ba417393b666ef",
+            "url": "/media/spatial/models/8e1e4abc69446898a55593fd3791cc98e1332983d8f6640915ba417393b666ef.glb",
+            "bytes": 273968,
+            "triangles": 7776,
+            "distance": 0
+          }
+        ]
+      },
+      "position": [
+        0,
+        -0.15000000298023225,
+        6.75
+      ],
+      "file": "prepared.glb"
+    },
+    {
+      "model": {
+        "id": "model-245d15ee99e4b8f7376861b40b50e9c1e6cae8ab065ed0d2eebf499e4acdfc44",
+        "hash": "245d15ee99e4b8f7376861b40b50e9c1e6cae8ab065ed0d2eebf499e4acdfc44",
+        "name": "反例：仅体块",
+        "size": [
+          60,
+          12.150000002980232,
+          43.5
+        ],
+        "sourceBytes": 87052,
+        "createdAt": 0,
+        "license": "Original example, reusable with this repository",
+        "lods": [
+          {
+            "hash": "245d15ee99e4b8f7376861b40b50e9c1e6cae8ab065ed0d2eebf499e4acdfc44",
+            "url": "/media/spatial/models/245d15ee99e4b8f7376861b40b50e9c1e6cae8ab065ed0d2eebf499e4acdfc44.glb",
+            "bytes": 87052,
+            "triangles": 1560,
+            "distance": 0
+          }
+        ]
+      },
+      "position": [
+        0,
+        -0.15000000298023225,
+        6.75
+      ],
+      "file": "blockout.glb"
+    }
+  ],
+  "preparedWorld": {
+    "schemaVersion": "previs-world.v1",
+    "title": "修理铺局部布景教学",
+    "description": "只演示指定机位的结构与背景调度，不是完整社区。",
+    "worldBrief": {
+      "scope": "component",
+      "description": "局部布景案例",
+      "geography": "修理铺与一段街道",
+      "circulation": "门前人行道与两侧街边",
+      "services": "修理铺与相邻门面",
+      "skyline": "只覆盖案例机位，不作为全剧远景",
+      "gaps": [
+        "其他店铺仅外景代理；未建立全城",
+        "人物为简化排演，不含手指/IK",
+        "未制作最终AI故事板或视频"
+      ]
+    },
+    "models": [
+      {
+        "id": "model-8e1e4abc69446898a55593fd3791cc98e1332983d8f6640915ba417393b666ef",
+        "hash": "8e1e4abc69446898a55593fd3791cc98e1332983d8f6640915ba417393b666ef",
+        "name": "局部修理铺与街边陈设",
+        "size": [
+          60,
+          12.150000002980232,
+          43.5
+        ],
+        "sourceBytes": 273968,
+        "createdAt": 0,
+        "license": "Original example, reusable with this repository",
+        "lods": [
+          {
+            "hash": "8e1e4abc69446898a55593fd3791cc98e1332983d8f6640915ba417393b666ef",
+            "url": "/media/spatial/models/8e1e4abc69446898a55593fd3791cc98e1332983d8f6640915ba417393b666ef.glb",
+            "bytes": 273968,
+            "triangles": 7776,
+            "distance": 0
+          }
+        ]
+      }
+    ],
+    "locations": [
+      {
+        "id": "example-set",
+        "name": "修理铺与街边",
+        "description": "教学场地",
+        "origin": [
+          0,
+          0,
+          0
+        ],
+        "ground": [
+          60,
+          40
+        ],
+        "groundVisible": false,
+        "sourceSceneIds": []
+      }
+    ],
+    "objects": [
+      {
+        "id": "set",
+        "label": "固定布景",
+        "locationId": "example-set",
+        "kind": "model",
+        "modelId": "model-8e1e4abc69446898a55593fd3791cc98e1332983d8f6640915ba417393b666ef",
+        "position": [
+          0,
+          -0.15000000298023225,
+          6.75
+        ],
+        "rotation": [
+          0,
+          0,
+          0
+        ],
+        "size": [
+          60,
+          12.150000002980232,
+          43.5
+        ],
+        "color": "#bbbbbb",
+        "pose": "stand"
+      }
+    ]
+  },
+  "blockoutWorld": {
+    "schemaVersion": "previs-world.v1",
+    "title": "修理铺局部布景教学",
+    "description": "只演示指定机位的结构与背景调度，不是完整社区。",
+    "worldBrief": {
+      "scope": "component",
+      "description": "局部布景案例",
+      "geography": "修理铺与一段街道",
+      "circulation": "门前人行道与两侧街边",
+      "services": "修理铺与相邻门面",
+      "skyline": "只覆盖案例机位，不作为全剧远景",
+      "gaps": [
+        "其他店铺仅外景代理；未建立全城",
+        "人物为简化排演，不含手指/IK",
+        "未制作最终AI故事板或视频"
+      ]
+    },
+    "models": [
+      {
+        "id": "model-245d15ee99e4b8f7376861b40b50e9c1e6cae8ab065ed0d2eebf499e4acdfc44",
+        "hash": "245d15ee99e4b8f7376861b40b50e9c1e6cae8ab065ed0d2eebf499e4acdfc44",
+        "name": "反例：仅体块",
+        "size": [
+          60,
+          12.150000002980232,
+          43.5
+        ],
+        "sourceBytes": 87052,
+        "createdAt": 0,
+        "license": "Original example, reusable with this repository",
+        "lods": [
+          {
+            "hash": "245d15ee99e4b8f7376861b40b50e9c1e6cae8ab065ed0d2eebf499e4acdfc44",
+            "url": "/media/spatial/models/245d15ee99e4b8f7376861b40b50e9c1e6cae8ab065ed0d2eebf499e4acdfc44.glb",
+            "bytes": 87052,
+            "triangles": 1560,
+            "distance": 0
+          }
+        ]
+      }
+    ],
+    "locations": [
+      {
+        "id": "example-set",
+        "name": "修理铺与街边",
+        "description": "教学场地",
+        "origin": [
+          0,
+          0,
+          0
+        ],
+        "ground": [
+          60,
+          40
+        ],
+        "groundVisible": false,
+        "sourceSceneIds": []
+      }
+    ],
+    "objects": [
+      {
+        "id": "set",
+        "label": "固定布景",
+        "locationId": "example-set",
+        "kind": "model",
+        "modelId": "model-245d15ee99e4b8f7376861b40b50e9c1e6cae8ab065ed0d2eebf499e4acdfc44",
+        "position": [
+          0,
+          -0.15000000298023225,
+          6.75
+        ],
+        "rotation": [
+          0,
+          0,
+          0
+        ],
+        "size": [
+          60,
+          12.150000002980232,
+          43.5
+        ],
+        "color": "#bbbbbb",
+        "pose": "stand"
+      }
+    ]
+  },
+  "plan": {
+    "schemaVersion": "scene-previs.v1",
+    "locationId": "example-set",
+    "light": {
+      "position": [
+        12,
+        20,
+        8
+      ],
+      "intensity": 2
+    },
+    "objects": [
+      {
+        "id": "bg-walker",
+        "label": "下班行人",
+        "position": [
+          -10,
+          0.18,
+          5
+        ],
+        "rotation": [
+          0,
+          1.5707963267948966,
+          0
+        ],
+        "pose": "walk",
+        "activity": "沿人行道以0.8米/秒向东；切镜保持时刻和身份。",
+        "kind": "actor",
+        "performanceRole": "background",
+        "size": [
+          0.6,
+          1.8,
+          0.4
+        ],
+        "color": "#768489"
+      },
+      {
+        "id": "bg-neighbor",
+        "label": "等候邻居",
+        "position": [
+          8.5,
+          0.18,
+          4.5
+        ],
+        "rotation": [
+          0,
+          0.3,
+          0
+        ],
+        "pose": "stand",
+        "activity": "在长椅附近等待，不遮挡店门。",
+        "kind": "actor",
+        "performanceRole": "background",
+        "size": [
+          0.6,
+          1.8,
+          0.4
+        ],
+        "color": "#768489"
+      },
+      {
+        "id": "bg-shopkeeper",
+        "label": "门口店员",
+        "position": [
+          -9,
+          0.18,
+          3.8
+        ],
+        "rotation": [
+          0,
+          0,
+          0
+        ],
+        "pose": "stand",
+        "activity": "在相邻店铺门口留守；本案例不声称已排演收摊动作。",
+        "kind": "actor",
+        "performanceRole": "background",
+        "size": [
+          0.6,
+          1.8,
+          0.4
+        ],
+        "color": "#768489"
+      }
+    ],
+    "frames": [
+      {
+        "id": "shot-0-0",
+        "shotId": "example-shot-0",
+        "label": "街边向店铺",
+        "timeInShot": 0,
+        "note": "背景行人以场次累计时刻推进，切镜不重置；仅构图和背景调度示范。",
+        "camera": {
+          "position": [
+            6,
+            1.7,
+            14
+          ],
+          "target": [
+            0,
+            1.5,
+            1
+          ],
+          "focalLength": 28
+        },
+        "states": {
+          "bg-walker": {
+            "position": [
+              -10,
+              0.18,
+              5
+            ],
+            "pose": "walk",
+            "visible": true
+          }
+        }
+      },
+      {
+        "id": "shot-0-8",
+        "shotId": "example-shot-0",
+        "label": "街边向店铺",
+        "timeInShot": 8,
+        "note": "背景行人以场次累计时刻推进，切镜不重置；仅构图和背景调度示范。",
+        "camera": {
+          "position": [
+            6,
+            1.7,
+            14
+          ],
+          "target": [
+            0,
+            1.5,
+            1
+          ],
+          "focalLength": 28
+        },
+        "states": {
+          "bg-walker": {
+            "position": [
+              -3.5999999999999996,
+              0.18,
+              5
+            ],
+            "pose": "walk",
+            "visible": true
+          }
+        }
+      },
+      {
+        "id": "shot-1-0",
+        "shotId": "example-shot-1",
+        "label": "内向外反打",
+        "timeInShot": 0,
+        "note": "背景行人以场次累计时刻推进，切镜不重置；仅构图和背景调度示范。",
+        "camera": {
+          "position": [
+            -2.8,
+            1.65,
+            -0.8
+          ],
+          "target": [
+            2,
+            1.5,
+            7
+          ],
+          "focalLength": 24
+        },
+        "states": {
+          "bg-walker": {
+            "position": [
+              -3.5999999999999996,
+              0.18,
+              5
+            ],
+            "pose": "walk",
+            "visible": true
+          }
+        }
+      },
+      {
+        "id": "shot-1-8",
+        "shotId": "example-shot-1",
+        "label": "内向外反打",
+        "timeInShot": 8,
+        "note": "背景行人以场次累计时刻推进，切镜不重置；仅构图和背景调度示范。",
+        "camera": {
+          "position": [
+            -2.8,
+            1.65,
+            -0.8
+          ],
+          "target": [
+            2,
+            1.5,
+            7
+          ],
+          "focalLength": 24
+        },
+        "states": {
+          "bg-walker": {
+            "position": [
+              2.8000000000000007,
+              0.18,
+              5
+            ],
+            "pose": "walk",
+            "visible": true
+          }
+        }
+      }
+    ]
+  },
+  "inspections": [
+    {
+      "id": "workshop",
+      "camera": {
+        "position": [
+          2.8,
+          1.65,
+          2.3
+        ],
+        "target": [
+          -0.3,
+          1.2,
+          -1.8
+        ],
+        "focalLength": 24
+      }
+    },
+    {
+      "id": "street",
+      "camera": {
+        "position": [
+          6,
+          1.7,
+          14
+        ],
+        "target": [
+          0,
+          1.5,
+          1
+        ],
+        "focalLength": 28
+      }
+    },
+    {
+      "id": "reverse",
+      "camera": {
+        "position": [
+          -2.8,
+          1.65,
+          -0.8
+        ],
+        "target": [
+          2,
+          1.5,
+          7
+        ],
+        "focalLength": 24
+      }
+    }
+  ],
+  "scene": {
+    "id": "example-scene",
+    "shots": [
+      {
+        "id": "example-shot-0",
+        "duration": 8,
+        "characterIdsInShot": []
+      },
+      {
+        "id": "example-shot-1",
+        "duration": 8,
+        "characterIdsInShot": []
+      }
+    ]
+  }
+}

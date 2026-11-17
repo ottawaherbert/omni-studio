@@ -21,14 +21,10 @@ interface StudioShotControlsProps {
   onVideoPromptChange?: (value: string) => void;
   onResetVideoPrompt?: () => void;
   generationTargetLabel?: string;
-  isGeneratingImage: boolean;
   isGeneratingVideo: boolean;
   isGeneratingDraftImage?: boolean;
   isImportingMedia?: boolean;
-  hasVideoCandidate?: boolean;
   draftPreviewUsable?: boolean;
-  onGenerateImage: () => void;
-  onGenerateVideo: () => void;
   onExternalVideo?: () => void;
   onGenerateDraftImage?: () => void;
   onImportImage?: (file: File) => void;
@@ -49,14 +45,10 @@ export const StudioShotControls: React.FC<StudioShotControlsProps> = ({
   onVideoPromptChange,
   onResetVideoPrompt,
   generationTargetLabel,
-  isGeneratingImage,
   isGeneratingVideo,
   isGeneratingDraftImage = false,
   isImportingMedia = false,
-  hasVideoCandidate = false,
   draftPreviewUsable = false,
-  onGenerateImage,
-  onGenerateVideo,
   onExternalVideo,
   onGenerateDraftImage,
   onImportImage,
@@ -70,7 +62,6 @@ export const StudioShotControls: React.FC<StudioShotControlsProps> = ({
   const videoImportRef = useRef<HTMLInputElement>(null);
   const formalGenerationReady = !generationGate || generationGate.ready;
   const governedProductionMode = Boolean(manualProductionAssetReadModel);
-  const videoInputReady = governedProductionMode || Boolean(selectedShot.imageUrl);
   const videoGenerationReady = formalGenerationReady && !videoGenerationIssue;
 
   const getActiveScene = () => {
@@ -163,8 +154,8 @@ export const StudioShotControls: React.FC<StudioShotControlsProps> = ({
       {manualProductionAssetReadModel && (
         <div className="border-t border-gray-200 pt-3 dark:border-neutral-800">
           <div className="flex items-center justify-between gap-3">
-            <p className="text-xs font-bold text-gray-700 dark:text-neutral-200">生成准备</p>
-            <span className={`text-xs font-medium ${videoGenerationReady ? "text-emerald-600" : "text-amber-600"}`}>{videoGenerationReady ? "可提交" : "缺少生成条件"}</span>
+            <p className="text-xs font-bold text-gray-700 dark:text-neutral-200">外部制作素材准备</p>
+            <span className={`text-xs font-medium ${videoGenerationReady ? "text-emerald-600" : "text-amber-600"}`}>{videoGenerationReady ? "素材已选" : "外部参考待补充"}</span>
           </div>
           <p className="mt-1 text-xs text-gray-600 dark:text-neutral-300">{videoGenerationIssue || generationGate?.label || (formalGenerationReady ? "参考图与镜头信息完整" : "参考图或镜头信息尚未完成")}</p>
         </div>
@@ -374,15 +365,6 @@ export const StudioShotControls: React.FC<StudioShotControlsProps> = ({
               className="w-full h-40 bg-gray-50 dark:bg-neutral-950 border border-gray-100 dark:border-neutral-800 rounded-[2rem] p-6 text-xs text-gray-700 dark:text-neutral-300 font-black resize-none focus:outline-none focus:ring-4 focus:ring-violet-500/5 focus:border-violet-500/30 custom-scrollbar shadow-inner leading-relaxed transition-all"
               title={promptReadOnly ? "当前生成对象提示词只读；请在生成前的提示词弹窗中修改" : "基础画面提示词（生成时会自动注入资产描述和全局参数）"}
             />
-            <button
-              onClick={onGenerateImage}
-              disabled={isGeneratingImage || !formalGenerationReady}
-              title={formalGenerationReady ? "生成图片" : generationGate?.reason || "请先添加当前场的镜头"}
-              className="mt-4 w-full flex items-center justify-center gap-3 px-6 py-4 bg-white hover:bg-gray-50 text-gray-900 dark:bg-neutral-800 dark:hover:bg-neutral-700 dark:text-white border border-gray-200 dark:border-neutral-700 rounded-2xl text-[10px] font-black uppercase tracking-widest transition-all shadow-sm active:scale-95 disabled:opacity-50 group"
-            >
-              {isGeneratingImage ? <Loader2 className="w-4 h-4 animate-spin" /> : <ImageIcon className="w-4 h-4 text-violet-600 group-hover:scale-110 transition-transform" />}
-              验证并生成图片
-            </button>
             {onImportImage && (
               <>
                 <input ref={imageImportRef} type="file" accept="image/*" className="hidden" onChange={(event) => { const file = event.target.files?.[0]; if (file) onImportImage(file); event.currentTarget.value = ""; }} />
@@ -459,18 +441,9 @@ export const StudioShotControls: React.FC<StudioShotControlsProps> = ({
                 }
               }}
               className="w-full h-40 bg-gray-50 dark:bg-neutral-950 border border-gray-100 dark:border-neutral-800 rounded-[2rem] p-6 text-xs text-gray-700 dark:text-neutral-300 font-black resize-none focus:outline-none focus:ring-4 focus:ring-violet-500/5 focus:border-violet-500/30 custom-scrollbar shadow-inner leading-relaxed transition-all"
-              title={onVideoPromptChange ? "本次 Take 的工作草稿，不会覆盖分镜或故事板中的上游提示词" : promptReadOnly ? "当前生成对象提示词只读" : "基础视频提示词（生成时会自动注入资产描述和全局参数）"}
+              title={onVideoPromptChange ? "外部制作草稿，不会覆盖上游提示词或生成工作台中的描述" : promptReadOnly ? "当前生成对象提示词只读" : "基础视频提示词（生成时会自动注入资产描述和全局参数）"}
             />
             {onExternalVideo && <button type="button" onClick={onExternalVideo} disabled={isGeneratingVideo || isImportingMedia} className="w-full rounded-lg border border-border-soft px-3 py-2 text-xs font-bold text-text-primary">复制提示词 / 外部视频</button>}
-            <button
-              onClick={onGenerateVideo}
-              disabled={isGeneratingVideo || !videoInputReady || !videoGenerationReady}
-              title={videoGenerationIssue || (!videoInputReady ? "请先生成或选择首帧图片" : formalGenerationReady ? "打开生成前确认" : generationGate?.reason || "请选择生成对象")}
-              className="mt-4 w-full flex items-center justify-center gap-3 px-6 py-4 bg-gray-900 hover:bg-black text-white dark:bg-violet-600 dark:hover:bg-violet-500 rounded-2xl text-[10px] font-black uppercase tracking-widest transition-all shadow-lg shadow-gray-500/20 active:scale-95 disabled:opacity-50 group"
-            >
-              {isGeneratingVideo ? <Loader2 className="w-4 h-4 animate-spin" /> : <Video className="w-4 h-4 group-hover:scale-110 transition-transform" />}
-              {hasVideoCandidate ? "再生成一个候选视频" : "验证并生成视频"}
-            </button>
             {onImportVideo && (
               <>
                 <input ref={videoImportRef} type="file" accept="video/*" className="hidden" onChange={(event) => { const file = event.target.files?.[0]; if (file) onImportVideo(file); event.currentTarget.value = ""; }} />

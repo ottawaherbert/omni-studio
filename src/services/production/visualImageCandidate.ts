@@ -135,6 +135,7 @@ export const createVisualImageCandidate = ({
   prompt,
   modelId,
   compiledRequest,
+  generationPlan,
   sourceContentHash,
   createdAt = Date.now(),
 }: {
@@ -144,10 +145,11 @@ export const createVisualImageCandidate = ({
   prompt: string;
   modelId: string;
   compiledRequest?: CompiledImageGenerationRequest;
+  generationPlan?: VisualImageCandidate["generationPlan"];
   sourceContentHash: string;
   createdAt?: number;
 }): VisualImageCandidate => {
-  if (!compiledRequest) {
+  if (!compiledRequest && (!generationPlan || !/^[a-f0-9]{64}$/u.test(generationPlan.planHash) || generationPlan.prompt !== prompt || generationPlan.capability.modelConfigId !== modelId || generationPlan.capability.mediaKind !== 'image')) {
     throw new Error("图片生成缺少编译审计，结果不能进入待采用候选。");
   }
   if (!/^[a-f0-9]{64}$/u.test(sourceContentHash)) {
@@ -162,7 +164,8 @@ export const createVisualImageCandidate = ({
     prompt,
     promptHash: manualStoryboardHash(prompt),
     modelId,
-    imageReferenceManifest: compiledRequest.references.map((reference, index) => ({
+    generationPlan: generationPlan ? structuredClone(generationPlan) : undefined,
+    imageReferenceManifest: compiledRequest?.references.map((reference, index) => ({
       index: index + 1,
       imageUrl: reference.imageUrl,
       label: reference.label,
@@ -171,9 +174,9 @@ export const createVisualImageCandidate = ({
       allowChange: [...reference.allowChange],
       exclude: [...reference.exclude],
     })),
-    promptCompositionManifest: structuredClone(compiledRequest.manifest),
-    visualStyleCompileManifest: compiledRequest.visualStyleProjection?.compileManifest
-      ? structuredClone(compiledRequest.visualStyleProjection.compileManifest)
+    promptCompositionManifest: compiledRequest ? structuredClone(compiledRequest.manifest) : undefined,
+    visualStyleCompileManifest: compiledRequest?.visualStyleProjection?.compileManifest
+      ? structuredClone(compiledRequest?.visualStyleProjection.compileManifest)
       : undefined,
     sourceContentHash,
     createdAt,

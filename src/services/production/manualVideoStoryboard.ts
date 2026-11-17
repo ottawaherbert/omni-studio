@@ -297,7 +297,7 @@ export const buildManualVideoStoryboardReadModel = ({
     : qaStale ? "stale"
       : workflow.qa.verdict === "pass" ? (workflow.confirmedAt ? "confirmed" : "ready") : "needs_revision";
   const resolvedUnitVideoPrompt = workflow
-    ? resolveStoryboardUnitVideoPrompt({ workflow, shots: workflowShots.length ? workflowShots : [shot] })
+    ? resolveStoryboardUnitVideoPrompt({ workflow, shots: scene?.shots || (workflowShots.length ? workflowShots : [shot]) })
     : { text: "", sourceHash: "", promptHash: "", status: "missing" as const };
   const videoPromptLayerStatus = getManualVideoPromptLayerStatus({ scene, sourceHash: storyboardSourceHash });
   const videoPromptLayerConfirmed = videoPromptLayerStatus === "ready";

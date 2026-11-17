@@ -1,0 +1,34 @@
+{
+  "checkedAt": "2026-09-29T09:07:59.808Z",
+  "execution": "pure functions; in-memory project objects; no database or model invocation",
+  "proceduralInitialization": {
+    "beforeJoin": {
+      "characters": 0,
+      "facts": 0
+    },
+    "afterExplicitJoin": {
+      "characters": 1,
+      "facts": 1
+    }
+  },
+  "oneOutlineFor24Planned": {
+    "countBefore": 1,
+    "countAfter": 24,
+    "summariesFilled": 1,
+    "applied": 1
+  },
+  "newEpisodeSelection": {
+    "targetKeys": [
+      "newUnitCount",
+      "newUnitMaxScenes"
+    ],
+    "sourceUnitCount": 1,
+    "characterScopeIds": null,
+    "factScopeIds": null
+  },
+  "invariants": {
+    "explicitSharedScopeWorks": true,
+    "scopeProblemStillReproduces": true,
+    "bulkCreatesUnrequestedUnits": true
+  }
+}

@@ -5,9 +5,8 @@ import { beatsForUnit, outlineText, unitOutlineOwner, visibleOutlineGuides } fro
 import { ScriptWorkDirectory, UNASSIGNED_NODE } from './ScriptWorkDirectory';
 import { OutlineBeats } from './OutlineBeats';
 import { unitCharacters, visibleInUnit } from '../../../../../../packages/script/src/continuity';
-import { ScriptAnalysisOutlet } from './ScriptAnalysisView';
-import type { AssistantRequest } from '../scriptAssistantShortcuts';
-import type { OutlineEvidenceSource } from './StructureAnalysisCard';
+import type { WritingTaskRequest } from '../scriptTaskShortcuts';
+import type { OutlineEvidenceSource } from '../scriptEvidence';
 
 export function focusScenePlanningField(field: HTMLInputElement | HTMLTextAreaElement | undefined, quote?: string) {
   if (!field) return;
@@ -65,7 +64,7 @@ export function ScenePlanningView({
   onWrite: () => void;
   onOutline: () => void;
   onRequest: (operation: ScriptOperation, request?: string, sceneId?: string) => void;
-  onRequestBeatChange?: (request: AssistantRequest) => void;
+  onRequestBeatChange?: (request: WritingTaskRequest) => void;
   onLocateOutline?: (source: OutlineEvidenceSource) => void;
   overview: (close: () => void) => React.ReactNode;
 }) {
@@ -169,9 +168,9 @@ export function ScenePlanningView({
 
       {/* Main Workspace Body */}
       {showOverview ? (
-        <div className="flex-1 min-h-0 flex flex-col script-analysis-anchor overflow-y-auto">
+        <div className="flex-1 min-h-0 flex flex-col overflow-y-auto">
           {overview(() => setShowOverview(false))}
-          <ScriptAnalysisOutlet />
+
         </div>
       ) : (
         <div className="script-work-columns flex-1 min-h-0 flex overflow-hidden">
@@ -186,7 +185,7 @@ export function ScenePlanningView({
             onScene={onScene}
             onAddUnit={onAddUnit}
           />
-          <main className="script-work-main script-analysis-anchor flex-1 min-h-0 flex flex-col overflow-hidden bg-bg-primary">
+          <main className="script-work-main flex-1 min-h-0 flex flex-col overflow-hidden bg-bg-primary">
             {/* Toolbar */}
             <div className="script-work-toolbar flex flex-wrap items-center justify-between gap-3 px-6 py-3 bg-bg-surface/50 backdrop-blur-xs">
               <div className="flex items-center gap-2.5">
@@ -633,7 +632,7 @@ export function ScenePlanningView({
                 </div>
               )}
             </div>
-            <ScriptAnalysisOutlet />
+
           </main>
         </div>
       )}

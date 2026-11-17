@@ -1,3 +1,5 @@
+import {applyOutlineTask,freezeOutlineTask,outlineTaskOwner,type OutlineTaskScope} from './outlineTask';
+import type {OutlineGrant} from './outlineGuides';
 import { parseModelJson } from '../../model-output/src';
 import { unitCharacters, continuityDiagnostics } from './continuity';
 import { newId, newScene, newUnit, unitContentHash } from './project';
@@ -6,7 +8,7 @@ import { parseScriptBlock, parseScriptProject, SCRIPT_OPERATIONS, type ScriptOpe
 import {blocksToScreenplayText,replaceScreenplaySelection} from './fountainAdapter';
 import { selectTaskMethods, methodUsage } from './methods';
 import { generatedSceneState } from './continuation';
-import { hashValue } from '../../agent-core/src/identity';
+import { hashValue } from '../../domain/src/contentIdentity';
 
 export { SCRIPT_OPERATIONS, type ScriptOperation } from './schema';
 export type ScriptJobQuery={unitId?:string;sceneId?:string;operation?:string;status?:string;standalone?:boolean;before?:string;limit?:number};
@@ -17,6 +19,9 @@ export const CHOICE_OPERATIONS:ScriptOperation[]=['ending','scene_turn','concept
 export type DevelopmentSuggestion={title:string;content:string;name?:string;voice?:string;desire?:string;need?:string};
 export type ScriptExecution={id:string;owner:string;startedAt:number;expiresAt:number;state:'active'|'finished'};
 export interface ScriptJob {
+  /** Historical internal tasks cannot be resumed or adopted through current commands. */
+  readOnly?: boolean;
+  outlineGrant?: OutlineGrant;
   id: string; projectId: string; baseRevision: number; inputHash: string;
   unitId: string; sceneId: string; operation: ScriptOperation; blockIds?: string[]; reviewSceneIds?:string[]; agentRunId?:string;
   status: 'waiting' | 'ready' | 'failed' | 'cancelled' | 'approved' | 'rejected';
@@ -35,7 +40,7 @@ export interface ScriptJob {
   reviewDecisions?: Record<string,{status:'to_fix'|'keep'|'later'|'revised'|'verified'|'unresolved';note?:string;updatedAt:number;revision?:number;revisionJobId?:string;recheckJobId?:string}>;
   provenance?: { source: 'manual_external' | 'api'; provider: string; modelId: string };
 }
-export type ScriptResult = { summary: string; answer?:string; replacement?:string; suggestions?:DevelopmentSuggestion[]; blocks?: ScriptBlock[]; outline?: string; scenePlans?: { title: string; purpose: string; location: string; timeOfDay: string }[]; units?: ProposedUnit[]; choices?:ScriptChoice[]; findings?: { sceneId: string; issue: string; suggestion: string }[] };
+export type ScriptResult = { summary: string; outlineDevelopment?:Record<string,unknown>; answer?:string; replacement?:string; suggestions?:DevelopmentSuggestion[]; blocks?: ScriptBlock[]; outline?: string; scenePlans?: { title: string; purpose: string; location: string; timeOfDay: string }[]; units?: ProposedUnit[]; choices?:ScriptChoice[]; findings?: { sceneId: string; issue: string; suggestion: string }[] };
 const record = (value: unknown): Record<string, unknown> => {
   if (!value || typeof value !== 'object' || Array.isArray(value)) throw new Error('模型结果需要 JSON 对象');
   return value as Record<string, unknown>;
@@ -58,11 +63,11 @@ export function assertJobBaseline(project: ScriptProject, job: ScriptJob) {
   }
   return unit;
 }
-export function createScriptJob(project: ScriptProject, input: { operation: ScriptOperation; unitId: string; sceneId: string; prompt: string; expectedRevision: number; blockIds?: string[]; methodIds?:string[]; reviewSceneIds?:string[]; agentRunId?:string;reviewSource?:ReviewSource;selection?:TextSelection;scopeId?:string;seasonId?:string;unitIndices?:number[];authorRequest?:string },methodSource=project.methods): ScriptJob {
+export function createScriptJob(project: ScriptProject, input: OutlineTaskScope & { operation: ScriptOperation; unitId: string; sceneId: string; prompt: string; expectedRevision: number; blockIds?: string[]; methodIds?:string[]; reviewSceneIds?:string[]; agentRunId?:string;reviewSource?:ReviewSource;selection?:TextSelection;scopeId?:string;seasonId?:string;unitIndices?:number[];authorRequest?:string },methodSource=project.methods): ScriptJob {
   if (!SCRIPT_OPERATIONS.includes(input.operation)) throw new Error('不支持的写作步骤');
   if (project.revision !== input.expectedRevision) throw Object.assign(new Error('生成基线已改变'), { statusCode: 409 });
   const unit = project.units.find(u => u.id === input.unitId);
-  if (!unit || (['board_plan','ending','outline','story_outline','season_outline','unit_outline','unit_outlines','concept','theme','character','fact','consult'].includes(input.operation) ? input.sceneId!==unit.id&&!unit.scenes.some(s=>s.id===input.sceneId) : !unit.scenes.some(s => s.id === input.sceneId))) throw new Error('目标场景不存在');
+  if (!unit || (['plan','board_plan','ending','outline','story_outline','season_outline','unit_outline','unit_outlines','concept','theme','character','fact','consult'].includes(input.operation) ? input.sceneId!==unit.id&&!unit.scenes.some(s=>s.id===input.sceneId) : !unit.scenes.some(s => s.id === input.sceneId))) throw new Error('目标场景不存在');
   if(!['outline','unit_outlines','board_plan'].includes(input.operation)&&continuityDiagnostics(project,unit).length)throw new Error('请先修复本单元的人物作用域引用，再请求模型。');
   const methods=selectTaskMethods(project,input.operation,input.methodIds??[],methodSource);
   if(input.reviewSource&&(!['scene','rewrite','review'].includes(input.operation)||input.agentRunId||typeof input.reviewSource.jobId!=='string'||!Number.isInteger(input.reviewSource.index)||input.reviewSource.index<0))throw new Error('审阅来源与当前任务不匹配');
@@ -86,6 +91,8 @@ export function createScriptJob(project: ScriptProject, input: { operation: Scri
   if(input.operation==='season_outline'){
     seasonId=input.seasonId;if(!project.seasons?.some(season=>season.id===seasonId))throw new Error('季大纲必须绑定已有季');
   }else if(input.seasonId!==undefined)throw new Error('本步骤不接受季大纲范围');
+  if(['outline','unit_outline','story_outline','season_outline'].includes(input.operation)) outlineTaskOwner(project,{...input,scopeId,seasonId});
+  const outlineGrant=freezeOutlineTask(project,{...input,scopeId,seasonId});
   let unitIndices:number[]|undefined;
   if(input.unitIndices!==undefined){
     if(!['unit_outlines','board_plan'].includes(input.operation)||!Array.isArray(input.unitIndices)||!input.unitIndices.length||input.unitIndices.length>30||new Set(input.unitIndices).size!==input.unitIndices.length||input.unitIndices.some(index=>!Number.isInteger(index)||index<1||index>project.profile.plannedUnits))throw new Error('本批范围需要1–30个有效单元序号');
@@ -106,7 +113,7 @@ export function createScriptJob(project: ScriptProject, input: { operation: Scri
     reviewSceneIds=[...input.reviewSceneIds];
   }else if(input.reviewSceneIds!==undefined)throw new Error('本步骤不接受审阅场景范围');
   const unitBatch=input.operation==='unit_outlines'?{originalOrder:project.units.map(u=>u.id),sourceUnits:project.units.map(u=>({id:u.id,hash:hashValue(u)})),sourceHash:hashValue({profile:project.profile,brief:project.brief,characters:project.characters,facts:project.facts,storyOutlines:project.storyOutlines??[],seasons:project.seasons??[]}),targets:(unitIndices??Array.from({length:project.profile.plannedUnits},(_,i)=>i+1)).map(index=>{const existing=project.units[index-1],reserved=existing??newUnit(`第 ${index} 集`,project.profile.targetDurationMs,['anthology','procedural'].includes(project.profile.continuity)?undefined:project.id);return {index,id:reserved.id,existing:Boolean(existing),hash:existing?hashValue(existing):null,scopeId:reserved.scopeId,duration:reserved.targetDurationMs};})}:undefined;
-  return { ...(unitBatch?{unitBatch}:{}),...(selection?{selection}:{}),...(scopeId?{scopeId}:{}),...(seasonId?{seasonId}:{}),...(unitIndices?{unitIndices}:{}),...(input.authorRequest?{authorRequest:input.authorRequest}:{}), ...(input.reviewSource?{reviewSource:{jobId:input.reviewSource.jobId,index:input.reviewSource.index}}:{}),...(blockIds ? {blockIds} : {}), ...(reviewSceneIds?{reviewSceneIds}:{}), ...(input.agentRunId?{agentRunId:input.agentRunId}:{}), id: newId('job'), projectId: project.id, baseRevision: project.revision, inputHash: unitContentHash(project, unit), unitId: unit.id, sceneId: input.sceneId,
+  return { ...(outlineGrant?{outlineGrant}:{}), ...(unitBatch?{unitBatch}:{}),...(selection?{selection}:{}),...(scopeId?{scopeId}:{}),...(seasonId?{seasonId}:{}),...(unitIndices?{unitIndices}:{}),...(input.authorRequest?{authorRequest:input.authorRequest}:{}), ...(input.reviewSource?{reviewSource:{jobId:input.reviewSource.jobId,index:input.reviewSource.index}}:{}),...(blockIds ? {blockIds} : {}), ...(reviewSceneIds?{reviewSceneIds}:{}), ...(input.agentRunId?{agentRunId:input.agentRunId}:{}), id: newId('job'), projectId: project.id, baseRevision: project.revision, inputHash: unitContentHash(project, unit), unitId: unit.id, sceneId: input.sceneId,
     operation: input.operation, status: 'waiting', prompt: text(input.prompt, '提示词'), promptVersion: 'script-assist.v2', schemaVersion: 'script-result.v1', methods, inputSections:[...new Set(methods.flatMap(m=>methodUsage(m).inputs))], createdAt: Date.now(), updatedAt: Date.now() };
 }
 export function parseScriptResult(raw: string, project: ScriptProject, job: ScriptJob): ScriptResult {
@@ -123,6 +130,10 @@ export function parseScriptResult(raw: string, project: ScriptProject, job: Scri
     if(!legacy||Array.isArray(legacy)||typeof legacy!=='object'||typeof legacy.answer!=='string'||typeof legacy.summary!=='string'||Object.keys(legacy).some(key=>!['answer','summary'].includes(key)))return {summary:'对话回复',answer:raw};
   }
   const value = record(decoded);
+  if(job.outlineGrant){
+    applyOutlineTask(project,job.outlineGrant,job.unitId,job.id,value);
+    return {summary:text(value.summary,'修改说明'),outlineDevelopment:value};
+  }
   const allowed = ['summary', (job.operation === 'scene' || job.operation === 'rewrite') ? 'blocks' : job.operation==='text_rewrite'?'replacement':job.operation==='consult'?'answer':['concept','theme','character','fact'].includes(job.operation)?'suggestions' : ['outline','story_outline','season_outline','unit_outline'].includes(job.operation) ? 'outline' : job.operation === 'plan' ? 'scenePlans' : ['board_plan','unit_outlines'].includes(job.operation)?'units':['ending','scene_turn'].includes(job.operation)?'choices':'findings'];
   if (Object.keys(value).some(key => !allowed.includes(key))) throw new Error('结果包含本步骤未授权的字段');
   const result: ScriptResult = { summary: text(value.summary, '修改说明') };
@@ -189,8 +200,11 @@ export function applyScriptJob(project: ScriptProject, job: ScriptJob, choiceInd
   assertJobBaseline(project, job);
   if (job.status !== 'ready' || !job.result || ['review','consult'].includes(job.operation)) throw new Error('此记录没有可采用的写作提案');
   if(protectedSceneIds.includes(job.sceneId)&&['scene','rewrite','text_rewrite','scene_turn'].includes(job.operation))throw new Error('此场已锁定');
-  const next = structuredClone(project);
-  if(['concept','theme','character','fact'].includes(job.operation)){
+  let next = structuredClone(project);
+  if(job.outlineGrant){
+    if(!job.result.outlineDevelopment)throw new Error('局部大纲返回缺少范围合同');
+    next=applyOutlineTask(project,job.outlineGrant,job.unitId,job.id,job.result.outlineDevelopment);
+  } else if(['concept','theme','character','fact'].includes(job.operation)){
     const suggestions=job.result.suggestions;
     if(!suggestions||choiceIndex===undefined||!Number.isInteger(choiceIndex)||choiceIndex<0||choiceIndex>=suggestions.length)throw new Error('请选择有效的建议方案');
     const suggestion=suggestions[choiceIndex];

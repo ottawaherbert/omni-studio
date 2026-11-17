@@ -213,7 +213,7 @@ assert.ok(batchSource.includes("activeTakeId: existingUnit?.activeTakeId"), "bat
 assert.ok(batchSource.includes('if (candidate.unitSchema !== "storyboard_unit.v1") return false;'), "batch regeneration must not inherit IDs, Takes or modes from removed workflows");
 assert.ok(batchSource.includes("workspace.defaultVisualReferenceMode"), "new units must inherit the creator-selected scene reference mode");
 assert.ok(panelSource.includes('return videoChannels.some((item) => item.id === model.channelId);'), "storyboard model selection must be capability-driven rather than provider/model hardcoded");
-assert.ok(hookSource.includes('return config.channels.some((item) => item.id === model.channelId);'), "Studio model selection must keep future registered video models available");
+assert.ok(hookSource.includes('config.channels.some((item) => item.id === model.channelId && item.enabled !== false)'), "Studio model selection must keep future registered video models available");
 assert.ok(storyboardSource.includes("相邻视频单元必须先统一为同一个有效目标视频模型"), "units with mixed or missing model capability contracts must never merge unchecked");
 assert.ok(batchSource.includes("buildStoryboardUnitVideoPromptRecord"), "batch generation must persist one canonical model-independent prompt per StoryboardUnit");
 assert.ok(panelSource.includes("saveUnitVideoPrompt") && panelSource.includes("rebuildUnitVideoPrompt"), "the Storyboard page must own editing and deterministic rebuilding of the unit prompt");

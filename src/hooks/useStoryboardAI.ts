@@ -1,5 +1,7 @@
+import { renderSceneContinuityBasis } from "../clients/productionStoryboardWorkflowClient";
 import { validateDirectorShotEdits } from "../clients/creativeDirectionClient";
 import { upgradeDirectorPlanTemplate } from "../config/prompts/directorPlanContract";
+import { projectShotEditingEvidence, withSceneVisualCoherenceContract } from "../clients/productionStoryboardWorkflowClient";
 import type { SceneDirectorPlan } from "../clients/domainTypes";
 import { renderProductionCreativeContext, projectDirectorMediaContext, normalizeDirectorPlan, directorBindingHash, directorPlanSourceHash, applyDirectorAudioPlan } from "../clients/creativeDirectionClient";
 import { legacyProjectClient } from "../clients/legacyProjectClient";
@@ -12,7 +14,7 @@ import { useGameStore } from "../clients/stateClient";
 import { useAIConfigStore } from "../clients/stateClient";
 import { loadProductionPromptTemplate } from "../clients/productionPromptClient";
 import { generateAIContent, generateAIImage } from "../clients/aiClient";
-import { appendShotTakeCandidate } from "../clients/productionMediaReviewClient";
+import { noteSuccessfulProductionEpisodeWrite } from "../utils/saveFailureRecovery";
 import {
   buildImageVisualStyleProjection,
   buildShotImageVisualRecipeInputEvidence,
@@ -190,6 +192,8 @@ export interface StoryboardBatchSceneContext {
 
 interface StoryboardWorkflowOptions {
   manualReview?: boolean;
+  /** Explicit specialist batch path only; ordinary planning makes one call. */
+  strictReview?: boolean;
   productionReady?: boolean;
   visualPromptReady?: boolean;
   imagePromptReady?: boolean;
@@ -496,7 +500,8 @@ const projectShotForVisualPrompt = (project: Project, shot: Shot, promptKind: "i
     ...(promptKind === "video" ? { duration: shot.duration } : {}),
     shotSize: shot.shotSize,
     cameraAngle: shot.cameraAngle,
-    ...(promptKind === "video" ? { cameraMovement: shot.cameraMovement, continuityNote: shot.continuityNote } : {}),
+    ...projectShotEditingEvidence(shot),
+    ...(promptKind === "video" ? { cameraMovement: shot.cameraMovement } : {}),
     focalLength: shot.focalLength,
     composition: shot.composition,
     blocking: shot.blocking,
@@ -578,7 +583,7 @@ export const useStoryboardAI = (
     phase: "idle",
     label: "",
     attempt: 0,
-    maxAttempts: STORYBOARD_AGENT_MAX_REPAIRS + 1,
+    maxAttempts: workflowOptions.strictReview ? STORYBOARD_AGENT_MAX_REPAIRS + 1 : 1,
     completedScenes: 0,
     totalScenes: 1,
   });
@@ -605,10 +610,10 @@ export const useStoryboardAI = (
   });
   const resolveManualTeamContext = async () => {
     if (!workflowOptions.manualReview || !workflowOptions.loadManualTeamContext) {
-      return [workflowOptions.manualTeamContext || "", currentProject ? renderProductionCreativeContext(currentProject, { episode: activeEpisode || undefined, scene: activeScene }, "planning") : ""].filter(Boolean).join("\n\n");
+      return [renderSceneContinuityBasis(activeScene?.visualPlan), workflowOptions.manualTeamContext || "", currentProject ? renderProductionCreativeContext(currentProject, { episode: activeEpisode || undefined, scene: activeScene }, "planning") : ""].filter(Boolean).join("\n\n");
     }
     try {
-      return await workflowOptions.loadManualTeamContext();
+      return [renderSceneContinuityBasis(activeScene?.visualPlan), await workflowOptions.loadManualTeamContext()].filter(Boolean).join("\n\n");
     } catch (error) {
       console.error("Failed to load Storyboard production context:", summarizeUnknownError(error));
       toast.error("场次来源加载失败，请重试。");
@@ -900,6 +905,7 @@ ${linkedPropAssets.map(p => {
         composition: shot.composition,
         blocking: shot.blocking,
         continuityNote: shot.continuityNote,
+        beatIds: shot.beatIds, eventIds: shot.eventIds,
         visualAction: shot.visualAction,
         microExpression: shot.microExpression,
         soundDesign: typeof shot.soundDesign === "string" ? shot.soundDesign : undefined,
@@ -1057,12 +1063,12 @@ ${linkedPropAssets.map(p => {
       sceneId: scene.id,
       sceneTitle: scene.title,
       attempt: 1,
-      maxAttempts: STORYBOARD_AGENT_MAX_REPAIRS + 1,
+      maxAttempts: workflowOptions.strictReview ? STORYBOARD_AGENT_MAX_REPAIRS + 1 : 1,
       completedScenes,
       totalScenes,
     });
 
-    const initial = await executeModel<unknown>("generate", upgradeDirectorPlanTemplate(confirmedPrompt), storyboardShotSchema);
+    const initial = await executeModel<unknown>("generate", withSceneVisualCoherenceContract(upgradeDirectorPlanTemplate(confirmedPrompt)), storyboardShotSchema);
     let rawShots = Array.isArray(initial.parsed)
       ? initial.parsed.filter((item): item is Record<string, any> => Boolean(item) && typeof item === "object")
       : [];
@@ -1090,7 +1096,7 @@ ${linkedPropAssets.map(p => {
       direction: ReturnType<typeof normalizeDirectorPlan>;
     } | undefined;
     let repairCount = 0;
-    while (true) {
+    while (workflowOptions.strictReview) {
       if (contractIssues.length === 0) {
         setAgentProgress({
           phase: "checking",
@@ -1098,7 +1104,7 @@ ${linkedPropAssets.map(p => {
           sceneId: scene.id,
           sceneTitle: scene.title,
           attempt: repairCount + 1,
-          maxAttempts: STORYBOARD_AGENT_MAX_REPAIRS + 1,
+          maxAttempts: workflowOptions.strictReview ? STORYBOARD_AGENT_MAX_REPAIRS + 1 : 1,
           completedScenes,
           totalScenes,
         });
@@ -1140,7 +1146,7 @@ ${linkedPropAssets.map(p => {
         sceneId: scene.id,
         sceneTitle: scene.title,
         attempt: repairCount + 1,
-        maxAttempts: STORYBOARD_AGENT_MAX_REPAIRS + 1,
+        maxAttempts: workflowOptions.strictReview ? STORYBOARD_AGENT_MAX_REPAIRS + 1 : 1,
         completedScenes,
         totalScenes,
         score: quality?.score,
@@ -1234,18 +1240,18 @@ ${linkedPropAssets.map(p => {
       audit,
       issues: candidateIssues,
     };
-    const disposition = resolveStoryboardCandidateDisposition(quality, contractIssues.length);
+    const disposition = workflowOptions.strictReview ? resolveStoryboardCandidateDisposition(quality, contractIssues.length) : contractIssues.some(issue=>issue.severity === "blocking") ? "needs_author_decision" : "awaiting_author_adoption";
 
     if (disposition === "needs_author_decision") {
       setReviewCandidateState(candidate);
       setIsReviewCandidateOpen(showDecision);
       setAgentProgress({
         phase: "needs_decision",
-        label: "Agent 多轮修订后仍未达标，需要创作者决策",
+        label: "候选已保留，请处理具体结构问题",
         sceneId: scene.id,
         sceneTitle: scene.title,
         attempt: repairCount + 1,
-        maxAttempts: STORYBOARD_AGENT_MAX_REPAIRS + 1,
+        maxAttempts: workflowOptions.strictReview ? STORYBOARD_AGENT_MAX_REPAIRS + 1 : 1,
         completedScenes,
         totalScenes,
         score: quality?.score,
@@ -1258,14 +1264,14 @@ ${linkedPropAssets.map(p => {
     setIsReviewCandidateOpen(showDecision);
     setAgentProgress({
       phase: "needs_decision",
-      label: `分镜 Agent 已通过独立质检（${quality.score} 分），等待创作者采用`,
+      label: "本场镜头草案已准备，可查看采用",
       sceneId: scene.id,
       sceneTitle: scene.title,
       attempt: repairCount + 1,
-      maxAttempts: STORYBOARD_AGENT_MAX_REPAIRS + 1,
+      maxAttempts: workflowOptions.strictReview ? STORYBOARD_AGENT_MAX_REPAIRS + 1 : 1,
       completedScenes,
       totalScenes,
-      score: quality.score,
+      score: quality?.score,
     });
     return { passed: true, awaitingAdoption: true, candidate, quality };
   };
@@ -1328,12 +1334,12 @@ ${linkedPropAssets.map(p => {
         });
         if (result.awaitingAdoption) {
           setIsReviewCandidateOpen(true);
-          toast.success(`“${scene.title}”已通过独立质检，批次暂停等待创作者采用。`, { duration: 7000 });
+          toast.success(`“${scene.title}”候选已准备，可查看采用。`, { duration: 7000 });
           return;
         }
         if (!result.passed) {
           setIsReviewCandidateOpen(true);
-          toast.error(`“${scene.title}”多轮自动修订后仍未达标，批次已暂停。`, { duration: 7000 });
+          toast.error(`“${scene.title}”候选中仍有结构问题，已保留待处理。`, { duration: 7000 });
           return;
         }
         completedScenes += 1;
@@ -1410,7 +1416,7 @@ ${linkedPropAssets.map(p => {
       const requestSnapshot = readDirectorRequest(currentProject!, activeEpisode, activeScene);
       const responseText = await generateAIContent({
         taskType: 'storyboardGen',
-        prompt: upgradeDirectorPlanTemplate(prompt),
+        prompt: withSceneVisualCoherenceContract(upgradeDirectorPlanTemplate(prompt)),
         requireJson: true,
         schema: storyboardShotSchema,
       });
@@ -1522,6 +1528,7 @@ ${linkedPropAssets.map(p => {
             composition: s.composition,
             blocking: s.blocking,
             continuityNote: s.continuityNote,
+            beatIds: Array.isArray(s.beatIds)?s.beatIds.filter((id:unknown)=>typeof id === "string"):undefined, eventIds:Array.isArray(s.eventIds)?s.eventIds.filter((id:unknown)=>typeof id === "string"):undefined,
             visualAction: s.visualAction,
             microExpression: s.microExpression,
             soundDesign: typeof s.soundDesign === "string" ? s.soundDesign : undefined,
@@ -1786,7 +1793,7 @@ ${linkedPropAssets.map(p => {
       sceneId: scene.id,
       sceneTitle: scene.title,
       attempt: 1,
-      maxAttempts: STORYBOARD_VISUAL_PROMPT_MAX_REPAIRS + 1,
+      maxAttempts: workflowOptions.strictReview ? STORYBOARD_VISUAL_PROMPT_MAX_REPAIRS + 1 : 1,
       completedScenes,
       totalScenes,
     });
@@ -1814,7 +1821,7 @@ ${linkedPropAssets.map(p => {
     } | undefined;
     let repairCount = 0;
 
-    while (true) {
+    while (workflowOptions.strictReview) {
       if (contractIssues.length === 0) {
         setAgentProgress({
           phase: "checking",
@@ -1822,7 +1829,7 @@ ${linkedPropAssets.map(p => {
           sceneId: scene.id,
           sceneTitle: scene.title,
           attempt: repairCount + 1,
-          maxAttempts: STORYBOARD_VISUAL_PROMPT_MAX_REPAIRS + 1,
+          maxAttempts: workflowOptions.strictReview ? STORYBOARD_VISUAL_PROMPT_MAX_REPAIRS + 1 : 1,
           completedScenes,
           totalScenes,
         });
@@ -1866,7 +1873,7 @@ ${linkedPropAssets.map(p => {
         sceneId: scene.id,
         sceneTitle: scene.title,
         attempt: repairCount + 1,
-        maxAttempts: STORYBOARD_VISUAL_PROMPT_MAX_REPAIRS + 1,
+        maxAttempts: workflowOptions.strictReview ? STORYBOARD_VISUAL_PROMPT_MAX_REPAIRS + 1 : 1,
         completedScenes,
         totalScenes,
         score: quality?.score,
@@ -1962,7 +1969,7 @@ ${linkedPropAssets.map(p => {
       audit,
       issues: candidateIssues,
     };
-    const disposition = resolveStoryboardCandidateDisposition(quality, contractIssues.length);
+    const disposition = workflowOptions.strictReview ? resolveStoryboardCandidateDisposition(quality, contractIssues.length) : contractIssues.some(issue=>issue.severity === "blocking") ? "needs_author_decision" : "awaiting_author_adoption";
 
     if (disposition === "needs_author_decision") {
       setReviewCandidateState(candidate);
@@ -1973,7 +1980,7 @@ ${linkedPropAssets.map(p => {
         sceneId: scene.id,
         sceneTitle: scene.title,
         attempt: repairCount + 1,
-        maxAttempts: STORYBOARD_VISUAL_PROMPT_MAX_REPAIRS + 1,
+        maxAttempts: workflowOptions.strictReview ? STORYBOARD_VISUAL_PROMPT_MAX_REPAIRS + 1 : 1,
         completedScenes,
         totalScenes,
         score: quality?.score,
@@ -1986,14 +1993,14 @@ ${linkedPropAssets.map(p => {
     setIsReviewCandidateOpen(showDecision);
     setAgentProgress({
       phase: "needs_decision",
-      label: `${promptKind === "image" ? "图片" : "视频"}提示词已通过独立质检（${quality.score} 分），等待创作者采用`,
+      label: "本场提示词候选已准备，可查看采用",
       sceneId: scene.id,
       sceneTitle: scene.title,
       attempt: repairCount + 1,
-      maxAttempts: STORYBOARD_VISUAL_PROMPT_MAX_REPAIRS + 1,
+      maxAttempts: workflowOptions.strictReview ? STORYBOARD_VISUAL_PROMPT_MAX_REPAIRS + 1 : 1,
       completedScenes,
       totalScenes,
-      score: quality.score,
+      score: quality?.score,
     });
     return { passed: true, awaitingAdoption: true, candidate, quality };
   };
@@ -2393,7 +2400,7 @@ ${linkedPropAssets.map(p => {
         });
         if (result.awaitingAdoption) {
           setIsReviewCandidateOpen(true);
-          toast.success(`“${scene.title}”的${promptKind === "image" ? "图片" : "视频"}提示词已通过独立质检，批次暂停等待创作者采用。`, { duration: 7000 });
+          toast.success(`“${scene.title}”的${promptKind === "image" ? "图片" : "视频"}提示词候选已准备，可查看采用。`, { duration: 7000 });
           return;
         }
         if (!result.passed) {
@@ -2591,7 +2598,7 @@ ${linkedPropAssets.map(p => {
     metadata?: PromptEditorConfirmMetadata;
     sceneShots: Shot[];
   }): Promise<Shot> => {
-    if (!activeScene || !currentProject) throw new Error("找不到当前场次。");
+    if (!activeScene || !currentProject || !activeEpisode) throw new Error("找不到当前场次。");
     const appearanceContext = await resolveManualTeamContext();
     requireAppearanceReady(currentProject, activeScene, [shot], appearanceSourceShots(activeEpisode!, appearanceContext || ""), 'image');
     let compiledRequest: CompiledImageGenerationRequest | undefined;
@@ -2607,7 +2614,12 @@ ${linkedPropAssets.map(p => {
           creativeScope: { episode: activeEpisode || undefined, scene: activeScene, shot },
     });
     const statePrompt = appearancePrompt(shot, 'image');
+    await flushDebouncedProjectSave(currentProject.id);
+    let generatedCandidateId: string | undefined;
     const imageUrl = await generateAIImage({
+          projectId: currentProject?.id,
+      target: { projectId: currentProject.id, episodeId: activeEpisode.id, sceneId: activeScene.id, kind: "shot", shotIds: [shot.id] },
+      onGenerationResult: result => { generatedCandidateId = result.candidateId; },
       promptCore: statePrompt && !finalPrompt.includes(statePrompt) ? `${finalPrompt}\n\n${statePrompt}` : finalPrompt,
       aspectRatio: currentProject.aspectRatio as any || "16:9",
       references: references.length > 0 ? references : undefined,
@@ -2626,7 +2638,7 @@ ${linkedPropAssets.map(p => {
       useAIConfigStore.getState().routing.imageGen,
     );
     const createdAt = Date.now();
-    const newTakeId = `take-${createdAt}-${shot.id}`;
+    const newTakeId = generatedCandidateId || `take-${createdAt}-${shot.id}`;
     const referenceBoardIds = new Set((workflowOptions.manualAssetBoards || []).map((board) => board.boardItemId));
     const selectedAssetIds = [
       ...(shot.characterIdsInShot || []),
@@ -2665,14 +2677,20 @@ ${linkedPropAssets.map(p => {
       visualStyleCompileManifest: compiledRequest?.visualStyleProjection?.compileManifest,
       createdAt,
     };
-    return appendShotTakeCandidate(shot, {
+    const episodeBeforeCandidate = useProjectStore.getState().activeEpisode;
+    const saved = await legacyProjectClient.appendStudioCandidate(currentProject.id, activeEpisode.id, activeScene.id, { shotId: shot.id, take: {
       id: newTakeId,
       appearanceSnapshot: shot.appearance,
       imageUrl,
       imageMedia,
       generationAudit,
       createdAt,
-    });
+    } });
+    if (useProjectStore.getState().currentProject?.id === currentProject.id && episodeBeforeCandidate?.id === activeEpisode.id && useProjectStore.getState().activeEpisode === episodeBeforeCandidate) {
+      noteSuccessfulProductionEpisodeWrite(currentProject.id, saved.episode);
+      useProjectStore.setState({ activeEpisode: saved.episode });
+    }
+    return saved.scene.shots.find(item => item.id === shot.id)!;
   };
 
   const executeRerollShot = async (
@@ -2687,17 +2705,13 @@ ${linkedPropAssets.map(p => {
     setGeneratingShotImageId(shotId);
     toast.loading("正在重新生成该镜头...", { id: `reroll-${shotId}` });
     try {
-      const updatedShot = await requestShotImageTake({
+      await requestShotImageTake({
         shot: shotToReroll,
         finalPrompt,
         references,
         metadata,
         sceneShots: activeScene.shots || [],
       });
-      const updatedShots = activeScene.shots!.map((shot) => shot.id === shotId ? updatedShot : shot);
-
-      snapshotInteractiveNode(currentProject, activeScene.id, "重新生成节点镜头图片前");
-      updateScene(activeScene.id, { shots: updatedShots }, activeEpisode.id);
       toast.success("图片候选已生成，请预览后明确采用", { id: `reroll-${shotId}` });
     } catch (error) {
       console.error("Storyboard reroll failed:", summarizeUnknownError(error));
@@ -2815,7 +2829,6 @@ ${linkedPropAssets.map(p => {
               sceneShots: workingShots,
             });
             workingShots = workingShots.map((item) => item.id === shot.id ? updatedShot : item);
-            await updateScene(activeScene.id, { shots: workingShots }, activeEpisode.id);
           }
           completed += 1;
         } catch (error) {

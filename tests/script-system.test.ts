@@ -12,8 +12,6 @@ import { createScriptProject, unitContentHash, createMockProposal, applyProposal
 import { analyseTimeline, unionIntervals } from '../packages/script/src/runtime';
 import { createScriptDelivery, exportText, scriptExportFilename } from '../packages/script/src/exporters';
 import { createScriptRepository, ScriptConflictError } from '../apps/api/src/repositories/scriptStore';
-import { agentReviewSceneIds, aggregateAgentReviewFindings } from '../packages/script/src/agent';
-import { mergeAgentDraft } from '../packages/script/src/agentMerge';
 import { registerScriptRoutes } from '../apps/api/src/routes/scriptRoutes';
 import { createInteractiveWritingPort } from '../src/server/interactiveWritingPort';
 import { newScene, newUnit } from '../packages/script/src/project';
@@ -24,7 +22,6 @@ import { applyScenePlans, applyWholeBoardPlan, applyUnitOutlines, parseProposedS
 import { screenplayTextToBlocks, blocksToScreenplayText } from '../packages/script/src/fountainAdapter';
 import { answerManualAI, getManualAIPending, resolveManualAIRequest, withManualAIResult } from '../apps/web/src/clients/manualAIClient';
 import { boardAdviceBody } from '../apps/web/src/features/script/components/boardAdviceContext';
-import {parseIdeationReply,parseIdeationDraft,buildIdeationPrompt,type ChatMessage} from '../packages/script/src/ideation';
 import {scriptAssistTemplates} from '../src/config/prompts/scriptAssist';
 import { ScriptLibrary } from '../apps/web/src/features/script/ScriptLibrary';
 const profile:ProjectProfile={organization:'standalone',continuity:'serialized',workType:'短剧',genres:['悬疑'],language:'zh-CN',plannedUnits:1,targetDurationMs:300000,toleranceMs:15000,includeCredits:true,aspectRatio:'16:9',productionMode:'live-action'};
@@ -48,40 +45,9 @@ test('创建入口的形态只提供起点，集数、单集时长与集间关�
   assert.throws(()=>createScriptCreationProfile('tv-series',0,45),/计划集数/);
   assert.throws(()=>createScriptCreationProfile('tv-series',8,0),/目标时长/);
 });
-test('起点恢复原页聊天、模式下拉框与 Skill，不出现创建配置表单',()=>{
-  const html=renderToStaticMarkup(React.createElement(ScriptLibrary,{projects:[],error:'',onOpen:()=>{},onCreate:async()=>{}}));
-  assert.match(html,/给 AI 的消息/);
-  assert.match(html,/普通模式/);
-  assert.match(html,/选择 Skill/);
-  assert.doesNotMatch(html,/发送方式|作品名称|作品形态|目标时长（分钟）|带入作品的材料|直接开始写作|上方文字是/);
-});
-test('构思对话：超过五轮仍保留选择与原文，完整 Skill 和实际版本进入请求',()=>{
-  const messages:ChatMessage[]=Array.from({length:6},(_,i)=>({role:'user',text:`第 ${i+1} 次想法\n  原文不改。`}));
-  messages.splice(1,0,{role:'ai',text:'你喜欢哪个？',options:[{tag:'留白',text:'两人坐下，不再解释。'}]});
-  const method={id:'skill:test',title:'方法验收',version:'7',content:'甲'.repeat(220)+'尾部也应保留'};
-  const prompt=buildIdeationPrompt('chat',messages,[method],scriptAssistTemplates.scriptIdeation.template);
-  assert.ok(prompt.includes('尾部也应保留'));assert.ok(prompt.includes('版本：7'));assert.ok(prompt.includes('两人坐下，不再解释。'));
-  assert.match(prompt,/第 6 次想法/);assert.match(prompt,/不按固定轮数结束/);assert.doesNotMatch(prompt,/黄金四问|经典爆款|主角软肋/);
-  assert.ok(buildIdeationPrompt('chat',messages,[],scriptAssistTemplates.scriptIdeation.template).includes('本次未选择 Skill'));
-  assert.throws(()=>buildIdeationPrompt('chat',messages,[],'缺少消息变量'),/占位符/);
-});
-test('构思结果：普通文字仍可读，选项可直接采用；无内容的蓝图不会创建空作品',()=>{
-  assert.deepEqual(parseIdeationReply('这句可以更短。'),{text:'这句可以更短。',options:[]});
-  assert.deepEqual(parseIdeationReply('```json\n{"question":"选哪个？","options":[{"tag":"日常","text":"留一盏灯。"},null]}\n```'),{text:'选哪个？',options:[{tag:'日常',text:'留一盏灯。'}]});
-  assert.throws(()=>parseIdeationReply(' '),/为空/);
-  assert.throws(()=>parseIdeationDraft('{"title":"空作品"}',[]),/缺少故事/);
-  assert.throws(()=>parseIdeationDraft('{',[]),/格式/);
-});
-test('聊天确认后原子创建作品：保存选择的蓝图和完整 Skill，不插入虚构正文',()=>{
-  const db=new Database(':memory:');const repo=createScriptRepository(db);repo.ensureSchema();
-  try{
-    const method={id:'skill:test',title:'日常对话',version:'3',content:'保持平淡，结尾可以留白。'};
-    const draft=parseIdeationDraft(JSON.stringify({title:'灯',concept:'父女一起补胎',outline:'女儿留下帮忙',format:'short-film',targetMinutes:7,characters:[{name:'女儿'}]}),[method]);
-    const p=createScriptProjectFromMaterial(draft.title,draft.profile,draft.initialBrief);
-    const saved=repo.saveProject(p,0);const loaded=repo.getProject(saved.id)!;
-    assert.equal(loaded.brief.outline,'女儿留下帮忙');assert.deepEqual(loaded.methods,[method]);assert.equal(loaded.profile.targetDurationMs,420000);
-    assert.ok(loaded.units[0].scenes[0].blocks.every(b=>!b.text));assert.equal(loaded.originalMaterial,undefined);
-  }finally{db.close();}
+test('作品库显示创建入口，不再引导聊天或自主运行',()=>{
+ const html=renderToStaticMarkup(React.createElement(ScriptLibrary,{projects:[],error:'',onOpen:()=>{},onCreate:async()=>{}}));
+ assert.match(html,/新建剧本/);assert.match(html,/历史内容存档/);assert.doesNotMatch(html,/给 AI 的消息|普通模式|开启助手/);
 });
 test('Agent 执行方式：API 会话不弹手动请求，逐步回填必须收到本步结果',async t=>{
   useSettingsStore.setState({isTestMode:true});t.after(()=>useSettingsStore.setState({isTestMode:false}));
@@ -433,342 +399,6 @@ test('结尾与场景变化建议作为持久任务按选定方案原子采用�
     assert.equal(repo.listBoardSuggestionJobs(p.id).length,2);
   }finally{db.close();}
 });
-test('逐步规划可交给 Agent 写完空白场并审阅，均使用自写返回',()=>{
-  const db=new Database(':memory:');
-  try{
-    const repo=createScriptRepository(db);repo.ensureSchema();
-    let p=repo.saveProject(project(),0);
-    const source={source:'manual_external' as const,provider:'codex_test_fixture',modelId:'self_written'};
-    const plan=repo.createJob(p.id,{operation:'plan',unitId:p.units[0].id,sceneId:p.units[0].scenes[0].id,prompt:'按渡口故事补一场',expectedRevision:p.revision});
-    repo.submitJob(p.id,plan.id,JSON.stringify({summary:'把迟疑与求助分成两场',scenePlans:[
-      {title:'值班室 夜',purpose:'林野正要关掉渡口的灯。'},
-      {title:'渡口 夜',purpose:'陌生人举起旧哨，请值班员重新开灯。'},
-    ]}),source);
-    p=repo.transition(p.id,plan.id,'approve').project!;
-    let run=repo.createAgentRun(p.id,{unitId:p.units[0].id,goal:'按已有分场写动作简洁的短片初稿，最后审阅因果。',strategy:'write_existing',maxScenes:2,methodIds:[],workspace:'published'});
-    run=repo.transitionAgentRun(p.id,run.id,{action:'resume',expectedVersion:run.version});
-    const lines=['林野把总闸拨到一半，听见岸边的哨声。','陌生人举起裂边的黄铜哨。林野推回总闸，渡口的灯重新亮起。'];
-    for(let index=0;index<2;index++){
-      const sceneId=run.sceneIds[run.cursor];
-      const job=repo.createJob(p.id,{operation:'scene',unitId:run.unitId,sceneId,prompt:`写第 ${index+1} 场`,expectedRevision:p.revision});
-      run=repo.transitionAgentRun(p.id,run.id,{action:'attach',expectedVersion:run.version,jobId:job.id});
-      repo.submitJob(p.id,job.id,JSON.stringify({summary:'用可见行动推进',blocks:[{type:'action',text:lines[index]}]}),source);
-      p=repo.transition(p.id,job.id,'approve').project!;
-      run=repo.transitionAgentRun(p.id,run.id,{action:'advance',expectedVersion:run.version});
-    }
-    assert.equal(run.phase,'review');
-    const review=repo.createJob(p.id,{operation:'review',unitId:run.unitId,sceneId:p.units[0].scenes[0].id,prompt:'按已写正文检查因果',expectedRevision:p.revision,reviewSceneIds:run.sceneIds});
-    run=repo.transitionAgentRun(p.id,run.id,{action:'attach',expectedVersion:run.version,jobId:review.id});
-    repo.submitJob(p.id,review.id,JSON.stringify({summary:'动作承接明确；旧哨与林野的关系仍需作者决定。',findings:[]}),source);
-    run=repo.transitionAgentRun(p.id,run.id,{action:'advance',expectedVersion:run.version});
-    assert.equal(run.status,'complete');
-    assert.match(exportText(p,'fountain'),/黄铜哨/);
-    assert.equal(authorHistoryCount(db),0);
-  }finally{db.close();}
-});
-test('Agent 独立草稿逐步写作与审阅，作者稿仅在采用时更新',()=>{
-  const db=new Database(':memory:');
-  try{
-    let repo=createScriptRepository(db);repo.ensureSchema();
-    const published=repo.saveProject(project(),0);
-    let run=repo.createAgentRun(published.id,{unitId:published.units[0].id,goal:'写出渡口值班员的选择，并检查动作因果。',strategy:'write_existing',maxScenes:1,methodIds:[],workspace:'draft'});
-    assert.equal(run.baseRevision,published.revision);
-    run=repo.transitionAgentRun(published.id,run.id,{action:'resume',expectedVersion:run.version});
-    const draft=repo.getAgentDraft(published.id,run.id);
-    const job=repo.createJob(published.id,{operation:'scene',unitId:run.unitId,sceneId:run.sceneIds[0],prompt:'只写可见行动',expectedRevision:draft.revision,agentRunId:run.id});
-    run=repo.transitionAgentRun(published.id,run.id,{action:'attach',expectedVersion:run.version,jobId:job.id});
-    const source={source:'manual_external' as const,provider:'self_written',modelId:'fixture'};
-    assert.equal(repo.submitJob(published.id,job.id,JSON.stringify({summary:'行动',blocks:[{type:'action',text:'值班员重新打开渡口的灯。'},{type:'dialogue',speakerName:'值班员',text:'船还没走。'}]}),source).status,'ready');
-    const approved=repo.transition(published.id,job.id,'approve');
-    assert.equal(approved.project!.revision,published.revision+1);
-    assert.equal(repo.getProject(published.id)!.revision,published.revision);
-    assert.equal(authorHistoryCount(db),0);
-    run=repo.transitionAgentRun(published.id,run.id,{action:'pause',expectedVersion:run.version});
-    repo=createScriptRepository(db);repo.ensureSchema();
-    run=repo.getAgentRun(published.id,run.id);
-    run=repo.transitionAgentRun(published.id,run.id,{action:'resume',expectedVersion:run.version});
-    run=repo.transitionAgentRun(published.id,run.id,{action:'advance',expectedVersion:run.version});
-    assert.equal(run.phase,'review');
-    const revisedDraft=repo.getAgentDraft(published.id,run.id);
-    const review=repo.createJob(published.id,{operation:'review',unitId:run.unitId,sceneId:run.sceneIds[0],prompt:'只审阅本场',expectedRevision:revisedDraft.revision,reviewSceneIds:run.sceneIds,agentRunId:run.id});
-    run=repo.transitionAgentRun(published.id,run.id,{action:'attach',expectedVersion:run.version,jobId:review.id});
-    assert.equal(repo.submitJob(published.id,review.id,JSON.stringify({summary:'动作因果清晰',findings:[]}),source).status,'ready');
-    run=repo.transitionAgentRun(published.id,run.id,{action:'advance',expectedVersion:run.version});
-    assert.equal(run.status,'complete');
-    assert.equal(repo.getProject(published.id)!.revision,published.revision);
-    assert.match(exportText(repo.getAgentDraft(published.id,run.id),'fountain'),/重新打开渡口的灯/);
-    const accepted=repo.publishAgentRun(published.id,run.id,run.version,published.revision);
-    assert.equal(accepted.project.revision,published.revision+1);
-    assert.equal(accepted.run.publicationStatus,'published');
-    assert.equal(authorHistoryCount(db),0);
-    assert.match(exportText(repo.getProject(published.id)!,'fountain'),/重新打开渡口的灯/);
-    assert.match(exportText(repo.getProject(published.id)!,'fountain'),/@值班员\n船还没走/);
-    assert.equal(repo.publishAgentRun(published.id,run.id,accepted.run.version,accepted.project.revision).project.revision,accepted.project.revision);
-    assert.equal(authorHistoryCount(db),0);
-  }finally{db.close();}
-});
-test('Agent 分场草稿与作者修改项目标题可以合并，取消任务不能采用',()=>{
-  const db=new Database(':memory:');
-  try{
-    const repo=createScriptRepository(db);repo.ensureSchema();
-    let published=repo.saveProject(project(),0);
-    const source={source:'manual_external' as const,provider:'self_written',modelId:'fixture'};
-    let run=repo.createAgentRun(published.id,{unitId:published.units[0].id,goal:'补一场渡口冲突',strategy:'plan_only',maxScenes:1,workspace:'draft'});
-    run=repo.transitionAgentRun(published.id,run.id,{action:'resume',expectedVersion:run.version});
-    const job=repo.createJob(published.id,{operation:'plan',unitId:run.unitId,sceneId:published.units[0].scenes[0].id,prompt:'补一场',expectedRevision:published.revision,agentRunId:run.id});
-    run=repo.transitionAgentRun(published.id,run.id,{action:'attach',expectedVersion:run.version,jobId:job.id});
-    repo.submitJob(published.id,job.id,JSON.stringify({summary:'给值班员一个选择',scenePlans:[{title:'渡口夜',purpose:'陌生人请求重新开灯。'}]}),source);
-    repo.transition(published.id,job.id,'approve');
-    run=repo.transitionAgentRun(published.id,run.id,{action:'advance',expectedVersion:run.version});
-    const draft=repo.getAgentDraft(published.id,run.id);
-    published.title='作者新标题';published=repo.saveProject(published,published.revision);
-    const merged=repo.publishAgentRun(published.id,run.id,run.version,published.revision);
-    assert.deepEqual(repo.getAgentDraft(published.id,run.id),draft);
-    assert.equal(merged.project.title,'作者新标题');
-    assert.equal(merged.project.units[0].scenes[0].title,'渡口夜');
-    assert.equal(authorHistoryCount(db),0);
-    let cancelled=repo.createAgentRun(published.id,{unitId:published.units[0].id,goal:'另一项准备',strategy:'plan_only',maxScenes:1,workspace:'draft'});
-    cancelled=repo.transitionAgentRun(published.id,cancelled.id,{action:'cancel',expectedVersion:cancelled.version});
-    assert.throws(()=>repo.publishAgentRun(published.id,cancelled.id,cancelled.version,published.revision),/尚未完成/);
-  }finally{db.close();}
-});
-test('Agent 与作者改不同场景时合并；同一场正文冲突时不丢失草稿和正式稿',()=>{
-  const db=new Database(':memory:');
-  try{
-    const repo=createScriptRepository(db);repo.ensureSchema();
-    const initial=project();
-    const second=newScene('值班室');second.purpose='调查谁关了灯';second.blocks[0].text='值班员翻开夜间记录。';
-    initial.units[0].scenes.push(second);
-    let published=repo.saveProject(initial,0);
-    let run=repo.createAgentRun(published.id,{unitId:published.units[0].id,goal:'写渡口第一场',strategy:'write_existing',maxScenes:1,workspace:'draft'});
-    run=repo.transitionAgentRun(published.id,run.id,{action:'resume',expectedVersion:run.version});
-    const job=repo.createJob(published.id,{operation:'scene',unitId:run.unitId,sceneId:run.sceneIds[0],prompt:'写第一场',expectedRevision:published.revision,agentRunId:run.id});
-    run=repo.transitionAgentRun(published.id,run.id,{action:'attach',expectedVersion:run.version,jobId:job.id});
-    const source={source:'manual_external' as const,provider:'self_written',modelId:'fixture'};
-    repo.submitJob(published.id,job.id,JSON.stringify({summary:'值班员决定开灯',blocks:[{type:'action',text:'值班员推开渡口的灯闸。'}]}),source);
-    repo.transition(published.id,job.id,'approve');
-    run=repo.transitionAgentRun(published.id,run.id,{action:'advance',expectedVersion:run.version});
-    const review=repo.createJob(published.id,{operation:'review',unitId:run.unitId,sceneId:run.sceneIds[0],prompt:'检查第一场',expectedRevision:repo.getAgentDraft(published.id,run.id).revision,reviewSceneIds:run.sceneIds,agentRunId:run.id});
-    run=repo.transitionAgentRun(published.id,run.id,{action:'attach',expectedVersion:run.version,jobId:review.id});
-    repo.submitJob(published.id,review.id,JSON.stringify({summary:'动作完整',findings:[]}),source);
-    run=repo.transitionAgentRun(published.id,run.id,{action:'advance',expectedVersion:run.version});
-    assert.equal(run.status,'complete');
-    published.units[0].scenes[1].blocks[0].text='值班员发现记录被撕去一页。';
-    published=repo.saveProject(published,published.revision);
-    const adopted=repo.publishAgentRun(published.id,run.id,run.version,published.revision);
-    assert.equal(adopted.project.units[0].scenes[0].blocks[0].text,'值班员推开渡口的灯闸。');
-    assert.equal(adopted.project.units[0].scenes[1].blocks[0].text,'值班员发现记录被撕去一页。');
-    assert.equal(adopted.project.revision,published.revision+1);
-    assert.equal(repo.getAgentRunInput(published.id,run.id).units[0].scenes[0].blocks[0].text,'');
-    assert.equal(repo.publishAgentRun(published.id,run.id,adopted.run.version,adopted.project.revision).project.revision,adopted.project.revision);
-  }finally{db.close();}
-});
-test('Agent 合并按字段判断：场景提纲与正文可并存，双边正文改动必须停下',()=>{
-  const base=project();
-  const draft=structuredClone(base);draft.revision++;
-  draft.units[0].scenes[0].blocks[0].text='母亲把旧照片放进信封。';
-  const published=structuredClone(base);published.revision++;
-  published.units[0].scenes[0].purpose='母亲发现照片背后的日期。';
-  const independent=mergeAgentDraft(base,published,draft);
-  assert.equal(independent.project.units[0].scenes[0].purpose,'母亲发现照片背后的日期。');
-  assert.equal(independent.project.units[0].scenes[0].blocks[0].text,'母亲把旧照片放进信封。');
-  published.units[0].scenes[0].blocks[0].text='母亲烧掉了照片。';
-  assert.throws(()=>mergeAgentDraft(base,published,draft),/正文.*分别修改/);
-  assert.equal(published.units[0].scenes[0].blocks[0].text,'母亲烧掉了照片。');
-  assert.equal(draft.units[0].scenes[0].blocks[0].text,'母亲把旧照片放进信封。');
-});
-test('Agent 增删场景遇到作者同时调整场景结构或占位内容时拒绝自动合并',()=>{
-  const base=project();
-  const draft=structuredClone(base);draft.revision++;
-  draft.units[0].scenes=[newScene('码头夜'),newScene('值班室')];
-  const published=structuredClone(base);published.revision++;
-  published.units[0].scenes[0].blocks[0].text='作者已在第一场写下开头。';
-  assert.throws(()=>mergeAgentDraft(base,published,draft),/已被作者修改/);
-  assert.equal(published.units[0].scenes.length,1);
-  const reordered=structuredClone(base);reordered.revision++;
-  reordered.units[0].scenes.push(newScene('作者新增场'));
-  assert.throws(()=>mergeAgentDraft(base,reordered,draft),/场景结构已由作者调整/);
-  const unsafe=structuredClone(base);unsafe.revision++;
-  unsafe.title='Agent 擅改标题';
-  assert.throws(()=>mergeAgentDraft(base,base,unsafe),/场景以外的改动/);
-});
-test('Agent 场数上限扣除已有待写分场，足够时直接写作',()=>{
-  const db=new Database(':memory:');
-  try{
-    const repo=createScriptRepository(db);repo.ensureSchema();
-    const draft=project();const planned=newScene('值班室');planned.purpose='值班员决定关灯。';draft.units[0].scenes.push(planned);
-    const saved=repo.saveProject(draft,0);
-    const existing=repo.createAgentRun(saved.id,{unitId:saved.units[0].id,goal:'按已有分场写作',strategy:'plan_write',maxScenes:1});
-    assert.equal(existing.phase,'write');assert.deepEqual(existing.sceneIds,[planned.id]);
-    let run=repo.createAgentRun(saved.id,{unitId:saved.units[0].id,goal:'只补一场再写作',strategy:'plan_write',maxScenes:2});
-    assert.equal(run.phase,'plan');
-    run=repo.transitionAgentRun(saved.id,run.id,{action:'resume',expectedVersion:run.version});
-    const job=repo.createJob(saved.id,{operation:'plan',unitId:run.unitId,sceneId:saved.units[0].scenes[0].id,prompt:'已有一场，最多补一场',expectedRevision:saved.revision,agentRunId:run.id});
-    run=repo.transitionAgentRun(saved.id,run.id,{action:'attach',expectedVersion:run.version,jobId:job.id});
-    const source={source:'manual_external' as const,provider:'self_written',modelId:'fixture'};
-    const plans=[{title:'码头',purpose:'陌生人求助。'},{title:'回程',purpose:'值班员改主意。'}];
-    assert.equal(repo.submitJob(saved.id,job.id,JSON.stringify({summary:'两场建议',scenePlans:plans}),source).status,'failed');
-    assert.match(repo.getJob(saved.id,job.id).error!,/最多还能补 1 场/);
-    assert.equal(repo.submitJob(saved.id,job.id,JSON.stringify({summary:'只补必要的一场',scenePlans:plans.slice(0,1)}),source).status,'ready');
-    repo.transition(saved.id,job.id,'approve');
-    run=repo.transitionAgentRun(saved.id,run.id,{action:'advance',expectedVersion:run.version});
-    assert.equal(run.phase,'write');assert.equal(run.sceneIds.length,2);assert.equal(run.sceneIds[0],planned.id);
-    assert.equal(repo.getProject(saved.id)?.revision,saved.revision);
-  }finally{db.close();}
-});
-test('Agent 持久计划使用自写返回逐步推进，暂停后重开可续写并跳过作者已写场',()=>{
-  const db=new Database(':memory:');
-  try {
-    let repo=createScriptRepository(db);repo.ensureSchema();
-    let p=repo.saveProject(project(),0);
-    const source={source:'manual_external' as const,provider:'codex_test_fixture',modelId:'self_written'};
-    let run=repo.createAgentRun(p.id,{unitId:p.units[0].id,goal:'写一个克制的渡口短片；保留已有正文，最后检查人物动机。',strategy:'plan_write',maxScenes:2,methodIds:[],workspace:'published'});
-    run=repo.transitionAgentRun(p.id,run.id,{action:'resume',expectedVersion:run.version});
-    const plan=repo.createJob(p.id,{operation:'plan',unitId:run.unitId,sceneId:p.units[0].scenes[0].id,prompt:'分两场，保留作者已有内容',expectedRevision:p.revision});
-    run=repo.transitionAgentRun(p.id,run.id,{action:'attach',expectedVersion:run.version,jobId:plan.id});
-    repo.submitJob(p.id,plan.id,JSON.stringify({summary:'分开关灯与回头两个动作',scenePlans:[{title:'值班室 夜',purpose:'林野按下关灯开关。'},{title:'渡口 夜',purpose:'陌生人求助，林野重新开灯。'}]}),source);
-    p=repo.transition(p.id,plan.id,'approve').project!;
-    run=repo.transitionAgentRun(p.id,run.id,{action:'advance',expectedVersion:run.version});
-    assert.equal(run.phase,'write');assert.equal(run.sceneIds.length,2);
-
-    const first=repo.createJob(p.id,{operation:'scene',unitId:run.unitId,sceneId:run.sceneIds[0],prompt:'只写第一场',expectedRevision:p.revision});
-    run=repo.transitionAgentRun(p.id,run.id,{action:'attach',expectedVersion:run.version,jobId:first.id});
-    repo.submitJob(p.id,first.id,JSON.stringify({summary:'用动作表现迟疑',blocks:[{type:'action',text:'林野把开关拨到一半，停住听了一秒。'}]}),source);
-    run=repo.transitionAgentRun(p.id,run.id,{action:'pause',expectedVersion:run.version});
-    assert.throws(()=>repo.transitionAgentRun(p.id,run.id,{action:'advance',expectedVersion:run.version}),/步骤与当前任务不匹配/);
-
-    repo=createScriptRepository(db);repo.ensureSchema();
-    run=repo.getAgentRun(p.id,run.id);
-    assert.equal(run.activeJobId,first.id);
-    run=repo.transitionAgentRun(p.id,run.id,{action:'resume',expectedVersion:run.version});
-    p=repo.transition(p.id,first.id,'approve').project!;
-    run=repo.transitionAgentRun(p.id,run.id,{action:'advance',expectedVersion:run.version});
-    assert.equal(run.cursor,1);
-
-    p.units[0].scenes[1].blocks[0].text='陌生人举起一把旧哨。林野重新开灯。';
-    p=repo.saveProject(p,p.revision);
-    run=repo.transitionAgentRun(p.id,run.id,{action:'skip',expectedVersion:run.version});
-    assert.equal(run.phase,'review');
-    const review=repo.createJob(p.id,{operation:'review',unitId:run.unitId,sceneId:p.units[0].scenes[0].id,prompt:'指出有正文依据的问题',expectedRevision:p.revision,reviewSceneIds:run.sceneIds});
-    run=repo.transitionAgentRun(p.id,run.id,{action:'attach',expectedVersion:run.version,jobId:review.id});
-    repo.submitJob(p.id,review.id,JSON.stringify({summary:'两场的因果已连接',findings:[{sceneId:p.units[0].scenes[1].id,issue:'重新开灯发生得很快，尚不清楚旧哨为何改变林野的判断。',suggestion:'可在前文给旧哨一个可见的关联，也可保留悬念。'}]}),source);
-    run=repo.transitionAgentRun(p.id,run.id,{action:'advance',expectedVersion:run.version});
-    assert.equal(run.status,'complete');assert.equal(run.completedJobIds.length,3);
-    assert.equal(repo.getProject(p.id)!.units[0].scenes[1].blocks[0].text,'陌生人举起一把旧哨。林野重新开灯。');
-    assert.throws(()=>repo.transitionAgentRun(p.id,run.id,{action:'resume',expectedVersion:run.version}),/已结束/);
-  } finally { db.close(); }
-});
-test('Agent 在创建时固定 Skill 版本，后续变更不能混入任务',()=>{
-  const db=new Database(':memory:');
-  try{
-    const repo=createScriptRepository(db);repo.ensureSchema();
-    const draft=project();draft.methods=[{id:'skill:visible',title:'可见动作',version:'1',content:'只写可见行动。'}];
-    let saved=repo.saveProject(draft,0);
-    let run=repo.createAgentRun(saved.id,{unitId:saved.units[0].id,goal:'补一场可见动作',strategy:'plan_only',maxScenes:1,methodIds:['skill:visible'],workspace:'published'});
-    run=repo.transitionAgentRun(saved.id,run.id,{action:'resume',expectedVersion:run.version});
-    const valid=repo.createJob(saved.id,{operation:'plan',unitId:run.unitId,sceneId:saved.units[0].scenes[0].id,prompt:'本次只补场',expectedRevision:saved.revision,methodIds:['skill:visible']});
-    run=repo.transitionAgentRun(saved.id,run.id,{action:'attach',expectedVersion:run.version,jobId:valid.id});
-    assert.equal(run.activeJobId,valid.id);
-    run=repo.transitionAgentRun(saved.id,run.id,{action:'cancel',expectedVersion:run.version});
-    const second=repo.createAgentRun(saved.id,{unitId:saved.units[0].id,goal:'补一场',strategy:'plan_only',maxScenes:1,methodIds:['skill:visible'],workspace:'published'});
-    saved.methods[0].content='改为只写对白。';saved=repo.saveProject(saved,saved.revision);
-    const changed=repo.createJob(saved.id,{operation:'plan',unitId:second.unitId,sceneId:saved.units[0].scenes[0].id,prompt:'本次补场',expectedRevision:saved.revision,methodIds:['skill:visible']});
-    const resumed=repo.transitionAgentRun(saved.id,second.id,{action:'resume',expectedVersion:second.version});
-    assert.throws(()=>repo.transitionAgentRun(saved.id,resumed.id,{action:'attach',expectedVersion:resumed.version,jobId:changed.id}),/Skill 已变化/);
-  }finally{db.close();}
-});
-
-test('同一作品不会并行运行两个 Agent，也不能让两项计划认领同一条写作记录',()=>{
-  const db=new Database(':memory:');
-  try{
-    const repo=createScriptRepository(db);repo.ensureSchema();
-    const p=repo.saveProject(project(),0);
-    const input={unitId:p.units[0].id,goal:'补充下一场',strategy:'plan_only' as const,maxScenes:1,methodIds:[],workspace:'published' as const};
-    let first=repo.createAgentRun(p.id,input);
-    let second=repo.createAgentRun(p.id,input);
-    first=repo.transitionAgentRun(p.id,first.id,{action:'resume',expectedVersion:first.version});
-    assert.throws(()=>repo.transitionAgentRun(p.id,second.id,{action:'resume',expectedVersion:second.version}),/已有运行中的 Agent/);
-    const job=repo.createJob(p.id,{operation:'plan',unitId:first.unitId,sceneId:p.units[0].scenes[0].id,prompt:'补充下一场',expectedRevision:p.revision});
-    first=repo.transitionAgentRun(p.id,first.id,{action:'attach',expectedVersion:first.version,jobId:job.id});
-    first=repo.transitionAgentRun(p.id,first.id,{action:'pause',expectedVersion:first.version});
-    second=repo.transitionAgentRun(p.id,second.id,{action:'resume',expectedVersion:second.version});
-    assert.throws(()=>repo.transitionAgentRun(p.id,second.id,{action:'attach',expectedVersion:second.version,jobId:job.id}),/属于另一项 Agent/);
-  }finally{db.close();}
-});
-test('旧的暂停 Agent 不会因近期任务列表截断而失去恢复入口',()=>{
-  const db=new Database(':memory:');
-  try{
-    const repo=createScriptRepository(db);repo.ensureSchema();const p=repo.saveProject(project(),0);
-    const first=repo.createAgentRun(p.id,{unitId:p.units[0].id,goal:'最早的待续任务',strategy:'plan_only',maxScenes:1});
-    for(let index=0;index<31;index++)repo.createAgentRun(p.id,{unitId:p.units[0].id,goal:`后续任务 ${index}`,strategy:'plan_only',maxScenes:1});
-    assert.ok(repo.listAgentRuns(p.id).some(run=>run.id===first.id));
-  }finally{db.close();}
-});
-test('只审阅 Agent 可从长片中间选择范围，完成后不改稿件版本',()=>{
-  const db=new Database(':memory:');
-  try{
-    const repo=createScriptRepository(db);repo.ensureSchema();
-    const draft=project();draft.units[0].scenes=Array.from({length:20},(_,index)=>{
-      const scene=newScene(`第 ${index+1} 场`);scene.blocks[0].text=`第 ${index+1} 场的手写正文。`;return scene;
-    });
-    const p=repo.saveProject(draft,0);
-    let run=repo.createAgentRun(p.id,{unitId:p.units[0].id,goal:'只检查第十场后的衔接，不改正文。',strategy:'review_only',maxScenes:3,startSceneId:p.units[0].scenes[9].id,methodIds:[],workspace:'published'});
-    assert.equal(run.phase,'review');
-    assert.deepEqual(run.sceneIds,p.units[0].scenes.slice(9,12).map(scene=>scene.id));
-    run=repo.transitionAgentRun(p.id,run.id,{action:'resume',expectedVersion:run.version});
-    const job=repo.createJob(p.id,{operation:'review',unitId:run.unitId,sceneId:run.sceneIds[0],prompt:'核对指定三场的因果',expectedRevision:p.revision,reviewSceneIds:run.sceneIds});
-    run=repo.transitionAgentRun(p.id,run.id,{action:'attach',expectedVersion:run.version,jobId:job.id});
-    assert.equal(repo.submitJob(p.id,job.id,JSON.stringify({summary:'这三场没有确定性的衔接错误',findings:[]}),{source:'manual_external',provider:'codex_test_fixture',modelId:'self_written'}).status,'ready');
-    run=repo.transitionAgentRun(p.id,run.id,{action:'advance',expectedVersion:run.version});
-    assert.equal(run.status,'complete');
-    assert.equal(repo.getProject(p.id)?.revision,p.revision);
-    assert.throws(()=>repo.createAgentRun(p.id,{unitId:p.units[0].id,goal:'检查不存在的场',strategy:'review_only',maxScenes:2,startSceneId:'missing'}),/起点场景不存在/);
-  }finally{db.close();}
-});
-test('65 场长篇可由 Agent 分三批审阅，跨批暂停恢复且只汇总实际读取范围',()=>{
-  const db=new Database(':memory:');
-  try{
-    let repo=createScriptRepository(db);repo.ensureSchema();
-    const draft=project();draft.units[0].scenes=Array.from({length:65},(_,index)=>{
-      const scene=newScene(`第 ${index+1} 场`);scene.blocks[0].text=`第 ${index+1} 场的作者正文。`;return scene;
-    });
-    const published=repo.saveProject(draft,0);
-    let run=repo.createAgentRun(published.id,{unitId:published.units[0].id,goal:'分批检查全片因果和人物行为，不改正文。',strategy:'review_all',maxScenes:30,workspace:'draft'});
-    assert.equal(run.sceneIds.length,65);assert.equal(run.phase,'review');
-    run=repo.transitionAgentRun(published.id,run.id,{action:'resume',expectedVersion:run.version});
-    const source={source:'manual_external' as const,provider:'self_written',modelId:'fixture'};
-    const covered:string[]=[];
-    for(let batch=0;batch<3;batch++){
-      const working=repo.getAgentDraft(published.id,run.id);
-      const ids=agentReviewSceneIds(run,working);covered.push(...ids);
-      assert.equal(ids.length,[30,30,5][batch]);
-      const job=repo.createJob(published.id,{operation:'review',unitId:run.unitId,sceneId:ids[0],prompt:`只读第 ${batch+1} 批`,expectedRevision:working.revision,reviewSceneIds:ids,agentRunId:run.id});
-      run=repo.transitionAgentRun(published.id,run.id,{action:'attach',expectedVersion:run.version,jobId:job.id});
-      if(batch===1){
-        const wrong=JSON.stringify({summary:'越界观察',findings:[{sceneId:covered[0],issue:'不属于本批',suggestion:'不应采用'}]});
-        assert.equal(repo.submitJob(published.id,job.id,wrong,source).status,'failed');
-      }
-      const issue=`“第 ${batch*30+1} 场的作者正文”尚未交代人物为何在此刻决定行动。`;
-      const findings=[{sceneId:ids[0],issue,suggestion:'检查前一场的行动依据。'}];
-      if(batch===0)findings.push({...findings[0],issue:`  ${issue}  `});
-      assert.equal(repo.submitJob(published.id,job.id,JSON.stringify({summary:`第 ${batch+1} 批只读 ${ids.length} 场`,findings}),source).status,'ready');
-      run=repo.transitionAgentRun(published.id,run.id,{action:'advance',expectedVersion:run.version});
-      if(batch===0){
-        run=repo.transitionAgentRun(published.id,run.id,{action:'pause',expectedVersion:run.version});
-        repo=createScriptRepository(db);repo.ensureSchema();run=repo.getAgentRun(published.id,run.id);
-        run=repo.transitionAgentRun(published.id,run.id,{action:'resume',expectedVersion:run.version});
-      }
-    }
-    assert.equal(run.status,'complete');assert.equal(run.cursor,65);
-    assert.deepEqual(covered,published.units[0].scenes.map(scene=>scene.id));
-    const reviews=repo.listAgentReviewJobs(published.id,run.id);
-    assert.equal(reviews.length,3);assert.equal(aggregateAgentReviewFindings(reviews).length,3);
-    repo.recordReviewDecision(published.id,reviews[1].id,0,'later','等待完整修订');
-    assert.equal(repo.listAgentReviewJobs(published.id,run.id)[1].reviewDecisions?.[0]?.status,'later');
-    assert.equal(repo.getProject(published.id)?.revision,published.revision);
-    assert.equal(repo.getAgentDraft(published.id,run.id).revision,published.revision);
-  }finally{db.close();}
-});
 test('审阅结果只能引用实际读取正文的场景，越界意见保留原文待修正',()=>{
   const db=new Database(':memory:');
   try{
@@ -784,26 +414,6 @@ test('审阅结果只能引用实际读取正文的场景，越界意见保留�
     assert.equal(result.rawResult,raw);
     assert.equal(repo.getProject(p.id)?.revision,p.revision);
   }finally{db.close();}
-});
-test('Agent 的场数上限约束实际回填，超量返回可修正且不会先写入作品',()=>{
-  const db=new Database(':memory:');
-  try{
-    const repo=createScriptRepository(db);repo.ensureSchema();
-    const p=repo.saveProject(project(),0);
-    let run=repo.createAgentRun(p.id,{unitId:p.units[0].id,goal:'只补一场',strategy:'plan_only',maxScenes:1,workspace:'published'});
-    run=repo.transitionAgentRun(p.id,run.id,{action:'resume',expectedVersion:run.version});
-    const job=repo.createJob(p.id,{operation:'plan',unitId:run.unitId,sceneId:p.units[0].scenes[0].id,prompt:'最多一场',expectedRevision:p.revision});
-    run=repo.transitionAgentRun(p.id,run.id,{action:'attach',expectedVersion:run.version,jobId:job.id});
-    const source={source:'manual_external' as const,provider:'self_written',modelId:'fixture'};
-    const scenePlans=[{title:'第一场',purpose:'母亲锁门',location:'家门口',timeOfDay:'夜'},{title:'第二场',purpose:'女儿返回',location:'家门口',timeOfDay:'夜'}];
-    assert.equal(repo.submitJob(p.id,job.id,JSON.stringify({summary:'两场方案',scenePlans}),source).status,'failed');
-    assert.equal(repo.getProject(p.id)!.units[0].scenes.length,1);
-    assert.equal(repo.submitJob(p.id,job.id,JSON.stringify({summary:'精简为一场',scenePlans:scenePlans.slice(0,1)}),source).status,'ready');
-    const applied=repo.transition(p.id,job.id,'approve').project!;
-    assert.equal(applied.units[0].scenes.length,1);
-    run=repo.transitionAgentRun(p.id,run.id,{action:'advance',expectedVersion:run.version});
-    assert.equal(run.status,'complete');
-  } finally { db.close(); }
 });
 function serialThread(){
   const p=project();p.profile.organization='episodic';p.profile.plannedUnits=3;
@@ -902,12 +512,7 @@ test('无密钥 HTTP 闭环：创建、保存、冲突、Mock、移除历史入�
   const send=(path:string,body:unknown,method='POST')=>fetch(base+path,{method,headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});
   try{
     const created=await send('',{title:'五分钟样例',profile});assert.equal(created.status,201);const {project:p}=await created.json();
-    const agentCreated=await send(`/${p.id}/agent-runs`,{unitId:p.units[0].id,goal:'先规划一场，再写空白正文',strategy:'plan_write',maxScenes:2,methodIds:[]});
-    assert.equal(agentCreated.status,201);
-    const {run:agentRun}=await agentCreated.json();
-    assert.equal(agentRun.workspace,'draft');
-    assert.equal((await (await fetch(`${base}/${p.id}/agent-runs`)).json()).runs[0].id,agentRun.id);
-    assert.equal((await send(`/${p.id}/agent-runs/${agentRun.id}/transition`,{action:'resume',expectedVersion:agentRun.version})).status,200);
+    assert.equal((await send(`/${p.id}/agent-runs`,{})).status,404);
     p.units[0].scenes[0].blocks[0].text='林遥把钥匙放回桌上。';assert.equal((await send(`/${p.id}`,{project:p,expectedRevision:1},'PUT')).status,200);
     assert.equal((await send(`/${p.id}`,{project:p,expectedRevision:1},'PUT')).status,409);
     const mock=await send(`/${p.id}/mock`,{expectedRevision:2,unitId:p.units[0].id,sceneId:p.units[0].scenes[0].id});assert.equal(mock.status,200);assert.equal((await mock.json()).proposal.provider,'mock');
@@ -969,60 +574,6 @@ test('交付只导出当前作者稿，文件名无版本号，历史选择参�
     const filename=scriptExportFilename({title:'长标题🎬'.repeat(30)},'fountain',true);
     assert.ok(Buffer.byteLength(filename)<=255);assert.match(filename,/-未保存草稿\.fountain$/);assert.doesNotThrow(()=>encodeURIComponent(filename));
   }finally{server.closeAllConnections();await new Promise<void>(resolve=>server.close(()=>resolve()));db.close();}
-});
-test('Agent 草稿 HTTP 闭环：草稿隔离、手写返回、完成后采用',async()=>{
-  const db=new Database(':memory:');const repo=createScriptRepository(db);repo.ensureSchema();const app=express();app.use(express.json());registerScriptRoutes(app,repo);
-  const server=app.listen(0,'127.0.0.1');await new Promise<void>(resolve=>server.once('listening',resolve));const base=`http://127.0.0.1:${(server.address() as {port:number}).port}/api/scripts`;
-  const send=(path:string,body:unknown)=>fetch(base+path,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});
-  try{
-    const p=repo.saveProject(project(),0);
-    const created=await send(`/${p.id}/agent-runs`,{unitId:p.units[0].id,goal:'写出渡口的选择',strategy:'write_existing',maxScenes:1,workspace:'draft'});
-    assert.equal(created.status,201);let {run}=await created.json();
-    assert.equal((await (await fetch(`${base}/${p.id}/agent-runs/${run.id}/draft`)).json()).project.revision,p.revision);
-    run=(await (await send(`/${p.id}/agent-runs/${run.id}/transition`,{action:'resume',expectedVersion:run.version})).json()).run;
-    const jobResponse=await send(`/${p.id}/jobs`,{operation:'scene',unitId:run.unitId,sceneId:run.sceneIds[0],prompt:'只写本场动作',expectedRevision:p.revision,agentRunId:run.id});
-    assert.equal(jobResponse.status,201);const {job}=await jobResponse.json();
-    run=(await (await send(`/${p.id}/agent-runs/${run.id}/transition`,{action:'attach',expectedVersion:run.version,jobId:job.id})).json()).run;
-    for(let index=0;index<101;index++)repo.createJob(p.id,{operation:'review',unitId:run.unitId,sceneId:run.sceneIds[0],prompt:`历史列表截断样例 ${index}`,expectedRevision:p.revision});
-    assert.equal(repo.listJobs(p.id).some(item=>item.id===job.id),false);
-    assert.equal((await (await fetch(`${base}/${p.id}/jobs/${job.id}`)).json()).job.id,job.id);
-    const submitted=await send(`/${p.id}/jobs/${job.id}/result`,{rawResult:JSON.stringify({summary:'用行动决定',blocks:[{type:'action',text:'她将渡口的灯重新打开。'}]}),provenance:{source:'manual_external',provider:'self_written',modelId:'fixture'}});
-    assert.equal((await submitted.json()).job.status,'ready');
-    assert.equal((await send(`/${p.id}/jobs/${job.id}/approve`,{})).status,200);
-    assert.equal((await (await fetch(`${base}/${p.id}`)).json()).project.revision,p.revision);
-    assert.match(exportText((await (await fetch(`${base}/${p.id}/agent-runs/${run.id}/draft`)).json()).project,'fountain'),/重新打开/);
-    run=(await (await send(`/${p.id}/agent-runs/${run.id}/transition`,{action:'advance',expectedVersion:run.version})).json()).run;
-    const draft=repo.getAgentDraft(p.id,run.id);
-    const review=repo.createJob(p.id,{operation:'review',unitId:run.unitId,sceneId:run.sceneIds[0],prompt:'检查动作因果',expectedRevision:draft.revision,reviewSceneIds:run.sceneIds,agentRunId:run.id});
-    run=repo.transitionAgentRun(p.id,run.id,{action:'attach',expectedVersion:run.version,jobId:review.id});
-    repo.submitJob(p.id,review.id,JSON.stringify({summary:'动作成立，动机可再核对',findings:[{sceneId:run.sceneIds[0],issue:'“她将渡口的灯重新打开”没有交代促使她回头的线索。',suggestion:'可在前文补一处她听见求助的声音。'}]}),{source:'manual_external',provider:'self_written',modelId:'fixture'});
-    run=repo.transitionAgentRun(p.id,run.id,{action:'advance',expectedVersion:run.version});
-    const decision=await send(`/${p.id}/jobs/${review.id}/findings/0/decision`,{status:'later',note:'作者先看完整片节奏'});
-    assert.equal(decision.status,200);
-    assert.equal((await decision.json()).job.reviewDecisions[0].status,'later');
-    assert.equal((await (await fetch(`${base}/${p.id}`)).json()).project.revision,p.revision);
-    assert.equal(repo.getJob(p.id,review.id).reviewDecisions?.[0]?.note,'作者先看完整片节奏');
-    const reviewHistory=await fetch(`${base}/${p.id}/agent-runs/${run.id}/reviews`);
-    assert.equal(reviewHistory.status,200);
-    assert.equal((await reviewHistory.json()).jobs[0].reviewDecisions[0].status,'later');
-    const reviewBaseline=await fetch(`${base}/${p.id}/jobs/${review.id}/input`);
-    assert.equal(reviewBaseline.status,200);
-    assert.match(exportText((await reviewBaseline.json()).project,'markdown'),/她将渡口的灯重新打开/);
-    assert.doesNotMatch(exportText((await (await fetch(`${base}/${p.id}/agent-runs/${run.id}/input`)).json()).project,'markdown'),/她将渡口的灯重新打开/);
-    assert.equal((await send(`/${p.id}/jobs/${review.id}/findings/9/decision`,{status:'keep'})).status,400);
-    assert.equal((await send(`/${p.id}/jobs/${review.id}/findings/0/decision`,{status:'invented'})).status,400);
-    const concurrent=repo.getProject(p.id)!;
-    concurrent.title='作者同期修改的标题';
-    repo.saveProject(concurrent,concurrent.revision);
-    assert.equal((await send(`/${p.id}/agent-runs/${run.id}/publish`,{expectedVersion:run.version,expectedPublishedRevision:p.revision})).status,409);
-    const published=await send(`/${p.id}/agent-runs/${run.id}/publish`,{expectedVersion:run.version,expectedPublishedRevision:p.revision+1});
-    assert.equal(published.status,200);
-    const adopted=(await published.json()).project;
-    assert.equal(adopted.revision,p.revision+2);
-    assert.equal(adopted.title,'作者同期修改的标题');
-    assert.match(exportText(adopted,'fountain'),/重新打开/);
-    assert.equal((await (await fetch(`${base}/${p.id}`)).json()).project.revision,p.revision+2);
-  }finally{server.closeAllConnections();await new Promise<void>((resolve,reject)=>server.close(error=>error?reject(error):resolve()));db.close();}
 });
 
 test('旧剧本实现和设计入口不再参与运行',()=>{

@@ -1,0 +1,10 @@
+import { SpatialBenchmark } from './spatial-benchmark';
+import React from 'react';
+import { createRoot } from 'react-dom/client';
+import { BrowserRouter } from 'react-router-dom';
+import { Toaster } from 'react-hot-toast';
+import Previs from '../../src/pages/Previs';
+import '../../src/index.css';
+import '../../src/i18n';
+document.documentElement.classList.add('dark');
+createRoot(document.getElementById('root')!).render(<BrowserRouter><div style={{ height: '100vh' }}>{new URLSearchParams(location.search).has('benchmark')?<SpatialBenchmark/>:<Previs />}</div><Toaster /></BrowserRouter>);

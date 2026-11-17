@@ -1,12 +1,11 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { sha256 } from 'js-sha256';
-import { hashValue } from '../packages/agent-core/src/identity';
+import { hashValue } from '../packages/domain/src/contentIdentity';
 import { createScriptProject, newScene } from '../packages/script/src/project';
 import { collectOutlineRequirements, outlineSourcesChanged, type OutlineCoverageEntry } from '../packages/script/src/goalCoverage';
 import { assessGoalCandidate, createCheckPlan, createGoalBodyManifest, validateCheckReceipt, type CheckReceipt, type GoalCheckContract } from '../packages/script/src/goalChecks';
-import { stageDelivery } from '../packages/script/src/agentStages';
-import { emptyScriptDraftCreationLedger, type ScriptDraftScope } from '../packages/script/src/agentScope';
+import { } from '../packages/script/src/writingStages';
 import { freezeStructureScope, insertScenesInStructure } from '../packages/script/src/structure';
 
 function fixture(withEnding=true){
@@ -71,21 +70,4 @@ test('valid complete raw evidence plus a final synthesis yields a complete candi
   const h=reviewed(fixture()),result=assessGoalCandidate(h);assert.equal(result.complete,true);assert.equal(result.resultType,'complete_candidate');
   assert.deepEqual(result.storyProgress?.map(item=>item.status),['DRAFT_READY','DRAFT_READY']);assert.ok(result.storyProgress?.every(item=>item.evidence.length));
   const index=h.receipts.find(receipt=>h.plan.tasks.find(task=>task.id===receipt.taskId)?.phase==='INDEX')!;assert.ok(index.outlineCoverage?.every(item=>item.status==='PLANNED'));
-});
-
-test('SCENES requires every frozen outline range mapped, not merely nonempty existing scene cards',()=>{
-  const h=fixture(false),unit=h.project.units[0],scope:ScriptDraftScope={workspaceId:'stage',documentId:h.project.id,originRevision:1,originContentHash:hashValue(h.project),operations:['plan_scenes'],units:[{unitId:unit.id,allowAllScenes:true,allowSummary:false,maxNewScenes:10,scenes:[]}],newUnitSlots:[],sharedFields:[],characterScopeIds:[],factScopeIds:[]};
-  const partial=stageDelivery(h.project,scope,'SCENES',{contract:h.contract});assert.equal(partial.ready,false);assert.match(partial.gaps.join(' '),/尚未映射/);
-  const complete=fixture();const all=structuredClone(scope);all.documentId=complete.project.id;all.units[0].unitId=complete.project.units[0].id;
-  assert.equal(stageDelivery(complete.project,all,'SCENES',{contract:complete.contract}).ready,true);
-  assert.equal(stageDelivery(complete.project,all,'SCENES',{contract:{...complete.contract,outlineGaps:['大纲源变化']}}).ready,false);
-});
-
-test('SCENES includes a legal new node member from the ledger and excludes a neighboring node',()=>{
-  const h=fixture(),p=h.project,u=p.units[0];u.structureNodes=[{id:'selected',title:'开场',purpose:'发现钥匙'},{id:'neighbor',title:'结局',purpose:'归还钥匙'}];u.scenes[0].structureNodeId='selected';u.scenes[1].structureNodeId='neighbor';
-  const frozen=freezeStructureScope(p,u.id,'selected',{allowCreate:true}),scope:ScriptDraftScope={workspaceId:'node_stage',documentId:p.id,originRevision:1,originContentHash:hashValue(p),operations:['plan_scenes'],units:[{unitId:u.id,allowAllScenes:false,allowSummary:false,maxNewScenes:2,scenes:[],nodeScopes:[frozen]}],newUnitSlots:[],sharedFields:[],characterScopeIds:[],factScopeIds:[]};
-  const added={...newScene('检查抽屉'),id:'scene_added',purpose:'检查抽屉',location:'房间'},next=insertScenesInStructure(p,u.id,[added],{nodeId:'selected'}),ledger=emptyScriptDraftCreationLedger();ledger.scenes.push({unitId:u.id,sceneId:added.id});
-  const requirement=collectOutlineRequirements(p,[{unitId:u.id,nodeIds:['selected']}]),contract={...h.contract,storyCoverage:{originRevision:1,targets:[{unitId:u.id,nodeIds:['selected']}]},outlineRequirements:requirement.items,outlineGaps:[]};
-  const good=stageDelivery(next,scope,'SCENES',{ledger,contract});assert.equal(good.ready,true);assert.deepEqual((good.content as any)[0].map((scene:any)=>scene.id),['scene_open','scene_added']);
-  assert.equal(stageDelivery(next,scope,'SCENES',{contract}).ready,false,'incoming scenes need a trusted creation ledger');
 });

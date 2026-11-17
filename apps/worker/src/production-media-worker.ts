@@ -1,3 +1,5 @@
+import { submitGenerationRequest, waitForGenerationResult } from '../../../src/clients/generationSubmission';
+import type { GenerationTarget } from '../../../packages/domain/src/generation';
 import crypto from "node:crypto";
 import assert from "node:assert/strict";
 
@@ -98,6 +100,7 @@ interface GeneratedImage {
   height: number;
   bytes: number;
   requestId?: string;
+  candidateId?: string;
   usage?: unknown;
   imageReferenceManifest: ImageGenerationReferenceAudit[];
   promptCompositionManifest: ReturnType<typeof compileImageGenerationRequest>["manifest"];
@@ -186,8 +189,13 @@ const sourcePromptKeysByAdoptionStatus = (
     .filter((key) => !key.startsWith(":")),
 );
 
+const operatorHeaders = () => {
+  const token = process.env.OMNI_OPERATOR_API_TOKEN || process.env.OPERATOR_API_TOKEN;
+  return token ? { Authorization: `Bearer ${token}` } : {};
+};
+
 const ensureRuntimeReady = async (baseUrl: string) => {
-  const response = await fetch(`${baseUrl}/api/operator/capabilities`, { signal: AbortSignal.timeout(10_000) });
+  const response = await fetch(`${baseUrl}/api/operator/capabilities`, { headers: operatorHeaders(), signal: AbortSignal.timeout(10_000) });
   if (!response.ok) throw new Error(`Runtime unavailable (${response.status}).`);
   const capabilities = await response.json() as { handbookVersion?: string };
   if (capabilities.handbookVersion !== OPERATOR_HANDBOOK_VERSION) {
@@ -254,7 +262,9 @@ const inspectMedia = async (baseUrl: string, mediaUrl: string) => {
 const generateImage = async ({
   baseUrl,
   projectId,
+  target,
   promptCore,
+  sourceId,
   provider,
   references = [],
   visualStyleProjection,
@@ -262,7 +272,9 @@ const generateImage = async ({
 }: {
   baseUrl: string;
   projectId: string;
+  target: GenerationTarget;
   promptCore: string;
+  sourceId: string;
   provider: ImageProviderConfig;
   references?: ImageGenerationReference[];
   visualStyleProjection: NonNullable<ImageGenerationRequest["visualStyleProjection"]>;
@@ -280,34 +292,9 @@ const generateImage = async ({
     visualRecipeInputEvidence,
   }, { enforcement: "formal" });
   const prompt = compiled.providerPrompt;
-  const referenceImages = compiled.referenceImages;
-  const gptImage2 = isKieGptImage2ModelId(provider.modelId);
-  if (!gptImage2 && referenceImages.length > 1) {
-    throw new Error("Kie 图片生成一次只接受一张参考图；当前职责清单包含多张素材，不能静默丢弃其余素材。");
-  }
-  if (gptImage2 && referenceImages.length > 16) throw new Error("Kie GPT Image 2 一次最多接受 16 张参考图；请在提交前减少引用，系统不会静默裁剪。");
-  const request = gptImage2
-    ? referenceImages.length
-      ? { model: KIE_GPT_IMAGE_2_IMAGE_TO_IMAGE_MODEL_ID, prompt, imageUrls: referenceImages, aspectRatio: compiled.aspectRatio, resolution: provider.resolution }
-      : { model: KIE_GPT_IMAGE_2_TEXT_TO_IMAGE_MODEL_ID, prompt, aspectRatio: compiled.aspectRatio, resolution: provider.resolution }
-    : referenceImages.length
-      ? { model: KIE_GROK_IMAGE_TO_IMAGE_MODEL_ID, prompt, imageUrl: referenceImages[0] }
-      : { model: KIE_GROK_TEXT_TO_IMAGE_MODEL_ID, prompt, aspectRatio: compiled.aspectRatio };
-  const response = await fetch(`${baseUrl}/api/proxy/kie-grok-image`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ channelId: provider.channelId, modelConfigId: provider.modelConfigId, request }),
-    signal: AbortSignal.timeout(135_000),
-  });
-  const data = await response.json().catch(() => ({})) as {
-    imageUrl?: string;
-    taskId?: string;
-    error?: string;
-  };
-  if (!response.ok || !data.imageUrl) throw new Error(data.error || `Image provider failed (${response.status}).`);
-  const mediaUrl = data.imageUrl.startsWith("data:")
-    ? await uploadDataUrl(baseUrl, projectId, data.imageUrl)
-    : await importRemoteImage(baseUrl, projectId, data.imageUrl);
+  const submitted = await submitGenerationRequest({ baseUrl, operator: true, target, operation: target.kind === 'scene' ? 'joint_storyboard' : 'asset_image', commandId: stableId('generation-worker', `${projectId}:${sourceId}:${stableHash(prompt)}:${stableHash(JSON.stringify(references))}:${provider.modelConfigId}:${provider.resolution || ''}`), operatorToken: process.env.OMNI_OPERATOR_API_TOKEN || process.env.OPERATOR_API_TOKEN, projectId, modelConfigId: provider.modelConfigId, prompt, aspectRatio: compiled.aspectRatio, parameters: provider.resolution ? { resolution: provider.resolution } : undefined, references: references.map(r => ({ url: r.imageUrl, kind: 'image', label: r.label })) });
+  const result = await waitForGenerationResult(submitted);
+  const mediaUrl = result.url;
   if (!mediaUrl) throw new Error("Image provider returned no persistable result.");
   const inspected = await inspectMedia(baseUrl, mediaUrl);
   return {
@@ -315,7 +302,8 @@ const generateImage = async ({
     width: inspected.width,
     height: inspected.height,
     bytes: inspected.bytes,
-    requestId: data.taskId,
+    requestId: result.executionId,
+    candidateId: result.candidateId,
     imageReferenceManifest: compiled.references.map((reference, index) => ({
       index: index + 1,
       imageUrl: reference.imageUrl,
@@ -871,7 +859,9 @@ const produceAssetBoards = async ({
       const image = await generateImage({
         baseUrl: options.baseUrl,
         projectId: project.id,
+        target: { projectId: project.id, kind: 'asset', assetId: currentBoard.id, referenceMode: 'production_board', shotIds: [] },
         promptCore: prompt,
+        sourceId: board.id,
         provider,
         references: reference.imageUrl && (!staleExistingPrompt || board.boardKind === "variant_board")
           ? [buildProductionAssetBoardCanonicalReference({ board: currentBoard, imageUrl: reference.imageUrl })]
@@ -886,6 +876,7 @@ const produceAssetBoards = async ({
         if (result.status !== "generated" || !result.image || !result.prompt) {
           attemptsBySourceId[result.item.id] = {
             ...attemptsBySourceId[result.item.id],
+            ...(result.error?.includes("任务已准备，尚未生成") ? { attempts: Math.max(0, attemptsBySourceId[result.item.id].attempts - 1) } : {}),
             lastError: result.error || "unknown",
           };
           appendRunEvent(run, {
@@ -900,7 +891,7 @@ const produceAssetBoards = async ({
           ...attemptsBySourceId[result.item.id],
           lastError: undefined,
         };
-        const candidateId = stableId(
+        const candidateId = result.image.candidateId || stableId(
           "asset_board_candidate",
           `${project.id}:${result.item.id}:${result.image.mediaUrl}`,
         );
@@ -1381,7 +1372,9 @@ const produceStoryboardBoards = async ({
       const image = await generateImage({
         baseUrl: options.baseUrl,
         projectId: project.id,
+        target: { projectId: project.id, episodeId: board.episodeId, sceneId: board.sceneId, kind: 'scene', shotIds: board.shotIds },
         promptCore: prompt,
+        sourceId: board.id,
         provider,
         references: [
           createImageGenerationReference({ imageUrl: controlTemplate, label: "故事板宫格与镜号控制模板", role: "composition_anchor" }),
@@ -1416,6 +1409,7 @@ const produceStoryboardBoards = async ({
         if (result.status !== "generated" || !result.image || !result.prompt) {
           attemptsBySourceId[board.id] = {
             ...attemptsBySourceId[board.id],
+            ...(result.error?.includes("任务已准备，尚未生成") ? { attempts: Math.max(0, attemptsBySourceId[board.id].attempts - 1) } : {}),
             lastError: result.error || "unknown",
           };
           appendRunEvent(run, {

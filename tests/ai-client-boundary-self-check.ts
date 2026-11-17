@@ -36,6 +36,6 @@ for (const filePath of unrestrictedModelRuntimeFiles) {
   assert.equal(/max_tokens|maxOutputTokens|maxTotalOutputTokens/i.test(source), false, `${filePath} must not impose model output limits`);
   // Transport deadlines prevent endless pending requests; they are not output limits.
 }
-assert.ok(read("apps/api/src/providers/genericAIProvider.ts").includes("AbortSignal.timeout(180_000)"), "Provider transports must have a finite timeout rather than hanging indefinitely");
+assert.ok(read("apps/api/src/providers/genericAIProvider.ts").includes("createAgentModelTransport") && read("apps/api/src/providers/agentModelTransport.ts").includes("timeout"), "Provider transports must have a finite timeout rather than hanging indefinitely");
 
 console.log("AI client boundary self-check passed.");

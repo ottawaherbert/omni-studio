@@ -4,6 +4,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { composeEpisodeFilm } from '../src/server/media/episodeFilmComposition';
+import { sceneVideoClips, editFromTimelineShots } from '../src/utils/sceneVideoClips';
 import { splitTimelineShot } from '../src/utils/timelineEditing';
 import { buildSceneVideoExportItems } from '../src/hooks/useEpisodeFilmExport';
 import { buildEpisodeAudioExportItems } from '../src/utils/episodeAudioExport';
@@ -16,9 +17,17 @@ try {
   ffmpeg(['-f', 'lavfi', '-i', 'color=red:s=320x180:r=25:d=1', '-f', 'lavfi', '-i', 'color=lime:s=320x180:r=25:d=1', '-f', 'lavfi', '-i', 'color=blue:s=320x180:r=25:d=1', '-filter_complex', '[0:v][1:v][2:v]concat=n=3:v=1:a=0[v]', '-map', '[v]', '-c:v', 'libx264', '-pix_fmt', 'yuv420p', source]);
   const sound = path.join(dir, 'sound.wav');
   ffmpeg(['-f', 'lavfi', '-i', 'sine=frequency=440:duration=1:sample_rate=48000', '-f', 'lavfi', '-i', 'sine=frequency=880:duration=1:sample_rate=48000', '-filter_complex', '[0:a][1:a]concat=n=2:v=0:a=1[a]', '-map', '[a]', sound]);
-  const shots = splitTimelineShot({ id: 'a', duration: 3, videoUrl: source }, 1, 'b');
-  shots[1].transition = 'black';
-  const scene = { shots, audioTracks: [{ id: 'voice', type: 'dialogue', url: sound, startTime: 0.4, duration: 0.8, sourceStartSeconds: 1 }] } as Scene;
+  const scene = {title:'非破坏剪辑',shots:[{id:'a',duration:3,videoUrl:source}],audioTracks:[{id:'voice',type:'dialogue',url:sound,startTime:0.4,duration:0.8,sourceStartSeconds:1}]} as Scene;
+  const [red,rest]=splitTimelineShot(sceneVideoClips(scene)[0],1,'tail');
+  const [green,blue]=splitTimelineShot(rest,1,'blue');
+  red.transition='black';
+  scene.edit=editFromTimelineShots([blue,red,green]);
+  scene.audioTracks=[{id:'anchored-voice',type:'dialogue',url:sound,startTime:0,duration:1.6,sourceStartSeconds:0.6,clipAnchor:{clipId:'blue',offsetSeconds:-0.4}}];
+  assert.equal(buildEpisodeAudioExportItems([scene])[0].sourceStartSeconds,1,'audio extending before the scene must be cropped at the same source offset');
+  scene.shots![0].duration=9;
+  scene.shots![0].videoUrl='/media/later-adoption.mp4';
+  assert.equal(scene.shots!.length,1);
+  assert.ok(buildSceneVideoExportItems(scene).every(clip=>clip.videoUrl===source));
   const output = await composeEpisodeFilm({
     shots: buildSceneVideoExportItems(scene).map(item => ({ ...item, media: fs.readFileSync(source), kind: 'video' })),
     audioTracks: buildEpisodeAudioExportItems([scene]).map(item => ({ ...item, media: fs.readFileSync(sound) })),
@@ -30,7 +39,7 @@ try {
   assert.deepEqual([video.width, video.height, video.r_frame_rate], [1920, 1080, '25/1']);
   assert.ok(Math.abs(Number(probe.format.duration) - 3) < 0.1, 'transitions must not shift the edit duration');
   const pixels: Record<string, number[]> = {};
-  for (const [time, channel] of [[0.5, 0], [1.5, 1], [2.5, 2]]) {
+  for (const [time, channel] of [[0.5, 2], [1.5, 0], [2.5, 1]]) {
     const pixel = ffmpeg(['-ss', String(time), '-i', film, '-frames:v', '1', '-vf', 'scale=1:1', '-pix_fmt', 'rgb24', '-f', 'rawvideo', 'pipe:1']);
     pixels[time] = [...pixel];
     assert.ok(pixel[channel] > 200 && pixel[(channel + 1) % 3] < 30, `wrong source segment at ${time}s: ${pixel}`);

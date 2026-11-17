@@ -17,7 +17,7 @@ for (const name of ["generateReverseEngineering", "generateFullBoardFromContext"
 for (const file of [
   "apps/web/src/features/script/ScriptWorkspace.tsx",
   "packages/script/src/schema.ts",
-  "src/components/bible/AssetDetailView.tsx",
+  "src/components/bible/GlobalAssetDetailView.tsx",
   "src/components/production/ProductionMagicImportPage.tsx",
   "src/pages/InteractiveGraphWorkspace.tsx",
 ]) assert.ok(existsSync(file), `${file} remains part of the current product`);

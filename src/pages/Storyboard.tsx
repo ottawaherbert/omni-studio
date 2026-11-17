@@ -1,6 +1,9 @@
+import { GenerationWorkbench } from '../components/generation/GenerationWorkbench';
+import { SceneVisualPlanningPanel, type ScenePlanningController } from "../components/storyboard/SceneVisualPlanningPanel";
 import { ProductionPreparationAdvisories } from "../components/production/ProductionPreparationAdvisories";
 import { productionPreparationHref } from "../utils/productionNavigation";
 import { ProductionCreativeControls } from "../components/production/ProductionCreativeControls";
+import { productionClient } from "../clients/productionClient";
 import { DirectorPlanSummary } from "../components/production/DirectorPlanSummary";
 import { directorPlanStatus } from "../clients/creativeDirectionClient";
 import { flushDebouncedProjectSave } from "../clients/stateClient";
@@ -35,7 +38,9 @@ import toast from "react-hot-toast";
 import { Modal } from "../components/ui/Modal";
 import { Button } from "../components/ui/Button";
 import { ProductionSceneRail } from "../components/production/preparation/ProductionSceneRail";
-import { StoryboardHeader } from "../components/storyboard/StoryboardHeader";
+import { SceneProductionFlowHeader } from "../components/storyboard/SceneProductionFlowHeader";
+import { SceneStoryboardCanvas, SceneStoryboardShotFrame } from "../components/storyboard/SceneStoryboardCanvas";
+import { resolveSceneProductionStage, type SceneProductionStage } from "../clients/productionStoryboardWorkflowClient";
 import { StoryboardMediaCandidateReview } from "../components/storyboard/StoryboardMediaCandidateReview";
 import { useStoryboardAI } from "../hooks/useStoryboardAI";
 import { useProductionCockpit } from "../hooks/useProductionCockpit";
@@ -76,8 +81,6 @@ import {
   buildStoryboardTeamPromptContext,
 } from "../clients/productionStoryboardWorkflowClient";
 
-const DepartmentBoardsPanel = lazy(() => import("../components/storyboard/DepartmentBoardsPanel")
-  .then((module) => ({ default: module.DepartmentBoardsPanel })));
 const ManualStoryboardReviewModal = lazy(() => import("../components/production/ManualStoryboardReviewModal")
   .then((module) => ({ default: module.ManualStoryboardReviewModal })));
 const ManualVideoStoryboardPanel = lazy(() => import("../components/production/ManualVideoStoryboardPanel")
@@ -244,7 +247,15 @@ export default function Storyboard({ workspaceMode = "linear" }: StoryboardProps
   const [isDeletingSelectedShots, setIsDeletingSelectedShots] = useState(false);
   const [isAddingShot, setIsAddingShot] = useState(false);
   const [isSidebarOpen, setIsSidebarOpen] = useState(true);
-  const [isProductionEvidenceOpen, setIsProductionEvidenceOpen] = useState(false);
+  const [settingsOpen, setSettingsOpen] = useState(false);
+  const [basisOpen, setBasisOpen] = useState(false);
+  const [sceneGenerationOpen, setSceneGenerationOpen] = useState(false);
+  const planningController = useRef<ScenePlanningController>(null);
+  const [planningState, setPlanningState] = useState({ dirty: false, busy: false });
+  const contentScrollRef = useRef<HTMLDivElement>(null);
+  const [otherCandidatesOpen, setOtherCandidatesOpen] = useState(false);
+  const [visualTool, setVisualTool] = useState<"canvas" | "overview" | "review" | "unit">("canvas");
+  const [editingUnitId, setEditingUnitId] = useState<string>();
   const [isVisualRefinementPromptOpen, setIsVisualRefinementPromptOpen] = useState(false);
   const [isGenerationParamsOpen, setIsGenerationParamsOpen] = useState(false);
   const [visualRefinementCandidate, setVisualRefinementCandidate] = useState<InteractiveVisualRefinementDraft | null>(null);
@@ -291,6 +302,17 @@ export default function Storyboard({ workspaceMode = "linear" }: StoryboardProps
   }, [activeScene?.shots]);
   const isSceneDetailPending = deferredActiveSceneId !== activeSceneId
     || Boolean(requestedScene && (requestedScene as Scene & { __workspaceSceneSummary?: boolean }).__workspaceSceneSummary);
+  const flowMemoryKey = `scene-production-stage:${currentProject?.id}:${activeEpisode?.id}:${activeScene?.id}`;
+  let rememberedStage: string | null = null;
+  try { rememberedStage = localStorage.getItem(flowMemoryKey); } catch { /* Browsing storage is optional. */ }
+  const resolvedStage = activeScene ? resolveSceneProductionStage(activeScene, searchParams.get('stage'), rememberedStage, searchParams.get('videoMode')) : 'shots';
+  const productionStage: SceneProductionStage = resolvedStage === 'design' ? 'shots' : resolvedStage;
+  useEffect(() => {
+    if (!activeScene || isSceneDetailPending) return;
+    try { localStorage.setItem(flowMemoryKey, productionStage); } catch { /* Keep navigation working. */ }
+  }, [flowMemoryKey, productionStage, activeScene?.id, isSceneDetailPending]);
+  useEffect(() => { setSettingsOpen(false); setBasisOpen(searchParams.get('stage') === 'design'); setSceneGenerationOpen(searchParams.has('generationTaskId')); setVisualTool('canvas'); }, [activeScene?.id]);
+  useEffect(() => { contentScrollRef.current?.scrollTo({ top: 0 }); }, [productionStage, activeScene?.id]);
   const activeVisualScenario = activeScene?.interactiveMetadata?.visualScenarios?.find(
     (scenario) => scenario.id === activeScene.interactiveMetadata?.activeVisualScenarioId,
   ) || activeScene?.interactiveMetadata?.visualScenarios?.[0];
@@ -405,12 +427,12 @@ export default function Storyboard({ workspaceMode = "linear" }: StoryboardProps
       | undefined;
     return shot && !shot.__workspaceShotSummary ? shot : null;
   }, [activeScene, activeShotId]);
-  const storyboardUnitAnchors = useMemo(() => videoGenerationMode === "storyboard" && activeScene?.shots?.length
+  const storyboardUnitAnchors = useMemo(() => activeScene?.shots?.length
     ? listStoryboardCompositeWorkflowAnchors({
       workflows: activeScene.manualStoryboard?.boards,
       shots: activeScene.shots,
     })
-    : [], [activeScene, videoGenerationMode]);
+    : [], [activeScene]);
   const resolveStoryboardUnitAdapter = useCallback((workflows: typeof storyboardUnitAnchors[number]["workflow"][]) => {
     const configIds = Array.from(new Set(workflows.map((workflow) => workflow.targetVideoModelConfigId || routedVideoModelConfigId).filter(Boolean)));
     if (configIds.length !== 1) return undefined;
@@ -421,10 +443,12 @@ export default function Storyboard({ workspaceMode = "linear" }: StoryboardProps
       adapter: resolveVideoModelAdapter({
         channelType: channel.type,
         modelId: model.modelId,
+        comfyCapabilities: model.comfyCapabilities,
         configuredAdapterId: model.videoAdapterId,
       }),
     } : undefined;
   }, [routedVideoModelConfigId, storyboardUnitAnchors, videoChannels, videoModels]);
+  const scenePlanModel = resolveStoryboardUnitAdapter(storyboardUnitAnchors.length ? storyboardUnitAnchors.map(a => a.workflow) : [{ id: "", shotId: "", updatedAt: 0 }]);
   const storyboardGroupingProposals = useMemo(() => {
     const result = new Map<string, { unitIds: string[]; shotCount: number; durationSeconds: number }>();
     if (!activeScene?.shots || !storyboardUnitAnchors.length) return result;
@@ -471,8 +495,10 @@ export default function Storyboard({ workspaceMode = "linear" }: StoryboardProps
       manualStoryboard: {
         ...activeScene.manualStoryboard,
         boards,
+        unitHistory: [...(activeScene.manualStoryboard.unitHistory || []), { at: Date.now(), boards: activeScene.manualStoryboard.boards || [] }],
         updatedAt: Date.now(),
       },
+      ...(activeScene.visualPlan ? { visualPlan: { ...activeScene.visualPlan, breakAfterShotIds: boards.slice(0, -1).map(b => (b.shotIds || b.board?.shotIds || [b.shotId]).at(-1)!), review: undefined, updatedAt: Date.now() } } : {}),
     }, activeEpisode.id);
   }, [activeEpisode, activeScene, updateScene]);
   const mergeStoryboardUnitWithNext = useCallback(async (index: number) => {
@@ -551,7 +577,7 @@ export default function Storyboard({ workspaceMode = "linear" }: StoryboardProps
     }
   }, [activeEpisode, activeScene, storyboardDefaultModeDraft, updateScene]);
   const manualFilmTeamReadModel = useMemo(() => {
-    if (!isDirectorProductionRoute || !currentProject || !activeEpisode || !activeScene) return null;
+    if (!currentProject || !activeEpisode || !activeScene) return null;
     return buildManualFilmTeamReadModel({
       project: currentProject,
       episode: activeEpisode,
@@ -755,6 +781,8 @@ export default function Storyboard({ workspaceMode = "linear" }: StoryboardProps
     setSelectedShotIds([]);
     const next = new URLSearchParams(searchParams);
     next.set("sceneId", sceneId);
+    next.delete("stage");
+    next.delete("videoMode");
     next.delete("shotId");
     if (activeEpisode?.id) next.set("episodeId", activeEpisode.id);
     startTransition(() => setSearchParams(next));
@@ -768,6 +796,33 @@ export default function Storyboard({ workspaceMode = "linear" }: StoryboardProps
     startTransition(() => setSearchParams(next, { replace: true }));
   };
 
+  const changeProductionStage = (stage: SceneProductionStage, shotId?: string) => {
+    if (stage === 'design') { setBasisOpen(true); return; }
+    const next = new URLSearchParams(searchParams);
+    next.set('stage', stage);
+    next.set('videoMode', stage === 'visuals' ? 'storyboard' : 'shot');
+    if (shotId) { next.set('shotId', shotId); setActiveShotId(shotId); }
+    if (activeScene) next.set('sceneId', activeScene.id);
+    setVisualTool('canvas');
+    setSearchParams(next, { replace: true });
+  };
+  const enterSceneStudio = (unitId?: string) => {
+    if (planningState.dirty || planningState.busy) { toast('请先保存本场方案，再进入视频制作；草稿仍保留。'); return; }
+    if (!currentProject || !activeEpisode || !activeScene) return;
+    const unit = storyboardUnitAnchors.find(item => item.id === (unitId || editingUnitId)) || storyboardUnitAnchors.find(item => item.shotIds.includes(activeShotId || '')) || storyboardUnitAnchors[0];
+    const params = new URLSearchParams({ projectId: currentProject.id, episodeId: activeEpisode.id, sceneId: activeScene.id, videoMode: unit?.persisted ? 'storyboard' : 'shot' });
+    if (unit?.persisted) { params.set('videoUnitId', unit.workflow.videoGenerationUnitId || unit.workflow.board?.videoGenerationUnitId || unit.id); params.set('shotId', unit.shot.id); }
+    else if (activeShotId || activeScene.shots?.[0]?.id) params.set('shotId', activeShotId || activeScene.shots[0].id);
+    if (interactiveReturnTo) params.set('returnTo', interactiveReturnTo);
+    navigate(`/production/studio?${params}`);
+  };
+  const prepareSceneVisuals = () => {
+    if (!activeScene) return;
+    if (planningState.dirty || planningState.busy) { toast('请先保存本场方案，生成才会使用刚修改的空间与分组。'); return; }
+    if (!activeScene.shots.length) { changeProductionStage('shots'); return; }
+    if (!(activeBatchScene?.imagePromptComplete ?? currentStoryboardCompletion?.imagePromptComplete)) handlePrepareGenerateImagePrompts();
+    else boardBatchAgent.prepareScene(activeScene.id);
+  };
   const selectedShotIdSet = useMemo(() => new Set(selectedShotIds), [selectedShotIds]);
   const selectableShotIds = useMemo(
     () => (activeScene?.shots || []).map((shot) => shot.id),
@@ -927,8 +982,8 @@ export default function Storyboard({ workspaceMode = "linear" }: StoryboardProps
     }
     setActiveSceneId(scene.id);
     setActiveShotId((currentShotId) => {
-      if (scene.shots?.some((shot) => shot.id === currentShotId)) return currentShotId;
       if (scene.shots?.some((shot) => shot.id === urlShotId)) return urlShotId;
+      if (scene.shots?.some((shot) => shot.id === currentShotId)) return currentShotId;
       return videoGenerationMode === "shot" ? scene.shots?.[0]?.id || null : null;
     });
   }, [baseScenes, isRequestedProjectPending, urlSceneId, urlShotId, videoGenerationMode]);
@@ -941,12 +996,11 @@ export default function Storyboard({ workspaceMode = "linear" }: StoryboardProps
     if (activeShotId && !activeScene.shots.some((shot) => shot.id === activeShotId)) {
       setActiveShotId(videoGenerationMode === "shot" ? activeScene.shots[0]?.id || null : null);
     } else if (videoGenerationMode === "shot" && !activeShotId) {
-      setActiveShotId(activeScene.shots[0]?.id || null);
+      setActiveShotId(activeScene.shots.some(shot => shot.id === urlShotId) ? urlShotId : activeScene.shots[0]?.id || null);
     }
-  }, [activeScene, activeShotId, videoGenerationMode]);
+  }, [activeScene, activeShotId, videoGenerationMode, urlShotId]);
 
   useEffect(() => {
-    setIsProductionEvidenceOpen(false);
   }, [activeScene?.id]);
 
   if (isRequestedProjectPending || (!currentProject && isLoading)) {
@@ -985,16 +1039,23 @@ export default function Storyboard({ workspaceMode = "linear" }: StoryboardProps
 
   const isSidebarCollapsed = !isSidebarOpen;
 
+  const openSceneGeneration = () => {
+    if (planningState.dirty || planningState.busy) { toast('请先保存当前修改，再准备生成任务。'); return; }
+    if (!activeScene?.shots.length) { toast('请先划分本场镜头。'); return; }
+    setSceneGenerationOpen(true);
+  };
+  if (sceneGenerationOpen && activeScene) return <GenerationWorkbench target={{ projectId: currentProject.id, episodeId: activeEpisode.id, sceneId: activeScene.id, kind: 'scene', shotIds: activeScene.shots.map(shot => shot.id) }} operation="joint_storyboard" returnLabel="返回分镜与故事板" onClose={() => setSceneGenerationOpen(false)} />;
+
   return (
     <motion.div
       initial={{ opacity: 0 }}
       animate={{ opacity: 1 }}
       className="storyboard-workspace mx-auto w-full max-w-7xl flex flex-1 min-h-0 overflow-hidden h-full px-3 pb-4 pt-3 md:px-8 md:pb-8 md:pt-4 flex-col md:flex-row relative bg-bg-primary"
     >
-      <div className={cn("storyboard-columns flex flex-1 min-h-0 overflow-hidden h-full w-full", isSidebarOpen ? "md:gap-6" : "")}>
+      <div className={cn("storyboard-columns flex flex-1 min-h-0 overflow-hidden h-full w-full", isSidebarOpen ? "lg:gap-6" : "")}>
         {!isInteractiveNodeWorkspace && (
           <div className={cn(
-            "storyboard-scene-rail hidden transition-all duration-300 ease-in-out shrink-0 overflow-hidden h-full md:block",
+            "storyboard-scene-rail hidden transition-all duration-300 ease-in-out shrink-0 overflow-hidden h-full lg:block",
             isSidebarOpen ? "w-72 opacity-100" : "w-0 opacity-0 pointer-events-none"
           )}>
             <div className="flex h-full w-full flex-col border border-border-soft/20 bg-bg-surface rounded-2xl shadow-sm overflow-hidden">
@@ -1026,7 +1087,7 @@ export default function Storyboard({ workspaceMode = "linear" }: StoryboardProps
               type="button"
               onClick={() => setIsSidebarOpen(!isSidebarOpen)}
               className={cn(
-                "storyboard-rail-toggle absolute top-6 z-30 hidden h-6 w-6 items-center justify-center rounded-full border border-border-soft/60 bg-bg-surface text-text-muted shadow-md transition-all hover:bg-bg-surface-hover hover:text-text-primary active:scale-95 cursor-pointer md:flex",
+                "storyboard-rail-toggle absolute top-6 z-30 hidden h-6 w-6 items-center justify-center rounded-full border border-border-soft/60 bg-bg-surface text-text-muted shadow-md transition-all hover:bg-bg-surface-hover hover:text-text-primary active:scale-95 cursor-pointer lg:flex",
                 isSidebarOpen ? "-left-3" : "-left-3 rotate-180"
               )}
             >
@@ -1047,9 +1108,12 @@ export default function Storyboard({ workspaceMode = "linear" }: StoryboardProps
         )}
         <ProductionPreparationAdvisories gate={productionPreparationGate} sceneTitle={activeScene?.title} />
         {activeScene ? (
-          <div className="storyboard-content flex-1 flex flex-col p-4 md:p-10 w-full overflow-y-auto custom-scrollbar">
+          <>
+            {interactiveReturnTo && <button type="button" onClick={() => navigate(interactiveReturnTo)} className="mx-6 my-2 text-left text-xs text-gold">返回互动制片</button>}
+            <SceneProductionFlowHeader scene={activeScene} stage={productionStage} settingsOpen={settingsOpen} onSettings={() => setSettingsOpen(value => !value)} onStageChange={changeProductionStage} onStudio={() => enterSceneStudio()} onGenerate={openSceneGeneration} generationLabel="生成故事板" onPrevis={() => { if (planningState.dirty || planningState.busy) { toast("请先保存当前修改"); return; } navigate(`/production/world?${new URLSearchParams({ projectId: currentProject.id, episodeId: activeEpisode.id, sceneId: activeScene.id })}`); }} generationDisabled={isStoryboardMutationBusy || planningState.busy || planningState.dirty} />
+          <div ref={contentScrollRef} className="storyboard-content flex-1 flex flex-col w-full overflow-y-auto custom-scrollbar">
             {!isInteractiveNodeWorkspace && (
-              <label className="storyboard-scene-picker mb-4 block md:hidden">
+              <label className="storyboard-scene-picker mx-4 mt-4 block lg:hidden">
                 <span className="sr-only">切换场次</span>
                 <select
                   aria-label="切换场次"
@@ -1119,8 +1183,17 @@ export default function Storyboard({ workspaceMode = "linear" }: StoryboardProps
                 </button>
               </div>
             )}
-            <DirectorPlanSummary plan={activeScene.manualStoryboard?.directorPlan} shots={activeScene.shots || []}
+            <div className="px-4 py-4 md:px-6">
+            {settingsOpen && <section className="mb-5 border-b border-border-soft/30 pb-4" aria-label="本场设置"><div className="flex flex-wrap items-center justify-between gap-3"><ProductionCreativeControls project={currentProject} episode={activeEpisode} scene={activeScene} compact /><button type="button" onClick={() => setIsGenerationParamsOpen(true)} className="h-9 rounded-md border border-border-soft/40 px-3 text-xs text-text-secondary">项目画幅 {currentProject.aspectRatio || '16:9'}</button></div><p className="mt-2 text-xs text-text-muted">导演方法为可选项；画风与画幅沿用项目设置，可在这里调整。</p><label className="mt-3 flex flex-wrap items-center gap-3 text-xs text-text-secondary">新片段默认参考<select aria-label="新片段默认参考" value={storyboardDefaultModeDraft} onChange={event => void setStoryboardDefaultReferenceMode(event.target.value as StoryboardVisualReferenceMode)} className="rounded-md border border-border-soft bg-bg-primary px-2 py-2"><option value="shot_grid">纯净宫格</option><option value="director_board">导演故事板</option></select></label></section>}
+            <div className="mb-4 flex items-center justify-between gap-3 border-b border-border-soft/30 pb-3 text-xs"><span className="text-text-muted">本场依据 · {activeScene.visualPlan?.geography && activeScene.visualPlan?.entryState && activeScene.visualPlan?.exitState ? '已有空间与人物状态记录' : '空间与人物状态待补充'}</span><button type="button" onClick={() => setBasisOpen(value => !value)} aria-expanded={basisOpen} className="text-gold">{basisOpen ? '返回镜头详情' : '查看剧本与场景依据'}</button></div>
+            {productionStage === 'visuals' && <div className="mb-4 flex flex-wrap items-center justify-between gap-3"><div className="flex gap-4">{([['canvas', '当前画面'], ['overview', '导入与共同参考'], ['review', '衔接检查']] as const).map(([key, label]) => <button type="button" key={key} aria-pressed={visualTool === key} onClick={() => setVisualTool(key)} className={cn('py-1 text-xs', visualTool === key ? 'text-gold' : 'text-text-muted')}>{label}</button>)}</div></div>}
+            <SceneVisualPlanningPanel controllerRef={planningController} onDraftStateChange={setPlanningState} key={`${currentProject.id}:${activeScene.id}`} basisSupplement={<details className="mt-4 text-xs"><summary className="cursor-pointer text-text-muted">导演方案与重拆镜头</summary>            <DirectorPlanSummary plan={activeScene.manualStoryboard?.directorPlan} shots={activeScene.shots || []}
               status={directorPlanStatus(currentProject, { episode: activeEpisode, scene: activeScene })}
+              onCreate={async brief => {
+                await flushDebouncedProjectSave(currentProject.id);
+                await productionClient.saveSceneDirection(currentProject.id, activeEpisode!.id, activeScene.id, brief);
+                await setActiveEpisodeId(activeEpisode!.id, { view: storyboardEpisodeView, sceneId: activeScene.id });
+              }}
               onChange={async plan => {
                 const state = useProjectStore.getState();
                 const latest = state.activeEpisode?.scenes.find(item => item.id === activeScene.id);
@@ -1129,55 +1202,38 @@ export default function Storyboard({ workspaceMode = "linear" }: StoryboardProps
                 await flushDebouncedProjectSave(currentProject.id);
               }}
               disabled={isStoryboardMutationBusy} onRedesign={() => void handlePrepareGenerateShots(estimatedSceneDuration, targetDurationMins)} />
-            <StoryboardHeader 
-              activeScene={activeScene}
-              isGenerating={isStoryboardMutationBusy}
-              onPrepareGenerateShots={() => handlePrepareGenerateShots(estimatedSceneDuration, targetDurationMins)}
-              currentShotPlanComplete={activeBatchScene?.shotPlanComplete ?? currentStoryboardCompletion?.shotPlanComplete}
-              onPrepareGenerateImagePrompts={handlePrepareGenerateImagePrompts}
-              onPrepareGenerateVideoPrompts={handlePrepareGenerateVideoPrompts}
-              currentImagePromptComplete={activeBatchScene?.imagePromptComplete ?? currentStoryboardCompletion?.imagePromptComplete}
-              currentVideoPromptComplete={activeBatchScene?.videoPromptComplete ?? currentStoryboardCompletion?.videoPromptComplete}
-              currentBoardComplete={activeBatchScene?.boardComplete ?? currentStoryboardCompletion?.boardComplete}
-              currentBoardApproved={activeBatchScene?.boardApproved ?? currentStoryboardCompletion?.boardApproved}
-              boardBlockReason={activeBatchScene?.boardBlockReason || productionPreparationGate?.storyboardReason}
-              estimatedSceneDuration={estimatedSceneDuration}
-              videoGenerationMode={videoGenerationMode}
-              showVideoModeControl
-              onVideoGenerationModeChange={(mode) => {
-                const next = new URLSearchParams(searchParams);
-                next.set("videoMode", mode);
-                if (mode === "storyboard") next.delete("shotId");
-                setSearchParams(next, { replace: true });
-              }}
-              onReturnToPreparation={() => {
-                const params = new URLSearchParams({
-                  projectId: currentProject.id,
-                  episodeId: activeEpisode.id,
-                  sceneId: activeScene.id,
-                  tab: "assets",
-                });
-                if (interactiveReturnTo) params.set("returnTo", interactiveReturnTo);
-                navigate(`/production/preparation?${params}`);
-              }}
-              onReturnToInteractive={interactiveReturnTo ? () => navigate(interactiveReturnTo) : undefined}
-              aspectRatio={currentProject.aspectRatio || "16:9"}
-              visualStyleLock={currentProject.visualStyleLock}
-              fallbackVisualStyle={currentProject.creativeVision?.visualStyle}
-              onOpenGenerationParams={() => setIsGenerationParamsOpen(true)}
-              productionGate={manualProductionAssetReadModel ? {
-                shotPlanningReady: productionPreparationGate?.readyForShotPlanning || false,
-                imagePromptReady: manualStoryboardReadModel?.readyForImagePromptGeneration,
-                videoPromptReady: manualStoryboardReadModel?.readyForVideoPromptGeneration,
-                shotPlanningReason: productionPreparationGate?.shotPlanningReason || "请先填写当前场次原文，或手动添加镜头。",
-                imagePromptReason: promptGenerationBlockReason,
-                videoPromptReason: promptGenerationBlockReason,
-              } : undefined}
-            />
-            <StoryboardMediaCandidateReview
-              projectId={currentProject.id}
-              sceneId={activeScene.id}
-            />
+</details>} selectedShotId={activeShot?.id || activeScene.shots[0]?.id} basisOpen={basisOpen} section={productionStage === 'shots' ? 'timing' : basisOpen ? 'basis' : visualTool === 'overview' ? 'overview' : visualTool === 'review' ? 'review' : 'hidden'} onSelectShot={shotId => { selectShot(shotId); if (window.matchMedia('(max-width: 1279px)').matches) requestAnimationFrame(() => document.getElementById('scene-shot-editor')?.scrollIntoView({ block: 'start', behavior: 'smooth' })); }} shotEditor={productionStage === 'shots' && activeScene.shots.length ? <section id="scene-shot-editor" aria-label="所选镜头编辑"><h3 className="mb-3 text-xs font-bold text-text-primary">镜头 {(activeScene.shots.findIndex(shot => shot.id === (activeShot?.id || activeScene.shots[0]?.id))) + 1} · 编辑</h3>                  {activeScene.shots.map((shot, index) => shot.id === (activeShot?.id || activeScene.shots[0]?.id) ? (
+                    <div key={shot.id} className="min-w-0">
+                      <ShotAppearanceEditor project={currentProject} shot={shot} saved onChange={saveAppearanceShot} issues={appearanceIssues(currentProject, activeScene, shot, appearanceSourceShots(activeEpisode, appearanceHistoryContext || currentStoryboardBatchScene?.manualTeamContext || "")).map(i => i.message)} />
+                      <Suspense fallback={<DeferredPanelFallback />}>
+                        <ShotCard
+                          compact
+                          previewFallback={<SceneStoryboardShotFrame scene={activeScene} shot={shot} />}
+                          shot={shot}
+                          index={index}
+                          activeScene={activeScene}
+                          activeEpisodeId={activeEpisode.id}
+                          updateScene={updateScene}
+                          storyboardSourceHash={manualStoryboardReadModel?.sourceHash}
+                          onReroll={handleRerollShot}
+                          onGenerateImagePrompt={(shotId) => handlePrepareGenerateShotPrompt(shotId, "image")}
+                          onGenerateVideoPrompt={(shotId) => handlePrepareGenerateShotPrompt(shotId, "video")}
+                          isGeneratingImage={generatingShotImageId === shot.id}
+                          promptGenerationBusy={isStoryboardMutationBusy}
+                          generatingPromptKind={generatingShotPrompt?.shotId === shot.id ? generatingShotPrompt.kind : undefined}
+                          onGenerateSpatial={handlePrepareGenerateShotSpatial}
+                          selected={activeShot?.id === shot.id}
+                          onSelect={selectShot}
+                          batchSelected={selectedShotIdSet.has(shot.id)}
+                          onToggleBatchSelection={toggleShotBatchSelection}
+                          aiGenerationBlockedReason={productionPreparationGate && !productionPreparationGate.readyForShotPlanning
+                            ? productionPreparationGate.shotPlanningReason
+                            : undefined}
+                        />
+                      </Suspense>
+                    </div>
+                  ) : null)}</section> : undefined} project={currentProject} episode={activeEpisode} scene={activeScene} assets={manualProductionAssetReadModel || undefined} disabled={isStoryboardMutationBusy} modelOptions={videoModels.filter(m => m.capabilities.includes("video") && videoChannels.some(c => c.id === m.channelId)).map(m => { const c = videoChannels.find(c => c.id === m.channelId)!; const adapter = resolveVideoModelAdapter({ channelType: c.type, modelId: m.modelId, comfyCapabilities: m.comfyCapabilities, configuredAdapterId: m.videoAdapterId }); return { id: m.id, label: m.alias, min: adapter.limits.minDurationSeconds, max: adapter.limits.maxDurationSeconds, multiShot: adapter.capabilities.multiShot }; })} limits={scenePlanModel ? { min: scenePlanModel.adapter.limits.minDurationSeconds, max: scenePlanModel.adapter.limits.maxDurationSeconds, multiShot: scenePlanModel.adapter.capabilities.multiShot, label: scenePlanModel.model.alias } : undefined} />
+
 
             <StoryboardAgentStatusBar
               progress={agentProgress}
@@ -1190,63 +1246,22 @@ export default function Storyboard({ workspaceMode = "linear" }: StoryboardProps
               onViewResult={() => undefined}
             />
 
-            {videoGenerationMode === "shot" && !isDirectorProductionRoute && (!manualFilmTeamReadModel || productionPreparationGate?.readyForShotPlanning) && (
-              isDirectorProductionRoute ? (
-                <section className="mb-5 rounded-lg border border-border-soft/25 bg-bg-surface-soft">
-                  <button
-                    type="button"
-                    aria-expanded={isProductionEvidenceOpen}
-                    onClick={() => setIsProductionEvidenceOpen((value) => !value)}
-                    className="flex h-11 w-full items-center justify-between gap-3 px-4 text-left text-xs font-bold text-text-secondary transition-colors hover:bg-bg-surface-hover hover:text-text-primary"
-                  >
-                    <span>筹备依据</span>
-                    <span className="flex items-center gap-2 text-[11px] text-text-muted">
-                      {activeEpisode.productionTeam?.outputs?.filter((output) => output.status === "confirmed").length || 0} 个部门已确认
-                      <ChevronDown className={cn("h-4 w-4 transition-transform", isProductionEvidenceOpen && "rotate-180")} />
-                    </span>
-                  </button>
-                  {isProductionEvidenceOpen && (
-                    <div className="border-t border-border-soft/25 p-3">
-                      <Suspense fallback={<DeferredPanelFallback />}>
-                        <DepartmentBoardsPanel
-                          project={currentProject}
-                          episode={activeEpisode}
-                          scene={activeScene}
-                          activeShot={activeShot}
-                          cockpit={productionCockpit}
-                          manualReadModel={manualFilmTeamReadModel}
-                          onRefresh={refreshProductionCockpit}
-                        />
-                      </Suspense>
-                    </div>
-                  )}
-                </section>
-              ) : (
-                <Suspense fallback={<DeferredPanelFallback />}>
-                  <DepartmentBoardsPanel
-                    project={currentProject}
-                    episode={activeEpisode}
-                    scene={activeScene}
-                    activeShot={activeShot}
-                    cockpit={productionCockpit}
-                    manualReadModel={manualFilmTeamReadModel}
-                    onRefresh={refreshProductionCockpit}
-                  />
-                </Suspense>
-              )
-            )}
+            {productionStage === 'visuals' && visualTool === 'canvas' && <>
+              {manualFilmTeamReadModel && manualProductionAssetReadModel ? <SceneStoryboardCanvas key={`${currentProject.id}:${activeScene.id}`} project={currentProject} episode={activeEpisode} scene={activeScene} filmTeam={manualFilmTeamReadModel} assets={manualProductionAssetReadModel} sourceHash={manualStoryboardReadModel?.sourceHash} updateScene={updateScene} onSelectUnit={setEditingUnitId} onEditShot={shotId => { changeProductionStage('shots', shotId); planningController.current?.inspectShot(); }} onEditUnit={unitId => { setEditingUnitId(unitId); setVisualTool('unit'); }} onStudio={enterSceneStudio} /> : <p className="py-8 text-xs text-text-muted">正在读取本场资产与画格…</p>}
 
-            {videoGenerationMode === "storyboard" && (
+            </>}
+            {productionStage === "visuals" && visualTool === "unit" && (
               <>
                 <div className="mb-4">
-                  <h2 className="text-sm font-bold text-text-primary">本场视频单元</h2>
+                  <div className="flex items-center justify-between gap-3"><h2 className="text-sm font-bold text-text-primary">当前片段制作</h2><button type="button" className="text-xs text-gold" onClick={() => setVisualTool("canvas")}>返回画面</button></div>
                 </div>
                 {manualFilmTeamReadModel && manualProductionAssetReadModel && manualStoryboardReadModel ? (
                 storyboardUnitAnchors.length ? (
                 <div className="space-y-6 pb-12">
-                  {storyboardUnitAnchors.map((unit, unitIndex) => unit.persisted ? (
+                  {storyboardUnitAnchors.map((unit, unitIndex) => editingUnitId && storyboardUnitAnchors.some(item => item.id === editingUnitId) && unit.id !== editingUnitId ? null : unit.persisted ? (
                       <Suspense key={unit.id} fallback={<DeferredPanelFallback />}>
                         <ManualVideoStoryboardPanel
+                          batchManaged
                           project={currentProject}
                           episode={activeEpisode}
                           scene={activeScene}
@@ -1260,7 +1275,7 @@ export default function Storyboard({ workspaceMode = "linear" }: StoryboardProps
                           filmTeam={manualFilmTeamReadModel}
                           assets={manualProductionAssetReadModel}
                           updateScene={updateScene}
-                          onGenerateVisuals={() => boardBatchAgent.prepareScene(activeScene.id)}
+                          onGenerateVisuals={prepareSceneVisuals}
                           groupingProposal={storyboardGroupingProposals.get(unit.id)
                             ? {
                                 ...storyboardGroupingProposals.get(unit.id)!,
@@ -1335,8 +1350,8 @@ export default function Storyboard({ workspaceMode = "linear" }: StoryboardProps
               </>
             )}
 
-            {videoGenerationMode === "shot" && (activeScene.shots && activeScene.shots.length > 0 ? (
-              <div className="pb-12 mt-6 space-y-5">
+            {productionStage === "shots" && (activeScene.shots && activeScene.shots.length > 0 ? (
+              <details className="mt-5 border-t border-border-soft/30 pt-3 text-xs"><summary className="cursor-pointer text-text-muted">批量操作与历史版本</summary><div className="mt-3 space-y-4">
                 {!!activeScene.shotHistory?.length && <details className="text-xs"><summary className="cursor-pointer text-text-muted">历史镜头版本 · {activeScene.shotHistory.length}</summary><div className="mt-2 flex flex-wrap gap-3">{activeScene.shotHistory.map(version => <button type="button" key={version.at} className="text-cyan-600 dark:text-cyan-400" onClick={async () => { await updateScene(activeScene.id, { shots: version.shots, audioTracks: version.audioTracks, manualStoryboard: version.manualStoryboard }, activeEpisode.id, { archiveReplacedShots: true }); await flushDebouncedProjectSave(currentProject.id); }}>恢复 {new Date(version.at).toLocaleString()} · {version.shots.length} 镜头</button>)}</div></details>}
                 <div className="flex flex-wrap items-center gap-2 border-y border-border-soft/30 py-3" aria-label="分镜批量操作">
                   <button type="button" onClick={() => void addManualShot()} disabled={isStoryboardMutationBusy}
@@ -1406,41 +1421,8 @@ export default function Storyboard({ workspaceMode = "linear" }: StoryboardProps
                     </div>
                   )}
                 </div>
-                <div
-                  className="grid gap-5"
-                  style={{ gridTemplateColumns: "repeat(auto-fit, minmax(min(100%, 300px), 1fr))" }}
-                >
-                  {activeScene.shots.map((shot, index) => (
-                    <div key={shot.id} className="min-w-0">
-                      <ShotAppearanceEditor project={currentProject} shot={shot} saved onChange={saveAppearanceShot} issues={appearanceIssues(currentProject, activeScene, shot, appearanceSourceShots(activeEpisode, appearanceHistoryContext || currentStoryboardBatchScene?.manualTeamContext || "")).map(i => i.message)} />
-                      <Suspense fallback={<DeferredPanelFallback />}>
-                        <ShotCard
-                          shot={shot}
-                          index={index}
-                          activeScene={activeScene}
-                          activeEpisodeId={activeEpisode.id}
-                          updateScene={updateScene}
-                          storyboardSourceHash={manualStoryboardReadModel?.sourceHash}
-                          onReroll={handleRerollShot}
-                          onGenerateImagePrompt={(shotId) => handlePrepareGenerateShotPrompt(shotId, "image")}
-                          onGenerateVideoPrompt={(shotId) => handlePrepareGenerateShotPrompt(shotId, "video")}
-                          isGeneratingImage={generatingShotImageId === shot.id}
-                          promptGenerationBusy={isStoryboardMutationBusy}
-                          generatingPromptKind={generatingShotPrompt?.shotId === shot.id ? generatingShotPrompt.kind : undefined}
-                          onGenerateSpatial={handlePrepareGenerateShotSpatial}
-                          selected={activeShot?.id === shot.id}
-                          onSelect={selectShot}
-                          batchSelected={selectedShotIdSet.has(shot.id)}
-                          onToggleBatchSelection={toggleShotBatchSelection}
-                          aiGenerationBlockedReason={productionPreparationGate && !productionPreparationGate.readyForShotPlanning
-                            ? productionPreparationGate.shotPlanningReason
-                            : undefined}
-                        />
-                      </Suspense>
-                    </div>
-                  ))}
-                </div>
-              </div>
+
+              </div></details>
             ) : (
               <div className="flex min-h-[420px] flex-1 flex-col items-center justify-center rounded-lg border border-dashed border-border-soft/35 bg-bg-surface text-text-muted">
                 <div className="w-20 h-20 rounded-full bg-gray-50 dark:bg-neutral-950 flex items-center justify-center mb-6">
@@ -1470,7 +1452,11 @@ export default function Storyboard({ workspaceMode = "linear" }: StoryboardProps
                 </Button>
               </div>
             ))}
+            {productionStage === 'visuals' && visualTool === 'canvas' && <details className="mt-5 text-xs text-text-muted" onToggle={event => setOtherCandidatesOpen(event.currentTarget.open)}><summary className="cursor-pointer">查看本场其他媒体候选</summary>{otherCandidatesOpen && <StoryboardMediaCandidateReview projectId={currentProject.id} sceneId={activeScene.id} />}</details>}
+            </div>
           </div>
+          <footer className="shrink-0 border-t border-border-soft/30 bg-bg-surface px-4 py-3 md:px-6" aria-label="场次保存状态"><div className="flex items-center justify-between gap-3"><p role="status" className="text-xs text-text-muted">{planningState.dirty ? '本场依据或生成分组有未保存修改' : '镜头修改单独保存；画面检查后再采用'}</p><div className="flex items-center gap-3">{planningState.dirty && <button type="button" disabled={planningState.busy || isStoryboardMutationBusy} onClick={() => void planningController.current?.save()} className="text-xs text-gold disabled:opacity-40">{planningState.busy ? '正在保存…' : '保存当前修改'}</button>}{productionStage === 'shots' && <button type="button" onClick={() => changeProductionStage('visuals')} className="rounded-md border border-border-soft/40 px-3 py-2 text-xs text-text-primary">查看故事板</button>}</div></div></footer>
+          </>
         ) : (
           <div className="flex-grow flex flex-col items-center justify-center text-text-muted bg-bg-surface p-10">
             <div className="w-16 h-16 rounded-full bg-bg-surface-soft flex items-center justify-center mb-4">

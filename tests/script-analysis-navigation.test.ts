@@ -3,13 +3,11 @@ import assert from 'node:assert/strict';
 import React from 'react';
 import {renderToStaticMarkup} from 'react-dom/server';
 import {bodyEvidenceSelection,scriptUpdatedTarget} from '../apps/web/src/features/script/scriptAnalysisNavigation';
-import {ScriptAnalysisSummary,ScriptAnalysisView,suspendAnalysisUnderlay} from '../apps/web/src/features/script/components/ScriptAnalysisView';
 import {blocksToScreenplayText} from '../packages/script/src/fountainAdapter';
 import {createScriptCreationProfile} from '../packages/script/src/creation';
 import {createScriptProject} from '../packages/script/src/project';
 import type {ScriptBlock} from '../packages/script/src/schema';
-import type {StructureAnalysis} from '../packages/script/src/structureAnalysis';
-import {resolveAssistantUnit} from '../apps/web/src/features/script/scriptAssistantShortcuts';
+import {resolveTaskUnit} from '../apps/web/src/features/script/scriptTaskShortcuts';
 
 const fixture=()=>createScriptProject('分析导航机械样本',createScriptCreationProfile('short-film',1,5));
 
@@ -17,8 +15,8 @@ test('an explicit season shortcut keeps the selected member instead of redirecti
   const project=fixture(),selected=project.units[0];selected.scopeId='independent-story';selected.seasonId='season-current';
   project.seasons=[{id:'season-current',title:'当前季',arc:'当季方向'}];
   const legacy=structuredClone(selected);legacy.id='legacy-unit';legacy.scopeId='season-current';project.units.unshift(legacy);
-  assert.equal(resolveAssistantUnit(project,selected.id,undefined,'season-current')?.id,selected.id);
-  assert.equal(resolveAssistantUnit(project,legacy.id,undefined,'independent-story')?.id,selected.id);
+  assert.equal(resolveTaskUnit(project,selected.id,undefined,'season-current')?.id,selected.id);
+  assert.equal(resolveTaskUnit(project,legacy.id,undefined,'independent-story')?.id,selected.id);
 });
 
 test('body evidence uses its block identity when the same quote appears in another block',()=>{
@@ -80,35 +78,4 @@ test('adopted outline focus does not split a surrogate pair',()=>{
 test('keeping all author choices gives no invented update destination',()=>{
   const before=fixture(),after=structuredClone(before);after.revision++;after.updatedAt++;
   assert.equal(scriptUpdatedTarget(before,after),null);
-});
-
-test('central analysis suspends only its underlay and restores original accessibility state and reading position',()=>{
-  class Surface {
-    inert=false;scrollTop=184;value='作者正在编辑的原文';selectionStart=2;selectionEnd=6;
-    attrs=new Map<string,string>();parentElement?:{children:Surface[]};
-    getAttribute(name:string){return this.attrs.get(name)??null;}
-    setAttribute(name:string,value:string){this.attrs.set(name,value);}
-    removeAttribute(name:string){this.attrs.delete(name);}
-  }
-  const prior=Object.getOwnPropertyDescriptor(globalThis,'HTMLElement');
-  Object.defineProperty(globalThis,'HTMLElement',{configurable:true,value:Surface});
-  try{
-    const editor=new Surface(),toolbar=new Surface(),layer=new Surface(),directory=new Surface(),assistant=new Surface();
-    toolbar.inert=true;toolbar.setAttribute('aria-hidden','false');layer.parentElement={children:[editor,toolbar,layer]};
-    const restore=suspendAnalysisUnderlay(layer as unknown as HTMLElement);
-    assert.equal(editor.inert,true);assert.equal(editor.getAttribute('aria-hidden'),'true');
-    assert.equal(directory.inert,false);assert.equal(assistant.inert,false);
-    restore();assert.equal(editor.inert,false);assert.equal(editor.getAttribute('aria-hidden'),null);
-    assert.equal(toolbar.inert,true);assert.equal(toolbar.getAttribute('aria-hidden'),'false');
-    assert.equal(editor.scrollTop,184);assert.equal(editor.value,'作者正在编辑的原文');
-    assert.deepEqual([editor.selectionStart,editor.selectionEnd],[2,6]);
-  }finally{if(prior)Object.defineProperty(globalThis,'HTMLElement',prior);else Reflect.deleteProperty(globalThis,'HTMLElement');}
-});
-
-test('assistant analysis shows a summary entry while the report has a central close command',()=>{
-  const project=fixture(),analysis:StructureAnalysis={projectId:project.id,revision:1,unitId:project.units[0].id,summary:'具体分析摘要',findings:[],evidenceKinds:['OUTLINE_SPAN']};
-  const summary=renderToStaticMarkup(React.createElement(ScriptAnalysisSummary,{analysis,onOpen:()=>{}}));
-  assert.match(summary,/在中央查看分析/);assert.doesNotMatch(summary,/中央结构与节奏分析/);
-  const report=renderToStaticMarkup(React.createElement(ScriptAnalysisView,{analysis,project,onClose:()=>{},onRequest:()=>{},onOpenScene:()=>{},onOpenOutline:()=>{}}));
-  assert.match(report,/中央结构与节奏分析/);assert.match(report,/关闭分析，返回原内容/);
 });

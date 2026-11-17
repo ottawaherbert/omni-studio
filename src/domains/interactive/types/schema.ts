@@ -293,6 +293,8 @@ export interface InteractiveRuntimeBuild {
   nodeManifests: Array<{
     nodeId: string;
     title: string;
+    /** Main binding revision used for this build; zero means no approved binding. */
+    bindingVersionIndex?: number;
     /** Ordered Writing scenes frozen into this playable node. */
     scriptSceneRefs: ArtifactRef[];
     /** @deprecated Compatibility projection for old RuntimeBuild readers. */

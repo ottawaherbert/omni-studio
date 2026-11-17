@@ -1,4 +1,7 @@
-import { useState } from "react";
+import { useAIConfigStore } from '../../clients/stateClient';
+import { generateAIVoice } from '../../clients/aiClient';
+import type { VoiceSettings } from '../../../packages/domain/src/speech';
+import { useEffect, useState } from "react";
 import { useGlobalStore, VoiceProfile } from "../../clients/stateClient";
 import { Plus, Trash2, Mic, Play, Settings2, Save } from "lucide-react";
 import { Button } from "../ui/Button";
@@ -7,6 +10,7 @@ export function GlobalVoiceLibrary() {
   const { voiceProfiles, addVoiceProfile, updateVoiceProfile, deleteVoiceProfile } = useGlobalStore();
   const [selectedVoiceId, setSelectedVoiceId] = useState<string | null>(null);
 
+  useEffect(() => { void useAIConfigStore.getState().hydrate(); }, []);
   const selectedVoice = voiceProfiles.find(v => v.id === selectedVoiceId);
 
   const handleAdd = () => {
@@ -14,7 +18,8 @@ export function GlobalVoiceLibrary() {
       name: "新音色",
       description: "",
       tags: [],
-      apiUrl: "https://api.example.com/tts",
+      settings: { voice: '', language: 'Auto' },
+      apiUrl: "",
       method: "POST",
       headers: '{\n  "Authorization": "Bearer YOUR_API_KEY",\n  "Content-Type": "application/json"\n}',
       bodyTemplate: '{\n  "text": "{{text}}",\n  "voice_id": "v1"\n}',
@@ -83,7 +88,7 @@ export function GlobalVoiceLibrary() {
       {/* Right Panel: Voice Editor */}
       <div className="flex-1 flex flex-col pr-2">
         {selectedVoice ? (
-          <VoiceEditor voice={selectedVoice} onUpdate={(updates) => updateVoiceProfile(selectedVoice.id, updates)} />
+          <VoicePresetEditor key={selectedVoice.id} voice={selectedVoice} onUpdate={(updates) => updateVoiceProfile(selectedVoice.id, updates)} />
         ) : (
           <div className="flex-1 flex items-center justify-center text-text-muted flex-col gap-4 py-20">
             <Mic className="w-12 h-12 opacity-20" />
@@ -95,7 +100,7 @@ export function GlobalVoiceLibrary() {
   );
 }
 
-function VoiceEditor({ voice, onUpdate }: { voice: VoiceProfile, onUpdate: (updates: Partial<VoiceProfile>) => void }) {
+function LegacyVoiceEditor({ voice, onUpdate }: { voice: VoiceProfile, onUpdate: (updates: Partial<VoiceProfile>) => void }) {
   const [testText, setTestText] = useState("你好，世界！这是一段测试音频。");
   const [isTesting, setIsTesting] = useState(false);
   const [testResult, setTestResult] = useState<{ url?: string; error?: string } | null>(null);
@@ -105,7 +110,7 @@ function VoiceEditor({ voice, onUpdate }: { voice: VoiceProfile, onUpdate: (upda
     setTestResult(null);
     try {
       // Simple variable replacement
-      const bodyStr = voice.bodyTemplate.replace(/\{\{text\}\}/g, testText);
+      const bodyStr = voice.bodyTemplate.replace(/\{\{text\}\}/g, JSON.stringify(testText).slice(1, -1));
       let headersObj = {};
       try {
         headersObj = JSON.parse(voice.headers);
@@ -297,4 +302,31 @@ function VoiceEditor({ voice, onUpdate }: { voice: VoiceProfile, onUpdate: (upda
       </div>
     </div>
   );
+}
+
+
+function VoicePresetEditor({ voice, onUpdate }: { voice: VoiceProfile; onUpdate: (updates: Partial<VoiceProfile>) => void }) {
+  const { models } = useAIConfigStore();
+  const [draft, setDraft] = useState<VoiceSettings>(voice.settings || { voice: '', language: 'Auto' });
+  const [text, setText] = useState('你好，这是一段音色试听。');
+  const [audio, setAudio] = useState(''), [error, setError] = useState(''), [busy, setBusy] = useState(false);
+  const field = 'mt-1 w-full rounded-md border border-border-soft bg-bg-surface px-3 py-2 text-sm';
+  const configured = models.some(m => m.id === draft.modelConfigId && m.capabilities.includes('audio'));
+  return <section className="space-y-5 text-text-primary">
+    <h2 className="text-sm font-semibold">可复用音色</h2>
+    <p className="text-xs leading-5 text-text-muted">接口与凭证在系统设置管理。保存后，可在项目资产的角色声音中选用；角色保留自己的副本，后续修改不会覆盖已有配音。</p>
+    {!voice.settings && <p className="text-xs text-amber-600">这是旧版自定义接口档案，尚未关联角色配音。请选择已配置的音频模型和音色 ID 后保存；原模板仍保留在下方。</p>}
+    <label className="block text-xs">名称<input className={field} value={voice.name} onChange={e => onUpdate({ name: e.target.value })} /></label>
+    <label className="block text-xs">说明<textarea className={field} value={voice.description} onChange={e => onUpdate({ description: e.target.value })} /></label>
+    <label className="block text-xs">配音模型<select aria-label="音色预设配音模型" className={field} value={draft.modelConfigId || ''} onChange={e => setDraft({ ...draft, modelConfigId: e.target.value })}><option value="">选择音频模型</option>{draft.modelConfigId && !configured && <option value={draft.modelConfigId}>原模型已移除，请重新选择</option>}{models.filter(m => m.capabilities.includes('audio')).map(m => <option key={m.id} value={m.id}>{m.alias}</option>)}</select></label>
+    <label className="block text-xs">音色 ID<input aria-label="音色预设 ID" className={field} value={draft.voice} onChange={e => setDraft({ ...draft, voice: e.target.value })} /></label>
+    <label className="block text-xs">语言<input className={field} value={draft.language || 'Auto'} onChange={e => setDraft({ ...draft, language: e.target.value })} /></label>
+    <label className="block text-xs">语速（模型支持时生效）<input type="number" min="0.25" max="4" step="0.05" className={field} value={draft.speed ?? 1} onChange={e => setDraft({ ...draft, speed: Number(e.target.value) })} /></label>
+    <label className="block text-xs">声音要求<textarea className={field} value={draft.instructions || ''} onChange={e => setDraft({ ...draft, instructions: e.target.value })} /></label>
+    <button className="rounded-md border border-border-soft px-3 py-2 text-xs disabled:opacity-40" disabled={!configured || !draft.voice.trim()} onClick={() => onUpdate({ settings: draft })}>保存为可选音色</button>
+    <label className="block text-xs">试听文本<textarea className={field} value={text} onChange={e => setText(e.target.value)} /></label>
+    <button className="rounded-md border border-border-soft px-3 py-2 text-xs disabled:opacity-40" disabled={busy || !configured || !draft.voice || !text.trim()} onClick={async () => { setBusy(true); setError(''); try { setAudio(await generateAIVoice({ purpose: 'preview', text, ...draft, voiceName: draft.voice })); } catch (e) { setError(e instanceof Error ? e.message : '试听失败'); } finally { setBusy(false); } }}>{busy ? '生成中…' : '生成试听'}</button>
+    {error && <p role="alert" className="text-xs text-red-500">{error}</p>}{audio && <audio controls src={audio} className="w-full" />}
+    {voice.apiUrl && <details className="border-t border-border-soft pt-4 text-xs"><summary>旧接口档案与联调（不用于角色配音）</summary><div className="pt-4"><LegacyVoiceEditor voice={voice} onUpdate={onUpdate} /></div></details>}
+  </section>;
 }

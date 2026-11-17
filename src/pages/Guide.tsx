@@ -1,3 +1,5 @@
+import { Link } from 'react-router-dom';
+import { productionStages } from '../config/productionNavigation';
 import { useState } from "react";
 import { 
   BookOpen, 
@@ -25,7 +27,7 @@ function cn(...inputs: ClassValue[]) {
 type TabType = "traditional" | "system" | "quickstart";
 
 export default function Guide() {
-  const [activeTab, setActiveTab] = useState<TabType>("traditional");
+  const [activeTab, setActiveTab] = useState<TabType>("quickstart");
 
   const sidebarItems = [
     { id: "traditional", label: "传统电影工业流程", icon: Film, color: "text-blue-500" },
@@ -173,187 +175,14 @@ export default function Guide() {
               </motion.div>
             )}
 
-            {activeTab === "system" && (
-              <motion.div
-                key="system"
-                initial={{ opacity: 0, y: 10 }}
-                animate={{ opacity: 1, y: 0 }}
-                exit={{ opacity: 0, y: -10 }}
-                className="space-y-10"
-              >
-                <header>
-                  <h1 className="text-2xl font-black text-gray-900 dark:text-white mb-3 tracking-tight">O.M.N.I. 系统工作流</h1>
-                  <p className="text-xs text-gray-500 dark:text-neutral-400 leading-relaxed max-w-2xl">
-                    系统完美映射了传统电影工业流程，并利用 AI 技术极大地简化了执行难度。按照以下顺序，一个人即可完成专业团队的工作。
-                  </p>
-                </header>
-
-                <div className="relative space-y-10 before:absolute before:inset-0 before:ml-6 before:-translate-x-px md:before:mx-auto md:before:translate-x-0 before:h-full before:w-0.5 before:bg-gradient-to-b before:from-transparent before:via-emerald-500/20 before:to-transparent">
-                  
-                  {/* Step 1 */}
-                  <div className="relative flex items-center justify-between md:justify-normal md:odd:flex-row-reverse group">
-                    <div className="flex items-center justify-center w-12 h-12 rounded-full border border-white dark:border-neutral-900 bg-emerald-500 text-white shadow-lg shadow-emerald-500/20 shrink-0 md:order-1 md:group-odd:-translate-x-1/2 md:group-even:translate-x-1/2 z-10">
-                      <BookOpen className="w-5 h-5" />
-                    </div>
-                    <div className="w-[calc(100%-4rem)] md:w-[calc(50%-3rem)] p-6 rounded-3xl bg-gray-50 dark:bg-neutral-900/50 border border-gray-100 dark:border-neutral-800 hover:border-emerald-500/30 transition-all duration-500">
-                      <div className="text-[9px] font-black text-emerald-500 uppercase tracking-widest mb-1.5">Step 01</div>
-                      <h4 className="text-base font-black text-gray-900 dark:text-white mb-3">构思与设定 (开发阶段)</h4>
-                      <ul className="space-y-2.5">
-                        <li className="flex items-start gap-2.5">
-                          <div className="w-4 h-4 rounded-full bg-emerald-500/10 flex items-center justify-center shrink-0 mt-0.5">
-                            <CheckCircle2 className="w-2.5 h-2.5 text-emerald-500" />
-                          </div>
-                          <p className="text-xs text-gray-600 dark:text-neutral-400"><strong>设定集 (Bible)：</strong> 建立世界观、角色档案和核心设定。这是 AI 理解故事的基础。</p>
-                        </li>
-                        <li className="flex items-start gap-2.5">
-                          <div className="w-4 h-4 rounded-full bg-emerald-500/10 flex items-center justify-center shrink-0 mt-0.5">
-                            <CheckCircle2 className="w-2.5 h-2.5 text-emerald-500" />
-                          </div>
-                          <p className="text-xs text-gray-600 dark:text-neutral-400"><strong>段落/剧集 (Episodes)：</strong> 规划故事的宏观结构。 </p>
-                        </li>
-                      </ul>
-                    </div>
-                  </div>
-
-                  {/* Step 2 */}
-                  <div className="relative flex items-center justify-between md:justify-normal md:odd:flex-row-reverse group">
-                    <div className="flex items-center justify-center w-12 h-12 rounded-full border border-white dark:border-neutral-900 bg-blue-500 text-white shadow-lg shadow-blue-500/20 shrink-0 md:order-1 md:group-odd:-translate-x-1/2 md:group-even:translate-x-1/2 z-10">
-                      <LayoutIcon className="w-5 h-5" />
-                    </div>
-                    <div className="w-[calc(100%-4rem)] md:w-[calc(50%-3rem)] p-6 rounded-3xl bg-gray-50 dark:bg-neutral-900/50 border border-gray-100 dark:border-neutral-800 hover:border-blue-500/30 transition-all duration-500">
-                      <div className="text-[9px] font-black text-blue-500 uppercase tracking-widest mb-1.5">Step 02</div>
-                      <h4 className="text-base font-black text-gray-900 dark:text-white mb-3">剧本与视觉规划 (前期筹备)</h4>
-                      <ul className="space-y-2.5">
-                        <li className="flex items-start gap-2.5">
-                          <div className="w-4 h-4 rounded-full bg-blue-500/10 flex items-center justify-center shrink-0 mt-0.5">
-                            <CheckCircle2 className="w-2.5 h-2.5 text-blue-500" />
-                          </div>
-                          <p className="text-xs text-gray-600 dark:text-neutral-400"><strong>剧本 (Script)：</strong> 编写具体的角色对白和动作描写。</p>
-                        </li>
-                        <li className="flex items-start gap-2.5">
-                          <div className="w-4 h-4 rounded-full bg-blue-500/10 flex items-center justify-center shrink-0 mt-0.5">
-                            <CheckCircle2 className="w-2.5 h-2.5 text-blue-500" />
-                          </div>
-                          <p className="text-xs text-gray-600 dark:text-neutral-400"><strong>分镜 (Storyboard)：</strong> 为每个镜头生成画面草图，确定构图和运镜。</p>
-                        </li>
-                      </ul>
-                    </div>
-                  </div>
-
-                  {/* Step 3 */}
-                  <div className="relative flex items-center justify-between md:justify-normal md:odd:flex-row-reverse group">
-                    <div className="flex items-center justify-center w-12 h-12 rounded-full border border-white dark:border-neutral-900 bg-amber-500 text-white shadow-lg shadow-amber-500/20 shrink-0 md:order-1 md:group-odd:-translate-x-1/2 md:group-even:translate-x-1/2 z-10">
-                      <Video className="w-5 h-5" />
-                    </div>
-                    <div className="w-[calc(100%-4rem)] md:w-[calc(50%-3rem)] p-6 rounded-3xl bg-gray-50 dark:bg-neutral-900/50 border border-gray-100 dark:border-neutral-800 hover:border-amber-500/30 transition-all duration-500">
-                      <div className="text-[9px] font-black text-amber-500 uppercase tracking-widest mb-1.5">Step 03</div>
-                      <h4 className="text-base font-black text-gray-900 dark:text-white mb-3">AI 拍摄与录音 (拍摄阶段)</h4>
-                      <ul className="space-y-2.5">
-                        <li className="flex items-start gap-2.5">
-                          <div className="w-4 h-4 rounded-full bg-amber-500/10 flex items-center justify-center shrink-0 mt-0.5">
-                            <CheckCircle2 className="w-2.5 h-2.5 text-amber-500" />
-                          </div>
-                          <p className="text-xs text-gray-600 dark:text-neutral-400"><strong>生成模块：</strong> 根据分镜提示词，生成实际的视频片段、角色配音和音效。</p>
-                        </li>
-                        <li className="flex items-start gap-2.5">
-                          <div className="w-4 h-4 rounded-full bg-amber-500/10 flex items-center justify-center shrink-0 mt-0.5">
-                            <CheckCircle2 className="w-2.5 h-2.5 text-amber-500" />
-                          </div>
-                          <p className="text-xs text-gray-600 dark:text-neutral-400"><strong>资产 (Assets)：</strong> 统一管理您“拍摄”生成的所有素材。</p>
-                        </li>
-                      </ul>
-                    </div>
-                  </div>
-
-                  {/* Step 4 */}
-                  <div className="relative flex items-center justify-between md:justify-normal md:odd:flex-row-reverse group">
-                    <div className="flex items-center justify-center w-12 h-12 rounded-full border border-white dark:border-neutral-900 bg-rose-500 text-white shadow-lg shadow-rose-500/20 shrink-0 md:order-1 md:group-odd:-translate-x-1/2 md:group-even:translate-x-1/2 z-10">
-                      <Scissors className="w-5 h-5" />
-                    </div>
-                    <div className="w-[calc(100%-4rem)] md:w-[calc(50%-3rem)] p-6 rounded-3xl bg-gray-50 dark:bg-neutral-900/50 border border-gray-100 dark:border-neutral-800 hover:border-rose-500/30 transition-all duration-500">
-                      <div className="text-[9px] font-black text-rose-500 uppercase tracking-widest mb-1.5">Step 04</div>
-                      <h4 className="text-base font-black text-gray-900 dark:text-white mb-3">剪辑与成片 (后期制作)</h4>
-                      <ul className="space-y-2.5">
-                        <li className="flex items-start gap-2.5">
-                          <div className="w-4 h-4 rounded-full bg-rose-500/10 flex items-center justify-center shrink-0 mt-0.5">
-                            <CheckCircle2 className="w-2.5 h-2.5 text-rose-500" />
-                          </div>
-                          <p className="text-xs text-gray-600 dark:text-neutral-400"><strong>摄影棚 (Studio)：</strong> 您的非线性剪辑台。在这里将素材拖拽到时间线上，进行剪辑、对轨，最终导出成片。</p>
-                        </li>
-                      </ul>
-                    </div>
-                  </div>
-
-                </div>
-              </motion.div>
-            )}
-
-            {activeTab === "quickstart" && (
-              <motion.div
-                key="quickstart"
-                initial={{ opacity: 0, y: 10 }}
-                animate={{ opacity: 1, y: 0 }}
-                exit={{ opacity: 0, y: -10 }}
-                className="space-y-10"
-              >
-                <header>
-                  <h1 className="text-2xl font-black text-gray-900 dark:text-white mb-3 tracking-tight">快速上手指南</h1>
-                  <p className="text-xs text-gray-500 dark:text-neutral-400 leading-relaxed max-w-2xl">
-                    三分钟带您完成从创意到成片的完整闭环。
-                  </p>
-                </header>
-
-                <div className="grid grid-cols-1 gap-5">
-                  <div className="group bg-white dark:bg-neutral-900 border border-gray-100 dark:border-neutral-800 rounded-3xl p-6 flex flex-col md:flex-row gap-6 hover:shadow-xl transition-all duration-500">
-                    <div className="w-full md:w-48 h-36 rounded-2xl bg-gray-50 dark:bg-neutral-800 flex items-center justify-center shrink-0 overflow-hidden relative">
-                      <div className="absolute inset-0 bg-gradient-to-br from-emerald-500/20 to-blue-500/20" />
-                      <Sparkles className="w-10 h-10 text-emerald-500 relative z-10" />
-                    </div>
-                    <div className="flex-1">
-                      <h3 className="text-base font-black text-gray-900 dark:text-white mb-2">1. 建立您的第一个故事</h3>
-                      <p className="text-xs text-gray-600 dark:text-neutral-400 mb-4 leading-relaxed">
-                        进入“设定集”，点击“新建角色”。输入角色的名字和性格描述，AI 会为您自动生成精美的人物立绘和背景故事。
-                      </p>
-                      <button className="flex items-center gap-1.5 text-[10px] font-black text-emerald-500 hover:gap-3 transition-all uppercase tracking-widest">
-                        立即开始 <ArrowRight className="w-3.5 h-3.5" />
-                      </button>
-                    </div>
-                  </div>
-
-                  <div className="group bg-white dark:bg-neutral-900 border border-gray-100 dark:border-neutral-800 rounded-3xl p-6 flex flex-col md:flex-row gap-6 hover:shadow-xl transition-all duration-500">
-                    <div className="w-full md:w-48 h-36 rounded-2xl bg-gray-50 dark:bg-neutral-800 flex items-center justify-center shrink-0 overflow-hidden relative">
-                      <div className="absolute inset-0 bg-gradient-to-br from-blue-500/20 to-violet-500/20" />
-                      <Mic2 className="w-10 h-10 text-blue-500 relative z-10" />
-                    </div>
-                    <div className="flex-1">
-                      <h3 className="text-base font-black text-gray-900 dark:text-white mb-2">2. 赋予角色声音</h3>
-                      <p className="text-xs text-gray-600 dark:text-neutral-400 mb-4 leading-relaxed">
-                        在“剧本”模块编写一段台词，点击对白旁的“播放”按钮。您可以为角色选择不同的音色，甚至克隆您自己的声音。
-                      </p>
-                      <button className="flex items-center gap-1.5 text-[10px] font-black text-blue-500 hover:gap-3 transition-all uppercase tracking-widest">
-                        探索配音 <ArrowRight className="w-3.5 h-3.5" />
-                      </button>
-                    </div>
-                  </div>
-
-                  <div className="group bg-white dark:bg-neutral-900 border border-gray-100 dark:border-neutral-800 rounded-3xl p-6 flex flex-col md:flex-row gap-6 hover:shadow-xl transition-all duration-500">
-                    <div className="w-full md:w-48 h-36 rounded-2xl bg-gray-50 dark:bg-neutral-800 flex items-center justify-center shrink-0 overflow-hidden relative">
-                      <div className="absolute inset-0 bg-gradient-to-br from-rose-500/20 to-amber-500/20" />
-                      <MonitorPlay className="w-10 h-10 text-rose-500 relative z-10" />
-                    </div>
-                    <div className="flex-1">
-                      <h3 className="text-base font-black text-gray-900 dark:text-white mb-2">3. 导出您的处女作</h3>
-                      <p className="text-xs text-gray-600 dark:text-neutral-400 mb-4 leading-relaxed">
-                        在“摄影棚”完成剪辑后，点击右上角的“导出”。您可以选择 4K 高清分辨率，直接分享到社交平台。
-                      </p>
-                      <button className="flex items-center gap-1.5 text-[10px] font-black text-rose-500 hover:gap-3 transition-all uppercase tracking-widest">
-                        导出作品 <ArrowRight className="w-3.5 h-3.5" />
-                      </button>
-                    </div>
-                  </div>
-                </div>
-              </motion.div>
-            )}
+            {activeTab !== "traditional" && <section className="space-y-7 text-text-primary">
+              <header><h1 className="text-xl font-semibold">{activeTab === 'quickstart' ? '从哪里开始' : '当前系统流程'}</h1><p className="mt-2 text-sm leading-6 text-text-muted">先确定内容，再制作画面与声音。每一步都能修改；已有成果保留，来源变化会提示复核。</p></header>
+              <div className="divide-y divide-border-soft border-y border-border-soft">
+                {[{ path: '/writing', title: '写作', task: '创建或打开作品，编辑大纲、分场与正文。需要外部模型协作时打开“写作任务”，复制要求、回填返回、检查后采用；不会自动继续写作。已有剧本可直接导入制片。' }, ...productionStages, { path: '/interactive', title: '互动作品', task: '设计选择与状态，绑定剧本和制作素材，试玩后导出互动运行包。' }].map((step, i) => <div key={step.path} className="flex items-start justify-between gap-6 py-5"><div><h2 className="text-sm font-semibold">{i + 1}. {step.title}</h2><p className="mt-2 text-sm leading-6 text-text-secondary">{step.task}</p></div><Link className="shrink-0 rounded-md border border-border-soft px-3 py-2 text-xs hover:text-gold" to={step.path}>进入{step.title}</Link></div>)}
+              </div>
+              <div className="space-y-3 text-sm leading-6 text-text-secondary"><h2 className="font-semibold text-text-primary">生成时只需要一处设置</h2><p>从项目资产、宫格预览或摄影棚打开生成工作台，选择参考素材和用途，调整方案参数，检查后允许本次生成。结果先保存为候选，检查通过后再采用。无限画布与清单操作的是同一份任务。</p><p>角色音色在项目资产的“角色声音”中设置；对白、背景音乐和混音在摄影棚处理。视频模型是否接收参考音频，以工作台显示的能力为准。</p><p>成片导出、分镜预演与互动运行包用途不同。生成成功也不代表镜头衔接或创作质量已通过。</p></div>
+              <div className="flex gap-5 text-sm text-gold"><Link to="/settings">配置生成与配音服务</Link><Link to="/image-gen">独立生成与外部图片导入</Link><Link to="/assets">全局资产与音色库</Link></div>
+            </section>}
           </AnimatePresence>
         </div>
       </div>

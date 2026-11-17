@@ -64,7 +64,8 @@ const studioSource = fs.readFileSync(new URL("../src/pages/Studio.tsx", import.m
 assert.ok(studioSource.includes("StudioGenerationTargetPicker"));
 assert.ok(studioSource.includes("StudioReferenceControlPanel"));
 assert.ok(studioSource.includes("selectedManualReferenceBoardItemIds"));
-assert.ok(studioSource.includes("generationWayId: selectedVideoAdapter?.id"), "the primary Studio mode selector must initialize the confirmation request");
+assert.ok(studioSource.includes("GenerationWorkbench"), "internal Studio generation must use the shared workspace");
+assert.ok(studioSource.includes("外部制作参考设置"), "legacy reference drafting remains explicitly scoped to external work");
 assert.ok(studioSource.includes("startFrameUrl: selectedStartFrameUrl") && studioSource.includes("endFrameUrl: selectedEndFrameUrl"));
 assert.ok(studioSource.includes("includeStoryboardReference") && studioSource.includes("selectedReferenceImageTakeIds") && studioSource.includes("selectedReferenceVideoTakeIds"));
 assert.ok(studioSource.includes("selectedDialogueTrackIds") && studioSource.includes("selectedVoiceReferenceIds"), "Studio must preserve exact author-selected audio references instead of auto-expanding them");
@@ -93,7 +94,7 @@ assert.equal(
 );
 assert.ok(studioSource.includes("manualStudioAI.execute"));
 assert.ok(studioSource.includes("videoGeneration={manualStudioAI.promptRequest.videoGeneration}"));
-assert.ok(studioSource.includes("hasVideoCandidate={isDirectorProductionRoute ? manualVideoCandidateExists : false}"));
+assert.ok(studioSource.includes("视频生成工作台") && studioSource.includes("外部制作与素材导入"), "Studio must separate shared generation from external import without a duplicate submit button");
 assert.ok(
   studioSource.includes("audioEl.muted = isMuted || Boolean(track.muted)")
     && studioSource.includes("track.volume ?? 1")
@@ -105,10 +106,10 @@ const controlsSource = fs.readFileSync(new URL("../src/components/StudioShotCont
 assert.ok(controlsSource.includes("governedProductionMode"));
 assert.ok(controlsSource.includes("!governedProductionMode && <button"));
 assert.ok(controlsSource.includes("promptReadOnly"));
-assert.ok(controlsSource.includes("generationGate?.reason"));
-assert.ok(controlsSource.includes("再生成一个候选视频"));
-assert.ok(controlsSource.includes("本次 Take 的工作草稿") && controlsSource.includes("恢复上游版本"), "Studio prompt edits must remain Take-local and resettable");
-assert.ok(controlsSource.includes("governedProductionMode || Boolean(selectedShot.imageUrl)"), "H3 reference generation must not be blocked by the legacy first-frame button gate");
+assert.ok(controlsSource.includes("generationGate?.label"));
+assert.ok(!controlsSource.includes("再生成一个候选视频"), "additional internal candidates are created in the shared workbench");
+assert.ok(controlsSource.includes("外部制作草稿") && controlsSource.includes("恢复上游版本"), "Studio prompt edits must remain Take-local and resettable");
+assert.ok(!controlsSource.includes("videoInputReady"), "internal reference readiness belongs to the workbench, not the external tools");
 
 const referenceControlsSource = fs.readFileSync(new URL("../src/components/StudioReferenceControlPanel.tsx", import.meta.url), "utf8");
 for (const contract of ["onToggleStoryboardReference", "onToggleReferenceImageTake", "onToggleReferenceVideoTake", "onToggleDialogueTrack", "onToggleVoiceReference"]) {
@@ -207,8 +208,8 @@ for (const disclosure of ["执行模型", "镜头 / 音轨上下文", "本次实
 
 const aiSource = fs.readFileSync(new URL("../src/services/ai.ts", import.meta.url), "utf8");
 assert.ok(aiSource.includes("endImageUrl?: string"));
-assert.ok(aiSource.includes("lastFrame"));
-assert.ok(aiSource.includes("veo-3\\.1"), "the existing Gemini/Veo flow remains available without a new adapter");
+assert.ok(aiSource.includes("last_frame"));
+assert.ok(fs.readFileSync(new URL("../src/server/generation/catalog.ts", import.meta.url), "utf8").includes("veo-3"), "Veo must remain in the shared generation catalog");
 
 const referencePanelSource = fs.readFileSync(new URL("../src/components/StudioReferenceControlPanel.tsx", import.meta.url), "utf8");
 assert.ok(referencePanelSource.includes("参考素材"));
@@ -219,3 +220,6 @@ assert.ok(referencePanelSource.includes("supportsEndFrame"));
 assert.ok(referencePanelSource.includes("只提交这里明确选择且当前方式允许的素材"));
 
 console.log("Manual Studio self-check passed.");
+
+const studioShotControlsSource = fs.readFileSync(new URL('../src/components/StudioShotControls.tsx', import.meta.url), 'utf8');
+assert(!studioShotControlsSource.includes('验证并生成视频') && !studioShotControlsSource.includes('验证并生成图片'), 'Studio external tools must not retain a second internal generation submitter');

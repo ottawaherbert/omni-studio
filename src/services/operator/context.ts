@@ -1,3 +1,4 @@
+import { productionNextActions } from "../production/productionCollaboration";
 import { Project } from "../../types/project";
 import { buildAssetContinuityContext } from "../production/assetContinuity";
 import { buildLongFormMemoryContext } from "../production/longFormMemory";
@@ -15,6 +16,7 @@ const compactAsset = (asset: any) => ({
   type: asset?.type,
   name: asset?.name,
   description: compactText(asset?.description),
+  productionUse: asset?.productionUse,
   prompt: compactText(asset?.prompt),
   hasImage: Boolean(asset?.imageUrl || asset?.defaultReferenceUrl || asset?.multiViewUrl || asset?.panoramaUrl),
   variantCount: Array.isArray(asset?.variants) ? asset.variants.length : 0,
@@ -23,6 +25,7 @@ const compactAsset = (asset: any) => ({
 const compactCharacter = (character: any) => ({
   id: character?.id,
   name: character?.name,
+  productionUse: character?.productionUse,
   roleType: character?.roleType || character?.role,
   brief: compactText(character?.brief || character?.description || character?.background),
   goal: compactText(character?.goal || character?.motivation),
@@ -169,7 +172,7 @@ export const buildOperatorProjectContext = ({
       entryMode: "external_operator",
       preservesTraditionalMode: true,
       preservesProductionDetail: true,
-      requiredInstruction: "AI Operator 只是外部操作入口，必须复用现有制片流程、资产治理、QA、版本、日志和媒体 provenance。",
+      requiredInstruction: "先读取project.productionWorkingAgreement，首次缺项一次询问作者，续作沿用。普通制作只按约定粗审和有限重大问题返工，精审交作者；不得为了填满QA清单反复检查。保留正式保存、来源、版本和暂停约束。严格批量QA仅在明确选择该流程时适用。",
     },
     project: {
       id: project.id,
@@ -182,8 +185,10 @@ export const buildOperatorProjectContext = ({
       logline: compactText(project.logline),
       coreConflict: compactText(project.coreConflict),
       seasonArc: compactText(project.seasonArc),
+      productionWorkingAgreement: project.productionWorkingAgreement,
     },
     productionState: {
+      collaboration: episodes.flatMap(episode=>(episode.scenes || []).filter(scene=>scene.productionPreparation?.workRecords?.length || scene.productionPreparation?.observations?.length).map(scene=>({sceneId:scene.id,episodeId:episode.id,...productionNextActions(scene)}))),
       currentWorkflow: project.projectModel === "interactive" ? "interactive_production" : "linear_production",
       currentStage: operatorRuns[0]?.mode || productionRuns[0]?.currentStageId || productionRuns[0]?.status,
       completedStages: productionRuns

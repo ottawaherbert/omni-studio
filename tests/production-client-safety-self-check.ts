@@ -19,7 +19,8 @@ const { useProjectStore } = await import("../src/clients/stateClient");
 const { scriptClient } = await import("../apps/web/src/clients/scriptClient");
 const { legacyProjectClient } = await import("../src/clients/legacyProjectClient");
 const { assetClient } = await import("../src/clients/assetClient");
-const { useProductionProjectLibrary } = await import("../src/features/production/useProductionProjectLibrary");
+const { useProductionProjectLibrary, useProductionProjectActions } = await import("../src/features/production/useProductionProjectLibrary");
+const { MemoryRouter, useLocation } = await import('react-router-dom');
 const { useEpisodeFilmExport } = await import("../src/hooks/useEpisodeFilmExport");
 const { debouncedSaveProjectState, flushDebouncedProjectSave } = await import("../src/store/slices/projectSlice");
 const previousStore = useProjectStore.getState();
@@ -55,6 +56,34 @@ try {
   await act(async () => rejectWriting(new Error("script unavailable")));
   assert.equal(library!.writingLoadFailed, true);
   assert.equal(library!.isLoading, false);
+
+  const source = { sourceType: 'writing_export', sourceWritingProjectId: 'one-author', importedAt: 1 };
+  const linear = { id: 'linear-copy', title: '同一剧本', projectModel: 'linear', productionSourceSnapshot: source, episodes: [] };
+  const interactive = { ...linear, id: 'interactive-copy', productionSourceSnapshot: { ...source, importedAt: 2 }, interactiveProductionPrepProfile: { experienceId: 'game' } };
+  const trashed: string[] = [], deleted: string[] = [];
+  await act(async () => useProjectStore.setState({
+    projects: [interactive, linear] as any,
+    setProjectTrashState: async (id: string) => { trashed.push(id); },
+    deleteProject: async (id: string) => { deleted.push(id); },
+  }));
+  assert.deepEqual(library!.productionProjects.map(project => project.id).sort(), ['interactive-copy', 'linear-copy'],
+    'the independent interactive target must not hide a linear project with the same author source');
+  let actions: ReturnType<typeof useProductionProjectActions>;
+  let currentPath = '';
+  const ActionHarness = () => { actions = useProductionProjectActions(); const location = useLocation(); currentPath = location.pathname + location.search; return null; };
+  await act(async () => exportRoot.render(React.createElement(MemoryRouter, {}, React.createElement(ActionHarness))));
+  await act(async () => { await actions!.importWritingProject('one-author'); });
+  assert.equal(currentPath, '/production/preparation?projectId=linear-copy', 'normal import reopens the linear target, not the newer interactive target');
+  await act(async () => { await actions!.moveProductionProjectToTrash(interactive as any); });
+  assert.deepEqual(trashed, ['interactive-copy']);
+  await act(async () => useProjectStore.setState({ projects: [{ ...interactive, productionTrashedAt: 10 }, linear] as any }));
+  assert.deepEqual(library!.productionProjects.map(project => project.id), ['linear-copy'], 'trashing interactive does not hide the linear copy');
+  trashed.length = 0;
+  await act(async () => { await actions!.restoreProductionProject(interactive as any); });
+  assert.deepEqual(trashed, ['interactive-copy']);
+  await act(async () => useProjectStore.setState({ projects: [interactive, linear].map(project => ({ ...project, productionTrashedAt: 10 })) as any }));
+  await act(async () => { await actions!.deleteProductionProjectPermanently(interactive as any); });
+  assert.deepEqual(deleted, ['interactive-copy'], 'deleting an interactive target never deletes the linear work');
 
   const project = { id: "export-save-project", title: "剪辑", type: "movie", projectModel: "linear", aspectRatio: "16:9", characters: [], assets: [], episodes: [] };
   let persisted = { id: "episode", title: "第一集", productionRevision: 1, scenes: [{ id: "scene", title: "第一场", shots: [{ id: "shot", duration: 4, videoUrl: "/media/clip.mp4" }] }] };

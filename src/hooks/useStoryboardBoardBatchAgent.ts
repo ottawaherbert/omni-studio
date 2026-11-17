@@ -1,3 +1,4 @@
+import { sceneContinuityBasis, sceneReferencesForShots, planSceneVideoGroups } from "../clients/productionStoryboardWorkflowClient";
 import { isManualAIExecution } from "../../apps/web/src/clients/manualAIClient";
 import { useMemo, useState } from "react";
 import toast from "react-hot-toast";
@@ -8,7 +9,8 @@ import {
   buildShotImageVisualRecipeInputEvidence,
   resolveImageVisualStyleProjectionContext,
 } from "../clients/productionVisualImageClient";
-import { useAIConfigStore } from "../clients/stateClient";
+import { flushDebouncedProjectSave, useAIConfigStore, useProjectStore } from "../clients/stateClient";
+import { noteSuccessfulProductionEpisodeWrite } from "../utils/saveFailureRecovery";
 import type { Episode, ManualStoryboardAgentExecutionAudit, ManualStoryboardAgentQuality, ManualStoryboardBoardVisualPage, ManualStoryboardBoardVisualTake, ManualStoryboardBoardWorkflow, ManualStoryboardPromptAudit, Project, Scene, Shot } from "../clients/domainTypes";
 import type { PromptEditorConfirmMetadata } from "../components/PromptEditorModal";
 import {
@@ -328,6 +330,7 @@ const runStoryboardCompositeVisualAgent = async ({
         allowChange: ["只定向修复本轮质检点名的问题，并仍然输出完整故事板页"],
         exclude: ["局部裁切、漏格、错序、重复上一版错误、文字、UI和水印"],
       })] : []),
+      ...sceneReferencesForShots(workflow.board.continuityBasis, shots.map(s => s.id)).map(ref => createImageGenerationReference({ imageUrl: ref.imageUrl, label: `${ref.role === "space" ? "固定空间" : "衔接状态"}：${ref.note}`, role: ref.role === "space" ? "location_design" : "continuity_frame", preserve: [ref.note], exclude: ["无关人物、旧场景背景与提前发生的剧情"] })),
       ...referenceSelection.selected.map((item) => createImageGenerationReference({
         imageUrl: item.referenceImageUrl!,
         label: `${item.assetName}${item.variantName ? ` · ${item.variantName}` : ""}`,
@@ -365,6 +368,7 @@ const runStoryboardCompositeVisualAgent = async ({
     });
     const generationStartedAt = Date.now();
     let compiledRequest: CompiledImageGenerationRequest | undefined;
+    let generatedCandidateId: string | undefined;
     const visualStyleProjection = buildImageVisualStyleProjection({
       project,
       intent: "storyboard_control",
@@ -372,6 +376,9 @@ const runStoryboardCompositeVisualAgent = async ({
       ...projectionContext,
     });
     const generatedImageUrl = await generateAIImage({
+          projectId: project.id,
+      target: { projectId: project.id, episodeId, sceneId: context.scene.id, kind: "board", boardId: workflow.boardId || workflow.board.id, pageId: page.id, shotIds: pageBoard.shotIds },
+      onGenerationResult: result => { generatedCandidateId = result.candidateId; },
       promptCore: visualPrompt,
       aspectRatio: "16:9",
       references: generationReferences,
@@ -428,7 +435,7 @@ const runStoryboardCompositeVisualAgent = async ({
     });
     const technical = await inspectImageTechnicalMetadata(imageUrl);
     const takeBase: ManualStoryboardBoardVisualTake = {
-      id: `storyboard-board-take-${page.id}-${Date.now()}`,
+      id: generatedCandidateId || `storyboard-board-take-${page.id}-${Date.now()}`,
       sourceImageUrl,
       sourceImageMedia: createAIGeneratedMediaReference("image", sourceImageUrl, imageModelId),
       videoReferenceImageUrl,
@@ -689,6 +696,7 @@ const runStoryboardSceneVisualPages = async ({
     });
   };
   await persistWorkflows();
+  await flushDebouncedProjectSave(project.id);
 
   const workflowsAwaitingManualReview = new Set<string>();
   let manualReviewPageCount = 0;
@@ -717,9 +725,21 @@ const runStoryboardSceneVisualPages = async ({
         totalPages,
         onProgress,
         onPageChange: async (nextPage) => {
-          page = nextPage;
-          replacePage(workflowIndex, nextPage.id, nextPage);
-          await persistWorkflows();
+          const visualTake = nextPage.visualTakes?.at(-1);
+          if (!visualTake) return;
+          const episodeBeforeCandidate = useProjectStore.getState().activeEpisode;
+          const saved = await legacyProjectClient.appendStudioCandidate(project.id, episodeId, context.scene.id, {
+            shotId: workflows[workflowIndex].shotId,
+            boardId: workflows[workflowIndex].boardId || workflows[workflowIndex].board!.id,
+            pageId: nextPage.id,
+            visualTake,
+          });
+          page = saved.scene.manualStoryboard!.boards!.find(item => item.id === workflows[workflowIndex].id)!.board!.visualPages!.find(item => item.id === nextPage.id)!;
+          replacePage(workflowIndex, nextPage.id, page);
+          if (useProjectStore.getState().currentProject?.id === project.id && episodeBeforeCandidate?.id === episodeId && useProjectStore.getState().activeEpisode === episodeBeforeCandidate) {
+            noteSuccessfulProductionEpisodeWrite(project.id, saved.episode);
+            useProjectStore.setState({ activeEpisode: saved.episode });
+          }
         },
       });
       if (result.status === "manual_review_required") {
@@ -761,7 +781,8 @@ const runStoryboardSceneVisualPages = async ({
       : undefined,
     updatedAt: completedAt,
   }));
-  await persistWorkflows(completedAt);
+  // Each result was appended to the current server page. Do not replay the
+  // pre-generation workspace over candidates or edits made during execution.
   return {
     completed: true,
     completedPages,
@@ -930,6 +951,7 @@ export const useStoryboardBoardBatchAgent = ({
 
       try {
         const sceneContext = {
+          visualPlan: context.scene.visualPlan,
           id: context.scene.id,
           title: context.scene.title,
           script: context.scene.script,
@@ -1378,6 +1400,10 @@ export const useStoryboardBoardBatchAgent = ({
             })
             .sort((left, right) => left[1].length - right[1].length),
         );
+        if (context.scene.visualPlan?.breakAfterShotIds !== undefined) {
+          existingGroupsByFirstShot.clear();
+          for (const group of planSceneVideoGroups(shots, context.scene.visualPlan.breakAfterShotIds, 0, Number.MAX_SAFE_INTEGER)) existingGroupsByFirstShot.set(group.shotIds[0], group.shotIds);
+        }
         const plannedWorkflows: ManualStoryboardBoardWorkflow[] = [];
         for (let shotIndex = 0; shotIndex < shots.length;) {
           const shot = shots[shotIndex];
@@ -1407,6 +1433,7 @@ export const useStoryboardBoardBatchAgent = ({
           const boardId = existingUnit?.boardId || existingUnit?.board?.id || `storyboard-board-${unitId}`;
           const normalizedBoard = workflow.board ? {
             ...workflow.board,
+            continuityBasis: sceneContinuityBasis(context.scene.visualPlan),
             id: boardId,
             videoGenerationUnitId: unitId,
             shotIds: unitShotIds,
@@ -1425,7 +1452,7 @@ export const useStoryboardBoardBatchAgent = ({
             id: existingUnit?.id || `storyboard-workflow-${unitId}`,
             boardId,
             videoGenerationUnitId: unitId,
-            targetVideoModelConfigId: existingUnit?.targetVideoModelConfigId || workflow.targetVideoModelConfigId,
+            targetVideoModelConfigId: context.scene.visualPlan?.targetVideoModelConfigId || existingUnit?.targetVideoModelConfigId || workflow.targetVideoModelConfigId,
             shotIds: unitShotIds,
             board: normalizedBoard,
             takes: existingUnit?.takes,
@@ -1437,7 +1464,7 @@ export const useStoryboardBoardBatchAgent = ({
             .filter((shot): shot is Shot => Boolean(shot));
           normalizedWorkflow.unitVideoPrompt = buildStoryboardUnitVideoPromptRecord({
             workflow: normalizedWorkflow,
-            shots: unitShots,
+            shots,
             previous: existingUnit?.unitVideoPrompt,
             now,
           });

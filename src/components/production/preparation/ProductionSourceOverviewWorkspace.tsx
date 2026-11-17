@@ -22,6 +22,8 @@ import {
   currentProductionScriptRevision,
   archiveProductionScriptUnit,
   previewWritingScriptSync,
+  previewWritingScriptConflictResolution,
+  prepareReviewedWritingScriptSync,
   productionScriptWorkspaceForProject,
   resolveProductionScriptConflictKeepingProduction,
   saveProductionScriptDraft,
@@ -397,6 +399,25 @@ export function ProductionSourceOverviewWorkspace({
   }), [scriptUnit?.content, scriptUnit?.summary, scriptUnit?.targetDurationMinutes, scriptUnit?.title, sourceDocument?.content, sourceDocument?.title]);
   const isScriptDraftDirty = isEditingScript
     && scriptDraftContentSignature(scriptDraft) !== scriptDraftContentSignature(formalScriptDraft);
+  const sourceSyncBusyRef = useRef(false);
+  const scriptEditingRef = useRef(false);
+  scriptEditingRef.current = isEditingScript || isNewUnitOpen || isSavingScript;
+  const isSourceSyncBusy = isCheckingWritingSync || isApplyingWritingSync || isResolvingScriptConflict;
+  const hasOpenScriptEditor = isEditingScript || isNewUnitOpen || isSavingScript;
+  const assertNoOpenScriptEditor = () => {
+    if (scriptEditingRef.current) throw new Error("请先保存或取消当前剧本编辑，再检查或采用源剧本更新。");
+  };
+  const beginSourceSync = () => {
+    if (sourceSyncBusyRef.current) return false;
+    try { assertNoOpenScriptEditor(); }
+    catch (error) { toast.error((error as Error).message); return false; }
+    if (readNewUnitRecovery(project.id)) {
+      toast.error("请先保存或取消待恢复的新增剧本草稿，再处理源剧本更新。");
+      return false;
+    }
+    sourceSyncBusyRef.current = true;
+    return true;
+  };
   const scriptDraftCharacterCount = [...scriptDraft.content.replace(/\s/g, "")].length;
   const sourceText = sourceDocument?.content || "";
   const originalNovel = (sourceDocument?.id && hydratedScriptUnit?.sourceDocumentId === sourceDocument.id)
@@ -527,6 +548,8 @@ export function ProductionSourceOverviewWorkspace({
     let cancelled = false;
     const restoreEditor = () => {
       if (cancelled) return;
+      if (sourceSyncBusyRef.current) return;
+      scriptEditingRef.current = true;
       const recoveredDraft = {
         title: recovered.title,
         summary: recovered.summary,
@@ -568,6 +591,8 @@ export function ProductionSourceOverviewWorkspace({
   }, [project.id]);
 
   const openScriptEditor = () => {
+    if (sourceSyncBusyRef.current) return;
+    scriptEditingRef.current = true;
     const savedDraft = readRecoveryDraft(project.id, sourceDocument?.id);
     const formalDraft = formalScriptDraft;
     setScriptDraft(formalDraft);
@@ -581,6 +606,8 @@ export function ProductionSourceOverviewWorkspace({
 
   useEffect(() => {
     if (!newUnitRequestKey) return;
+    if (sourceSyncBusyRef.current) { toast.error("正在处理源剧本更新，请完成后再新增剧本单元。"); return; }
+    scriptEditingRef.current = true;
     clearNewUnitRecovery(project.id);
     const nextOrder = (scriptRevision?.units.length || 0) + 1;
     const defaultDuration = scriptUnit?.targetDurationMinutes ? String(scriptUnit.targetDurationMinutes) : (project.type === "movie" ? "15" : "2");
@@ -947,12 +974,13 @@ export function ProductionSourceOverviewWorkspace({
   const persistWritingScriptSync = async (
     preview: ReturnType<typeof previewWritingScriptSync>,
   ) => {
+    assertNoOpenScriptEditor();
     const fullProject = await loadFullScriptProject();
     const fullDocuments = productionSourceDocumentsForProject(fullProject);
     const fullWorkspace = productionScriptWorkspaceForProject(fullProject, fullDocuments);
     if (!fullWorkspace.writingProjectId) throw new Error("当前制片项目没有可同步的剧本工作台来源。");
     const source = await scriptClient.exportPackage(fullWorkspace.writingProjectId);
-    const effectivePreview = previewWritingScriptSync(fullProject, fullWorkspace, source.package);
+    const effectivePreview = prepareReviewedWritingScriptSync(fullProject, fullWorkspace, source.package, preview);
     if (effectivePreview.blockedReason) throw new Error(effectivePreview.blockedReason);
     const originalDocuments = fullProject.productionSourceDocuments?.length
       ? fullProject.productionSourceDocuments
@@ -969,10 +997,11 @@ export function ProductionSourceOverviewWorkspace({
       targetEpisodeCount: effectivePreview.targetEpisodeCount,
       durationMinutes: effectivePreview.durationMinutes,
     };
+    assertNoOpenScriptEditor();
     await legacyProjectClient.patchProductionScriptWorkspace(
       project.id,
       projectUpdates,
-      fullWorkspace.currentRevisionId,
+      preview.baseRevisionId,
     );
     await verifyPersistedScriptRevision(effectivePreview.workspace.currentRevisionId);
     for (const newEpisode of effectivePreview.episodesToCreate) {
@@ -988,11 +1017,13 @@ export function ProductionSourceOverviewWorkspace({
   };
 
   const checkWritingScriptUpdates = async () => {
-    if (!scriptWorkspace.writingProjectId || isCheckingWritingSync || isApplyingWritingSync) return;
+    if (!scriptWorkspace.writingProjectId || !beginSourceSync()) return;
     setIsCheckingWritingSync(true);
     try {
-      const result = await scriptClient.exportPackage(scriptWorkspace.writingProjectId);
-      const preview = previewWritingScriptSync(project, scriptWorkspace, result.package);
+      const fullProject = await loadFullScriptProject();
+      const fullWorkspace = productionScriptWorkspaceForProject(fullProject, productionSourceDocumentsForProject(fullProject));
+      const result = await scriptClient.exportPackage(fullWorkspace.writingProjectId!);
+      const preview = previewWritingScriptSync(fullProject, fullWorkspace, result.package);
       if (preview.blockedReason) {
         toast.error(preview.blockedReason);
         return;
@@ -1005,24 +1036,26 @@ export function ProductionSourceOverviewWorkspace({
     } catch (error) {
       toast.error(error instanceof Error ? error.message : "检查剧本更新失败");
     } finally {
+      sourceSyncBusyRef.current = false;
       setIsCheckingWritingSync(false);
     }
   };
 
   const applyWritingScriptSync = async () => {
-    if (!writingSyncPreview) return;
+    if (!writingSyncPreview || !beginSourceSync()) return;
     setIsApplyingWritingSync(true);
     try {
       await persistWritingScriptSync(writingSyncPreview);
     } catch (error) {
       toast.error(error instanceof Error ? error.message : "同步剧本更新失败");
     } finally {
+      sourceSyncBusyRef.current = false;
       setIsApplyingWritingSync(false);
     }
   };
 
   const resolveScriptConflict = async (decision: "keep_production" | "accept_writing") => {
-    if (!scriptWorkspace.writingProjectId || scriptWorkspace.syncStatus !== "conflict" || isResolvingScriptConflict) return;
+    if (!scriptWorkspace.writingProjectId || scriptWorkspace.syncStatus !== "conflict" || !beginSourceSync()) return;
     setIsResolvingScriptConflict(true);
     try {
       const expectedRevisionId = scriptWorkspace.currentRevisionId;
@@ -1037,13 +1070,11 @@ export function ProductionSourceOverviewWorkspace({
         mutation = resolveProductionScriptConflictKeepingProduction(fullProject, fullWorkspace);
       } else {
         const source = await scriptClient.exportPackage(fullWorkspace.writingProjectId!);
-        const preview = previewWritingScriptSync(
-          fullProject,
-          { ...fullWorkspace, syncStatus: "current" },
-          source.package,
-        );
+        const preview = previewWritingScriptConflictResolution(fullProject, fullWorkspace, source.package);
         if (preview.blockedReason) throw new Error(preview.blockedReason);
-        mutation = preview;
+        setWritingSyncPreview(preview);
+        setIsScriptConflictOpen(false);
+        return;
       }
       const originalDocuments = fullProject.productionSourceDocuments?.length
         ? fullProject.productionSourceDocuments
@@ -1061,7 +1092,8 @@ export function ProductionSourceOverviewWorkspace({
         durationMinutes: mutation.durationMinutes,
       };
 
-        await legacyProjectClient.patchProductionScriptWorkspace(project.id, projectUpdates, expectedRevisionId);
+      assertNoOpenScriptEditor();
+      await legacyProjectClient.patchProductionScriptWorkspace(project.id, projectUpdates, expectedRevisionId);
       await verifyPersistedScriptRevision(mutation.workspace.currentRevisionId);
       for (const newEpisode of mutation.episodesToCreate) {
         await legacyProjectClient.saveEpisode(project.id, newEpisode);
@@ -1078,6 +1110,7 @@ export function ProductionSourceOverviewWorkspace({
     } catch (error) {
       toast.error(error instanceof Error ? error.message : "处理剧本冲突失败");
     } finally {
+      sourceSyncBusyRef.current = false;
       setIsResolvingScriptConflict(false);
     }
   };
@@ -1296,7 +1329,8 @@ export function ProductionSourceOverviewWorkspace({
               <button
                 type="button"
                 onClick={() => void checkWritingScriptUpdates()}
-                disabled={isCheckingWritingSync || isApplyingWritingSync}
+                disabled={isSourceSyncBusy || hasOpenScriptEditor}
+                title={hasOpenScriptEditor ? "请先保存或取消当前剧本编辑" : undefined}
                 className="h-9 px-4 bg-bg-surface-soft text-text-primary hover:bg-bg-surface-hover rounded-xl text-xs font-bold transition-all duration-300 flex items-center gap-1.5 cursor-pointer disabled:opacity-50"
               >
                 <RefreshCw className={`h-4 w-4 text-gold ${(isCheckingWritingSync || isApplyingWritingSync) ? "animate-spin" : ""}`} />
@@ -1433,7 +1467,8 @@ export function ProductionSourceOverviewWorkspace({
               {scriptWorkspace.syncStatus === "conflict" && (
                 <button
                   type="button"
-                  onClick={() => setIsScriptConflictOpen(true)}
+                  disabled={isSourceSyncBusy || hasOpenScriptEditor}
+                  onClick={() => { if (!sourceSyncBusyRef.current && !scriptEditingRef.current) setIsScriptConflictOpen(true); }}
                   className="rounded-lg bg-accent-amber/10 px-2.5 py-1 text-accent-amber hover:bg-accent-amber/20"
                 >
                   处理制片改稿
@@ -1452,7 +1487,10 @@ export function ProductionSourceOverviewWorkspace({
                   <span className="flex items-center gap-2">
                     <button
                       type="button"
+                      disabled={isSourceSyncBusy}
                       onClick={() => {
+                        if (sourceSyncBusyRef.current) return;
+                        scriptEditingRef.current = true;
                         setScriptDraft({
                           title: recoveryDraft.title,
                           summary: recoveryDraft.summary,
@@ -1541,6 +1579,7 @@ export function ProductionSourceOverviewWorkspace({
           ) : (
             <button
               type="button"
+              disabled={isSourceSyncBusy}
               onClick={openScriptEditor}
               className="block w-full cursor-text whitespace-pre-wrap bg-bg-surface p-6 text-left text-sm font-normal leading-8 text-text-secondary outline-none transition-colors hover:bg-bg-surface-hover/30 focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-gold"
               aria-label="编辑当前剧本"
@@ -1849,7 +1888,7 @@ export function ProductionSourceOverviewWorkspace({
           <p className="text-xs leading-6 text-text-secondary">当前制片使用的剧本与剧本工作台不同。系统不会猜测哪一版正确，请明确选择保留哪一版。</p>
           <button
             type="button"
-            disabled={isResolvingScriptConflict}
+            disabled={isSourceSyncBusy || hasOpenScriptEditor}
             onClick={() => void resolveScriptConflict("keep_production")}
             className="w-full rounded-lg border border-border-soft bg-bg-surface-soft px-4 py-4 text-left hover:bg-bg-surface-hover disabled:opacity-50"
           >
@@ -1858,12 +1897,12 @@ export function ProductionSourceOverviewWorkspace({
           </button>
           <button
             type="button"
-            disabled={isResolvingScriptConflict}
+            disabled={isSourceSyncBusy || hasOpenScriptEditor}
             onClick={() => void resolveScriptConflict("accept_writing")}
             className="w-full rounded-lg border border-border-soft bg-bg-surface-soft px-4 py-4 text-left hover:bg-bg-surface-hover disabled:opacity-50"
           >
-            <strong className="text-sm text-text-primary">采用剧本工作台版本</strong>
-            <span className="mt-2 block text-xs leading-5 text-text-muted">放弃当前制片专用正文，读取剧本工作台的最新版本；已有关联场次会进入待复核。</span>
+            <strong className="text-sm text-text-primary">查看剧本工作台版本</strong>
+            <span className="mt-2 block text-xs leading-5 text-text-muted">先查看源剧本与当前制片改稿的差异，再采用所查看的版本；已有关联场次会进入待复核。</span>
           </button>
           {isResolvingScriptConflict && <p className="text-xs font-semibold text-gold">正在保存选择并核对两边版本...</p>}
         </div>
@@ -1877,7 +1916,7 @@ export function ProductionSourceOverviewWorkspace({
         footer={
           <>
             <button type="button" disabled={isApplyingWritingSync} className="h-8 px-4 bg-bg-surface-soft text-text-primary rounded-xl text-xs font-bold hover:bg-bg-surface-hover mr-2 cursor-pointer active:scale-95" onClick={() => setWritingSyncPreview(null)}>暂不处理</button>
-            <button type="button" disabled={isApplyingWritingSync} className="h-8 px-4 btn-primary rounded-xl text-xs font-bold cursor-pointer active:scale-95 disabled:opacity-50" onClick={() => void applyWritingScriptSync()}>{isApplyingWritingSync ? "同步中..." : "采用剧本更新"}</button>
+            <button type="button" disabled={isSourceSyncBusy || hasOpenScriptEditor} title={hasOpenScriptEditor ? "请先保存或取消当前剧本编辑" : undefined} className="h-8 px-4 btn-primary rounded-xl text-xs font-bold cursor-pointer active:scale-95 disabled:opacity-50" onClick={() => void applyWritingScriptSync()}>{isApplyingWritingSync ? "同步中..." : "采用剧本更新"}</button>
           </>
         }
       >

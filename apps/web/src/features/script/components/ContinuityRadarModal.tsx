@@ -51,7 +51,7 @@ export function ContinuityRadarModal({
             className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-bg-surface-soft hover:bg-bg-surface-hover text-text-secondary hover:text-text-primary border border-border-primary/30 transition-colors cursor-pointer"
           >
             <Sparkles size={13} className="text-text-muted" />
-            <span>分批审阅本单元正文</span>
+            <span>选择正文并审阅</span>
           </button>
           {dirty&&<Button variant="secondary" size="sm" disabled={saving} onClick={onSave}>{saving?'保存中…':'保存连续性资料'}</Button>}
           <Button variant="secondary" size="sm" onClick={onClose}>
@@ -65,7 +65,7 @@ export function ContinuityRadarModal({
           <select value={scanUnit?.id||''} onChange={event=>setScanUnitId(event.target.value)} className="rounded-lg border border-border-primary/30 bg-bg-surface-soft px-2 py-1 text-text-primary">
             {project.units.map(unit=><option key={unit.id} value={unit.id}>{unit.title}</option>)}
           </select>
-          <span>分批审阅会打开 Agent 任务设置，可选 Skill、手动回填，记录每批实际读取的场景。</span>
+          <span>打开写作任务后选择本次场景；可复制给外部模型并回填结果，记录实际读取范围。</span>
         </label>
         {dirty&&<p className="text-text-muted">当前资料尚未保存，保存后再开始 AI 检查。</p>}
         {/* Navigation Tabs */}

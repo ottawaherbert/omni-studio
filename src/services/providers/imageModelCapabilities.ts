@@ -20,6 +20,10 @@ export const resolveImageModelCapabilities = ({
   channel: AIChannel;
   model: AIModel;
 }): ImageModelCapabilities => {
+  if (channel.type === 'comfyui' && model.comfyCapabilities) {
+    const cap = model.comfyCapabilities;
+    return { familyLabel: model.alias, textToImage: cap.operation === 't2i', imageToImage: cap.operation === 'i2i', maxReferenceImages: cap.imageInputs };
+  }
   const adapterId = model.imageAdapterId || imageAdapterIdForModelId(model.modelId);
   if (channel.type === "kie" && adapterId === KIE_GPT_IMAGE_2_ADAPTER_ID) {
     return { familyLabel: "GPT Image 2", textToImage: true, imageToImage: true, maxReferenceImages: 16 };
@@ -65,6 +69,6 @@ export const assertImageGenerationRequestSupported = ({
 
 export const imageModelCapabilitySummary = (capabilities: ImageModelCapabilities) => (
   capabilities.imageToImage
-    ? `文生图 + 图生图（最多 ${capabilities.maxReferenceImages} 张参考图）`
+    ? `${capabilities.textToImage ? '文生图 + ' : ''}图生图（${capabilities.maxReferenceImages} 张参考图）`
     : "仅文生图"
 );

@@ -457,10 +457,8 @@ const sourceFiles = [
   "src/hooks/useStoryboardAI.ts",
   "src/hooks/useStudioAI.ts",
   "src/hooks/useManualStudioAI.ts",
-  "src/hooks/useBibleAI.ts",
-  "src/components/bible/AssetDetailView.tsx",
+  "src/components/production/AssetSourceMedia.tsx",
   "src/pages/ImageGen.tsx",
-  "tests/manual-shot-image-sample.ts",
 ];
 for (const relativePath of sourceFiles) {
   const source = fs.readFileSync(path.join(root, relativePath), "utf8");
@@ -488,7 +486,7 @@ const requestShotImageTakeSource = storyboard.match(
   /const requestShotImageTake[\s\S]*?\n  };\n\n  const executeRerollShot/,
 )?.[0] || "";
 assert.ok(requestShotImageTakeSource, "storyboard shot-image candidate flow must remain inspectable");
-assert.match(requestShotImageTakeSource, /appendShotTakeCandidate/);
+assert.match(requestShotImageTakeSource, /legacyProjectClient\.appendStudioCandidate/);
 const shotCardSource = fs.readFileSync(path.join(root, "src/components/storyboard/ShotCard.tsx"), "utf8");
 assert.match(shotCardSource, /adoptShotTake\(item, takeId, 'image'\)/);
 const existingVideoMedia = { kind: "video", url: "/video-current.mp4" } as Shot["videoMedia"];
@@ -597,22 +595,15 @@ const mediaWorker = fs.readFileSync(path.join(root, "apps/worker/src/production-
 const mediaWorkerPromptBuilder = fs.readFileSync(path.join(root, "src/services/production/mediaProductionWorker.ts"), "utf8");
 assert.doesNotMatch(mediaWorkerPromptBuilder, /策略:\$\{clean\(board\.strategyDecision\.selectedStrategyId\)\}/);
 assert.doesNotMatch(mediaWorkerPromptBuilder, /策略：\$\{board\.strategyId/);
-const manualShotImageSample = fs.readFileSync(path.join(root, "tests/manual-shot-image-sample.ts"), "utf8");
-assert.doesNotMatch(manualShotImageSample, /assetDescriptionsForShot|formatVisualCreativeVision/);
-assert.match(manualShotImageSample, /const finalImagePrompt = \(shot: any\) => shot\.imagePrompt/);
 assert.ok(projectTypes.includes("imageReferenceManifest?: ImageGenerationReferenceAudit[]"));
 assert.ok(mediaWorker.includes("promptCompositionManifest: compiled.manifest"));
 
 const boardImage = fs.readFileSync(path.join(root, "src/hooks/useProductionAssetBoardImage.ts"), "utf8");
 const boardBatch = fs.readFileSync(path.join(root, "src/hooks/useProductionAssetBoardBatch.ts"), "utf8");
-for (const source of [boardImage, boardBatch]) {
-  assert.ok(source.includes("previousOutputReferenceUrl"));
-  assert.ok(source.includes("buildProductionAssetBoardPreviousOutputRepairOperation"));
-  assert.ok(source.includes("buildProductionAssetBoardCanonicalReference"));
-  assert.match(source, /role:\s*"previous_output_repair"/);
-  assert.doesNotMatch(source, /role:\s*"source_edit"/);
-  assert.match(source, /operation:\s*previousOutputReferenceUrl/);
-}
+assert.ok(boardBatch.includes("buildProductionAssetBoardCanonicalReference"));
+assert.doesNotMatch(boardBatch, /previousOutputReferenceUrl|buildProductionAssetBoardPreviousOutputRepairOperation/,
+  "ordinary asset batches retain one candidate without an implicit visual repair loop");
+assert.match(boardBatch, /operation:\s*\{ kind: "generate" \}/);
 const storyboardBoardBatch = fs.readFileSync(path.join(root, "src/hooks/useStoryboardBoardBatchAgent.ts"), "utf8");
 assert.match(storyboardBoardBatch, /resolveImageVisualStyleProjectionContext\(\{ project, shots \}\)/);
 assert.match(storyboardBoardBatch, /createPreviousOutputRepairOperation/);
@@ -627,9 +618,6 @@ assert.ok(filmRender.includes("resolveShotReferences"));
 assert.ok(filmRender.includes("compiled.referenceImages"));
 assert.ok(filmRender.includes("aspectRatio: compiled.aspectRatio"));
 assert.doesNotMatch(filmRender, /Naturalistic Chinese drama with restrained cinematic realism/);
-const manualShotImage = fs.readFileSync(path.join(root, "tests/manual-shot-image-sample.ts"), "utf8");
-assert.match(manualShotImage, /references:\s*referencesForShot\(project, scene, shot\)/);
-assert.doesNotMatch(manualShotImage, /character\?\.brief/);
 const shotContentRepair = fs.readFileSync(path.join(root, "tools/production-shot-content-repair.ts"), "utf8");
 assert.match(shotContentRepair, /formatVisualCreativeVision\(project\.creativeVision\)/);
 assert.match(shotContentRepair, /promptCompositionManifests/);
@@ -641,15 +629,14 @@ assert.ok(aiService.includes("usePromptCompositionAuditStore.getState().record")
 assert.ok(aiService.includes('phase: "image_generation"'));
 assert.ok(aiService.includes('phase: "video_generation"'));
 assert.ok(aiService.includes('type: "json_schema"'));
-assert.ok(aiService.includes("comfyUIImageDimensionsForAspectRatio(compiled.aspectRatio)"));
+assert.ok(aiService.includes("submitGenerationRequest"));
 
 const imageGenPage = fs.readFileSync(path.join(root, "src/pages/ImageGen.tsx"), "utf8");
 assert.doesNotMatch(imageGenPage, /referenceImages\.slice\(0,\s*4\)|referenceImages\.length\}\/4/);
-assert.match(imageGenPage, /role:\s*ImageReferenceRole\s*\|\s*""/);
-assert.match(imageGenPage, /请为参考图 \$\{incompleteReferenceIndex \+ 1\} 填写名称并选择职责/);
-assert.doesNotMatch(imageGenPage, /用户参考图/);
-const imagePromptModal = fs.readFileSync(path.join(root, "src/components/ImagePromptModal.tsx"), "utf8");
-assert.doesNotMatch(imagePromptModal, /contextOptions|defaultSelectedContextIds|\{\{selectedContext\}\}|\{\{skills\}\}/);
+assert.match(imageGenPage, /GenerationWorkbench/);
+const generationReferences = fs.readFileSync(path.join(root, "src/components/generation/GenerationReferences.tsx"), "utf8");
+assert.match(generationReferences, /generationRoleLabels/);
+assert.match(generationReferences, /onChange\(\{ role:/);
 const videoPromptPacks = fs.readFileSync(path.join(root, "packages/production/src/services/production/videoStoryboardPromptPacks.ts"), "utf8");
 assert.doesNotMatch(videoPromptPacks, /referenceBudgetTracker|Math\.min\([^\n]*maxReferenceImages/);
 assert.doesNotMatch(videoPromptPacks, /本包覆盖镜头：\$\{shotIds\.join\("[,]? ?"\) \|\| "无"\}/);
@@ -683,9 +670,6 @@ assert.doesNotMatch(longFormMemory, /slice\(0, policy\.maxShotCount\)|slice\(0,\
 const interactiveVisualContext = fs.readFileSync(path.join(root, "src/utils/interactiveSceneVisualContext.ts"), "utf8");
 assert.doesNotMatch(interactiveVisualContext, /视觉状态指纹|reuseFingerprint/);
 assert.doesNotMatch(storyboard, /context\.(?:episodeContext|nodeContext|variableContext|pathContext|productionStatus)/);
-const manualShotSample = fs.readFileSync(path.join(root, "tests/manual-shot-image-sample.ts"), "utf8");
-assert.doesNotMatch(manualShotSample, /psychologicalProfile|internalDesire|externalGoal/);
-assert.doesNotMatch(manualShotSample, /JSON\.stringify\([^\n]*assetVariantMap/);
 const promptDirectory = path.join(root, "src/config/prompts");
 const promptSources = fs.readdirSync(promptDirectory)
   .filter((name) => name.endsWith(".ts"))
@@ -706,15 +690,6 @@ assert.match(assetProfileContext, /document\.content/);
 assert.doesNotMatch(assetBoardExecution, /buildProductionAssetProfileContext|productionSourceDocuments|taskSummary|continuityNotes/);
 const projectDomainTypes = fs.readFileSync(path.join(root, "src/types/project.ts"), "utf8");
 assert.ok(projectDomainTypes.includes("promptCompositionManifest?: PromptCompositionManifestAudit"));
-
-const assistantPreparation = fs.readFileSync(path.join(root, "src/services/assistant/productionPreparationBatch.ts"), "utf8");
-assert.match(assistantPreparation, /productionDepartmentCreativeVision\(project, departmentId\)/);
-assert.match(assistantPreparation, /promptCompositionManifest:\s*promptComposition\.manifest/);
-assert.doesNotMatch(assistantPreparation, /JSON\.stringify\(project\.creativeVision/);
-assert.doesNotMatch(assistantPreparation, /推断伪装成剧本事实。只返回 JSON/);
-assert.doesNotMatch(assistantPreparation, /\[QA_CONTEXT_MARKER\]: JSON\.stringify\(qa,\s*null,\s*2\)/);
-assert.match(assistantPreparation, /projectManualFilmTeamRepairQa\(qa\)/);
-assert.match(assistantPreparation, /projectProductionBreakdownRepairQa\(qa\)/);
 
 const boardAgent = fs.readFileSync(path.join(root, "src/services/production/storyboardBoardAgent.ts"), "utf8");
 const shotAgent = fs.readFileSync(path.join(root, "src/services/production/storyboardShotAgent.ts"), "utf8");
@@ -758,19 +733,14 @@ const collaborationPromptProjection = manualFilmTeamCommunication.match(/export 
 assert.ok(collaborationPromptProjection);
 assert.doesNotMatch(collaborationPromptProjection, /compact\(|version:|sceneId:|handoff\.id|fromDepartment:/);
 
-const bibleHook = fs.readFileSync(path.join(root, "src/hooks/useBibleAI.ts"), "utf8");
-assert.match(bibleHook, /characterRosterPromptData/);
-assert.match(bibleHook, /buildBibleAssetVisualStyleProjection/);
-assert.match(bibleHook, /intent:\s*variantId\s*\?\s*"asset_state"\s*:\s*"asset_identity"/);
-assert.doesNotMatch(bibleHook, /generateAI3DModel|generateAIPanorama/);
-assert.doesNotMatch(bibleHook, /无显式点名|JSON\.stringify\(\{\s*characters:\s*currentProject\.characters/);
-const bibleAssetDetail = fs.readFileSync(path.join(root, "src/components/bible/AssetDetailView.tsx"), "utf8");
-assert.match(bibleAssetDetail, /buildProjectAssetVisualStyleProjection/);
-assert.match(bibleAssetDetail, /variantId:\s*targetVariantId/);
+const assetSourceMedia = fs.readFileSync(path.join(root, "src/components/production/AssetSourceMedia.tsx"), "utf8");
+assert.match(assetSourceMedia, /buildImageVisualStyleProjection/);
+assert.match(assetSourceMedia, /buildMultiViewImagePrompt/);
+assert.match(assetSourceMedia, /generationPlan: source.plan/);
 
 const serverProvider = fs.readFileSync(path.join(root, "apps/api/src/providers/genericAIProvider.ts"), "utf8");
 assert.match(serverProvider, /composeServerGenericJsonRequest/);
-assert.match(serverProvider, /createAgentModelTransport/);
+assert.match(serverProvider, /createTextModelTransport/);
 assert.match(serverProvider, /parseGenericAIJson\(generated.text, input.responseSchema\)/);
 assert.match(serverProvider, /promptCompositionManifest:\s*generated\.metadata\.promptCompositionManifest \|\| composition\.manifest/);
 assert.match(serverProvider, /provider_native_structured_output/);

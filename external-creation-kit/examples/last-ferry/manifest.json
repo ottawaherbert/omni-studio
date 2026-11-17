@@ -1,0 +1,52 @@
+{
+  "format": "omni-external-manifest.v1",
+  "projectId": "project_last_ferry",
+  "deliveryId": "delivery_last_ferry_001",
+  "baseDeliveryId": null,
+  "status": "ready",
+  "scope": {
+    "kind": "full",
+    "description": "《末班渡口》完整微型样例：一处选择、两条路线、一个汇合外景、两个结局；全部六场正文。"
+  },
+  "files": {
+    "bible": "story-bible.json",
+    "scripts": [
+      "screenplay-01.json"
+    ],
+    "interactive": "interactive.json",
+    "notes": "design-notes.md"
+  },
+  "inventory": {
+    "characterIds": [
+      "char_lin",
+      "char_shen"
+    ],
+    "unitIds": [
+      "unit_01"
+    ],
+    "sceneIds": [
+      "scene_001",
+      "scene_002",
+      "scene_003",
+      "scene_004",
+      "scene_005",
+      "scene_006"
+    ],
+    "nodeIds": [
+      "node_start",
+      "node_hand",
+      "node_keep",
+      "node_depart",
+      "node_route",
+      "node_open",
+      "node_leave"
+    ]
+  },
+  "changes": {
+    "summary": "首次完整创作；全部对象为新建。",
+    "addedIds": [],
+    "modifiedIds": [],
+    "deletedIds": []
+  },
+  "openQuestions": []
+}

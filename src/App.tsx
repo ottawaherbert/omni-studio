@@ -45,6 +45,8 @@ const Guide = lazy(() => import("./pages/Guide"));
 const SkillLibrary = lazy(() => import("./pages/SkillLibrary"));
 const ScriptWorkspace = lazy(() => import("../apps/web/src/features/script/ScriptWorkspace"));
 const Storyboard = lazy(() => import("./pages/Storyboard"));
+const Previs = lazy(() => import("./pages/Previs"));
+const PrevisCapture = lazy(() => import("./components/spatial/PrevisCapture").then(module => ({ default: module.PrevisCapture })));
 const Studio = lazy(() => import("./pages/Studio"));
 const ProductionMagicImportPage = lazy(() => import("./components/production/ProductionMagicImportPage").then(module => ({ default: module.ProductionMagicImportPage })));
 const DirectorProduction = lazy(() => import("./pages/DirectorProduction"));
@@ -91,6 +93,18 @@ function ProjectCatalogLoader() {
 }
 
 export default function App() {
+  // The server-owned capture browser receives only its job-scoped callback.
+  // Render it without the interactive application, login or project restoration.
+  // A normal browser opening this URL still follows the usual login flow.
+  if (window.location.pathname === '/production/world'
+    && new URLSearchParams(window.location.search).get('renderWorker') === '1'
+    && typeof window.omniSpatialCapture === 'function') {
+    return <Suspense fallback={<RouteFallback />}><PrevisCapture /></Suspense>;
+  }
+  return <InteractiveApp />;
+}
+
+function InteractiveApp() {
   const { projects, currentProject, loadProject } = useProjectStore();
   const { theme } = useSettingsStore();
   const restoredProjectIdRef = useRef<string | null>(null);
@@ -200,6 +214,7 @@ export default function App() {
             <Route path="production/assets/character/:characterId" element={<ProductionAssetProfile />} />
             <Route path="production/assets/asset/:assetId" element={<ProductionAssetProfile />} />
             <Route path="production/storyboard" element={<DevRouteProfiler id="storyboard"><Storyboard /></DevRouteProfiler>} />
+            <Route path="production/world" element={<Previs />} />
             <Route path="production/studio" element={<DevRouteProfiler id="studio"><Studio /></DevRouteProfiler>} />
             <Route path="interactive" element={<InteractiveProduction />} />
             <Route path="interactive/new" element={<NewInteractiveProjectWizard />} />

@@ -1,3 +1,10 @@
+import type { QualityTarget } from './productionQuality';
+
+export interface AudioGenerationContext {
+  purpose: 'production' | 'preview';
+  target?: QualityTarget;
+}
+
 export interface VoiceSettings {
   modelConfigId?: string;
   voice: string;
@@ -7,6 +14,8 @@ export interface VoiceSettings {
 }
 
 export interface SpeechRequest {
+  purpose?: AudioGenerationContext['purpose'];
+  target?: QualityTarget;
   text: string;
   voice: string;
   modelConfigId?: string;

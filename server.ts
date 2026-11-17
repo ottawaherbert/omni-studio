@@ -1,4 +1,5 @@
-import { ensureScriptSchema, scriptRepository, scriptRuntime } from "./apps/api/src/repositories/scriptRepository";
+import { registerScriptArchiveRoutes } from './apps/api/src/routes/scriptArchiveRoutes';
+import { ensureScriptSchema, scriptRepository } from "./apps/api/src/repositories/scriptRepository";
 import { registerScriptRoutes } from "./apps/api/src/routes/scriptRoutes";
 import express from "express";
 import { registerManualAIRoutes } from "./src/server/manualAI";
@@ -26,6 +27,13 @@ import { registerOperatorQARoutes } from "./src/server/operatorQARoutes";
 import { registerOperatorRunRoutes } from "./src/server/operatorRunRoutes";
 import { registerLegacyProjectRoutes } from "./src/server/routes/legacyProjectRoutes";
 import { registerProviderProxyRoutes } from "./src/server/routes/providerProxyRoutes";
+import { GenerationEngine } from './src/server/generation/engine';
+import { GenerationStore } from './src/server/generation/store';
+import { registerGenerationRoutes, registerGenerationBoundary } from './src/server/generation/routes';
+import { registerPrevisRoutes } from './src/server/routes/previsRoutes';
+import { registerProductionQualityRoutes } from './src/server/routes/productionQualityRoutes';
+import { GenerationError } from './packages/domain/src/generation';
+import { db as generationDatabase } from './src/server/db';
 import { getProviderKeyStatus, redactProxyText } from "./src/server/routes/providerProxyUtils";
 import { registerPromptRoutes } from "./src/server/routes/promptRoutes";
 import { registerRuntimeRoutes } from "./src/server/routes/runtimeRoutes";
@@ -40,9 +48,6 @@ import { ensureInteractiveSchema } from "./src/server/interactiveRepository";
 import { createInteractiveWritingPort } from "./src/server/interactiveWritingPort";
 import { createInteractiveProductionPrepPort } from "./src/server/interactiveProductionPrepPort";
 import { generateServerGenericAIJson } from "./apps/api/src/providers/genericAIProvider";
-import { ensureAssistantSchema } from "./src/server/assistantRepository";
-import { registerAssistantRoutes } from "./src/server/assistantRoutes";
-import { ProductionPreparationBatchRuntime } from "./src/services/assistant/productionPreparationBatch";
 import {
   assertOperatorProjectAllowed,
   assertOperatorTokenAuthorized,
@@ -56,9 +61,9 @@ const __dirname = path.dirname(__filename);
 
 const OMNI_BRAINS_DIR = path.join(__dirname, "OMNI_Brains");
 const MOVIES_DATA_DIR = path.join(__dirname, "Movies_Data_State");
-const MEDIA_ASSETS_DIR = path.join(__dirname, "OMNI_Workspace", "Media_Assets");
+const MEDIA_ASSETS_DIR = process.env.OMNI_MEDIA_DIR ? path.resolve(process.env.OMNI_MEDIA_DIR) : path.join(__dirname, "OMNI_Workspace", "Media_Assets");
 const SKILLS_DIR = process.env.OMNI_SKILLS_DIR || path.join(__dirname, "skills");
-const OPERATOR_HANDBOOK_PATH = path.join(__dirname, "doc", "design.md");
+const OPERATOR_HANDBOOK_PATH = path.join(__dirname, "doc", "agent-guide.md");
 
 async function readOperatorHandbook() {
   return readOperatorHandbookFromPath(OPERATOR_HANDBOOK_PATH);
@@ -89,7 +94,6 @@ export async function startServer() {
   runMigrationsFromFiles(MOVIES_DATA_DIR);
   ensureDeepMigration();
   ensureScriptSchema();
-  ensureAssistantSchema();
   ensureInteractiveSchema();
 
   const app = express();
@@ -103,8 +107,6 @@ export async function startServer() {
   app.use(express.json({ limit: '50mb' }));
   app.use(express.urlencoded({ limit: '50mb', extended: true }));
   registerManualAIRoutes(app);
-  const assistantBatchRuntime = new ProductionPreparationBatchRuntime(generateServerGenericAIJson);
-  assistantBatchRuntime.start();
   const sendOperatorSecurityError = (res: any, err: any) => {
     if (err instanceof OperatorSecurityError || err?.name === "OperatorSecurityError") {
       return res.status(err.statusCode || 403).json({
@@ -133,7 +135,18 @@ export async function startServer() {
   registerRuntimeRoutes(app, { compactRuntimeLogDetails });
   registerAiConfigRoutes(app, { getProviderKeyStatus });
   registerAssetRoutes(app, { mediaAssetsDir: MEDIA_ASSETS_DIR });
-  registerProviderProxyRoutes(app, { mediaAssetsDir: MEDIA_ASSETS_DIR });
+  const generationEngine = new GenerationEngine(new GenerationStore(generationDatabase), () => dbHelpers.getAIConfig().config, MEDIA_ASSETS_DIR);
+  registerGenerationRoutes(app, generationEngine, { generateJson: generateServerGenericAIJson });
+  registerProductionQualityRoutes(app,generationEngine.store,MEDIA_ASSETS_DIR);
+  registerPrevisRoutes(app, generationEngine.media);
+  registerGenerationBoundary(app);
+  const generationProviders = registerProviderProxyRoutes(app, { mediaAssetsDir: MEDIA_ASSETS_DIR, authorizeGenerationTask: task => {
+    const executionId = task.audit?.generationExecutionId;
+    if (typeof executionId !== 'string') throw new GenerationError('GENERATION_PLAN_REQUIRED', '此旧任务尚无固定计划，请从生成工作台重新检查。', 409);
+    generationEngine.assertDispatch(executionId);
+  } });
+  generationEngine.providers.comfy = generationProviders.comfy;
+  generationEngine.start();
 
   registerLegacyProjectRoutes(app);
   const interactiveWritingPort = createInteractiveWritingPort(scriptRepository);
@@ -148,14 +161,10 @@ export async function startServer() {
     graphDraftGenerator: generateServerGenericAIJson,
   });
 
+  app.use(['/api/assistant','/api/agent','/api/script-assistant','/api/script-workspaces','/api/script-commands','/api/script-memory','/api/script-goals','/api/script-runs','/api/script-candidates'], (_req,res)=>{res.status(410).json({error:'内置助手已移除。请使用作品编辑、写作任务或生成工作台。历史内容可只读导出。',archive:'/api/script-archives'});});
   registerScriptRoutes(app, scriptRepository);
-  scriptRuntime.register(app);
+  registerScriptArchiveRoutes(app, generationDatabase);
 
-  registerAssistantRoutes(app, {
-    generator: generateServerGenericAIJson,
-    batchRuntime: assistantBatchRuntime,
-    assertProjectAccess: assertOperatorProjectAccess,
-  });
 
   app.use("/api/operator", (req, res, next) => {
     try {
@@ -169,6 +178,9 @@ export async function startServer() {
     }
   });
 
+  registerGenerationRoutes(app, generationEngine, { basePath: '/api/operator/generation', operator: true, assertProjectAccess: assertOperatorProjectAccess, generateJson: generateServerGenericAIJson });
+  registerProductionQualityRoutes(app,generationEngine.store,MEDIA_ASSETS_DIR,{basePath:'/api/operator/quality',operator:true,assertProjectAccess:assertOperatorProjectAccess});
+  registerPrevisRoutes(app, generationEngine.media, { basePath: '/api/operator/previs', assertProjectAccess: assertOperatorProjectAccess });
   registerOperatorMetadataRoutes(app, {
     operatorHandbookPath: OPERATOR_HANDBOOK_PATH,
     operatorSecurityPolicy,
@@ -314,7 +326,6 @@ export async function startServer() {
   }
 
   const server = await listenWithPortFallback(app, PORT, HOST, apiOnly);
-  scriptRuntime.start();
-  server.once("close", () => { void scriptRuntime.stop(); });
+  server.once("close", () => { generationEngine.stop(); generationProviders.comfy.stop(); });
   return server;
 }

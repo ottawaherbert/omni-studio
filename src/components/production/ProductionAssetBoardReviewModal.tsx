@@ -50,6 +50,7 @@ export function ProductionAssetBoardReviewModal({
               <h3 className="mt-1 text-base font-black text-text-primary">{candidate.board.assetName}</h3>
               <p className="mt-1 text-xs text-text-muted">{candidate.board.variantName || "基础身份"} · {candidate.referenceMode === "clean_reference" ? "无文字模型参考" : "制作资料板"}</p>
             </div>
+            {candidate.board.assetType === 'character' && candidate.referenceMode === 'clean_reference' && <p className="text-xs leading-5 text-text-secondary">采用前核对：左侧身体三视图不含小脸或头发，领口与服装完整；右侧脸部清晰，发型、妆容、伤势与当前状态一致。身体省略头部只是参考版式。</p>}
             <dl className="space-y-2 rounded-lg bg-bg-surface-soft p-4 text-xs text-text-secondary">
               <div className="flex justify-between gap-3"><dt>来源</dt><dd className="font-bold">{candidate.source === "upload" ? "本地导入" : candidate.source === "existing" ? "既有素材" : "AI 生成"}</dd></div>
               <div className="flex justify-between gap-3"><dt>执行来源</dt><dd className="truncate font-bold">{formatAIExecutionProvenance(candidate.executionProvenance, candidate.modelId, candidate.source)}</dd></div>

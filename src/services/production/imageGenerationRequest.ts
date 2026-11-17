@@ -132,6 +132,8 @@ export interface ImageVisibleTextDirective {
 export type ImageGenerationAspectRatio = "1:1" | "3:4" | "4:3" | "9:16" | "16:9";
 
 export interface ImageGenerationRequest {
+  /** Execution/pause ownership; omitted only for standalone global generation. */
+  projectId?: string;
   promptCore: string;
   aspectRatio?: ImageGenerationAspectRatio;
   references?: ImageGenerationReference[];

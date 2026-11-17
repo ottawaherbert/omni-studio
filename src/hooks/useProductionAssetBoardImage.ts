@@ -1,49 +1,21 @@
-import { assetNeedsVisualDesign } from "../clients/productionAssetWorkflowClient";
-import type { AIExecutionProvenance } from "../clients/domainTypes";
-import { useLayoutEffect, useMemo, useRef, useState } from "react";
+import { useLayoutEffect,useMemo,useRef,useState } from "react";
 import toast from "react-hot-toast";
+import type { AIExecutionProvenance } from "../clients/domainTypes";
 
-import type { ImageGenerationReferenceAudit, ManualProductionAssetReferenceAudit, ManualStoryboardAgentQuality, Project, PromptCompositionManifestAudit, VisualCompileManifest } from "../clients/domainTypes";
-import { generateAIContent, generateAIImage } from "../clients/aiClient";
+import type { ImageGenerationReferenceAudit,ManualProductionAssetReferenceAudit,ManualStoryboardAgentQuality,Project,PromptCompositionManifestAudit,VisualCompileManifest } from "../clients/domainTypes";
 import { legacyProjectClient } from "../clients/legacyProjectClient";
 import {
-  buildProductionAssetImageVisualStyleProjection,
-  buildProductionAssetVisualRecipeInputEvidence,
-  productionAssetBoardCandidateSourceContentHash,
-  reviewProductionAssetBoardCandidateSource,
+productionAssetBoardCandidateSourceContentHash,
+reviewProductionAssetBoardCandidateSource
 } from "../clients/productionVisualImageClient";
-import { replaceCurrentProjectSnapshot, useAIConfigStore } from "../clients/stateClient";
-import type { ImagePromptSelection } from "../components/ImagePromptModal";
+import { replaceCurrentProjectSnapshot } from "../clients/stateClient";
+
 import type { VideoStoryboardAssetBoardItem } from "../clients/productionAssetWorkflowClient";
 import {
-  buildProductionAssetBoardVisualQAPrompt,
-  productionAssetBoardPromptCore,
-  buildProductionAssetBoardVisualRepairPrompt,
-  buildProductionAssetBoardCanonicalReference,
-  buildProductionAssetBoardPreviousOutputRepairOperation,
-  isProductionAssetBoardVisualQualityPassing,
-  PRODUCTION_ASSET_BOARD_VISUAL_MAX_REPAIRS,
+resolveProductionAssetReferenceModeSpec,
+type ProductionAssetReferenceMode,
 } from "../clients/productionAssetWorkflowClient";
-import {
-  normalizeStoryboardAgentQuality,
-  storyboardShotQualitySchema,
-} from "../clients/productionStoryboardWorkflowClient";
 import { persistProjectMediaUrl } from "../clients/projectMediaClient";
-import { safeParseAIResponse } from "../utils/aiParser";
-import { imageUrlToMediaData, inspectImageTechnicalMetadata } from "../utils/imageMediaData";
-import { summarizeUnknownError } from "../utils/logging";
-import {
-  createImageGenerationReference,
-  type CompiledImageGenerationRequest,
-} from "../clients/productionStudioWorkflowClient";
-import {
-  buildAssetBoardOverlaySpec,
-  renderAssetBoardOverlay,
-} from "../clients/productionAssetWorkflowClient";
-import {
-  resolveProductionAssetReferenceModeSpec,
-  type ProductionAssetReferenceMode,
-} from "../clients/productionAssetWorkflowClient";
 
 export interface ProductionAssetBoardCandidate {
   candidateId?: string;
@@ -59,7 +31,7 @@ export interface ProductionAssetBoardCandidate {
   visualStyleCompileManifest?: VisualCompileManifest;
   sourceContentHash?: string;
   sourceReview?: ManualProductionAssetReferenceAudit["sourceReview"];
-  selection?: ImagePromptSelection;
+  selection?: Pick<ManualProductionAssetReferenceAudit, "selectedSkillIds" | "selectedSkillTitles" | "selectedContextIds">;
   quality?: ManualStoryboardAgentQuality;
   referenceMode: ProductionAssetReferenceMode;
   layoutContractId: string;
@@ -88,7 +60,6 @@ export const useProductionAssetBoardImage = ({
   referenceMode: ProductionAssetReferenceMode;
   updateProject: (updates: Partial<Project>) => Promise<void>;
 }) => {
-  const [isPromptOpen, setIsPromptOpen] = useState(false);
   const [isGenerating, setIsGenerating] = useState(false);
   const [transientCandidate, setTransientCandidate] = useState<ProductionAssetBoardCandidate | null>(null);
   const [isAdopting, setIsAdopting] = useState(false);
@@ -188,207 +159,10 @@ export const useProductionAssetBoardImage = ({
     generationEpochRef.current += 1;
     reviewEpochRef.current += 1;
     setTransientCandidate(null);
-    setIsPromptOpen(false);
     setIsGenerating(false);
     setIsAdopting(false);
   }, [operationScopeKey]);
-  const openPrompt = () => {
-    if (!project || !board) {
-      toast.error("当前资产类型没有可生成的角色板、场景板或道具板。");
-      return;
-    }
-    setIsPromptOpen(true);
-  };
-
-  const generateCandidate = async (
-    finalPrompt: string,
-    inputReferenceUrl?: string,
-    selection?: ImagePromptSelection,
-  ) => {
-    if (!project || !board || isGenerating) return;
-    if (!inputReferenceUrl && assetNeedsVisualDesign(project, board.assetId)) { toast.error("请先完成资产形象设计或提供身份参考图"); return; }
-    const operation = beginGenerationOperation(project.id);
-    if (!operation) return;
-    const modeSpec = resolveProductionAssetReferenceModeSpec(board, referenceMode);
-    setIsGenerating(true);
-    try {
-      const sourceContentHash = productionAssetBoardCandidateSourceContentHash({
-        project,
-        boardItemId: board.id,
-        referenceMode,
-      });
-      const visualStyleProjection = buildProductionAssetImageVisualStyleProjection({
-        project,
-        asset: board,
-      });
-      let imageUrl = "";
-      let quality: ManualStoryboardAgentQuality | undefined;
-      let reviewExecution: AIExecutionProvenance | undefined;
-      const promptCore = productionAssetBoardPromptCore(finalPrompt, project, board);
-      let adoptedPrompt = promptCore;
-      let repairIssues: string[] = [];
-      let review: ProductionAssetBoardCandidate["review"] | undefined;
-      let compiledRequest: CompiledImageGenerationRequest | undefined;
-      let executionProvenance: AIExecutionProvenance | undefined;
-      let previousOutputReferenceUrl: string | undefined;
-      const visualQcEnabled = useAIConfigStore.getState().visualQcEnabled;
-      for (let attempt = 0; attempt <= PRODUCTION_ASSET_BOARD_VISUAL_MAX_REPAIRS; attempt += 1) {
-        if (!isGenerationOperationCurrent(operation)) return;
-        adoptedPrompt = buildProductionAssetBoardVisualRepairPrompt(promptCore, repairIssues);
-        const references = previousOutputReferenceUrl
-          ? [createImageGenerationReference({
-              imageUrl: previousOutputReferenceUrl,
-              label: "待修改的参考图",
-              role: "previous_output_repair",
-            })]
-          : inputReferenceUrl
-            ? [buildProductionAssetBoardCanonicalReference({ board, imageUrl: inputReferenceUrl })]
-            : undefined;
-        const generatedImageUrl = await generateAIImage({
-          promptCore: adoptedPrompt,
-          aspectRatio: "16:9",
-          visualStyleProjection,
-          visualRecipeInputEvidence: buildProductionAssetVisualRecipeInputEvidence({ project, asset: board }),
-          references,
-          operation: previousOutputReferenceUrl
-            ? buildProductionAssetBoardPreviousOutputRepairOperation({ board, issues: repairIssues })
-            : { kind: "generate" },
-          onExecutionProvenance: audit => { executionProvenance = audit; },
-          onPromptCompiled: (compiled) => {
-            compiledRequest = compiled;
-          },
-        });
-        if (!isGenerationOperationCurrent(operation)) return;
-        const rawImageUrl = await persistProjectMediaUrl(generatedImageUrl, project.id);
-        if (!isGenerationOperationCurrent(operation)) return;
-        previousOutputReferenceUrl = rawImageUrl;
-        if (referenceMode === "production_board") {
-          const overlaidImageUrl = await renderAssetBoardOverlay(
-            rawImageUrl,
-            buildAssetBoardOverlaySpec({ project, board }),
-          );
-          if (!isGenerationOperationCurrent(operation)) return;
-          imageUrl = await persistProjectMediaUrl(overlaidImageUrl, project.id);
-          if (!isGenerationOperationCurrent(operation)) return;
-        } else {
-          imageUrl = rawImageUrl;
-        }
-        const technical = await inspectImageTechnicalMetadata(imageUrl);
-        if (!isGenerationOperationCurrent(operation)) return;
-        if (technical.width > 0 && technical.height > 0 && technical.width <= technical.height) {
-          repairIssues = [`资产板输出方向与本次结构化画幅不一致，实际返回 ${technical.width}x${technical.height}。`];
-          imageUrl = "";
-          if (attempt < PRODUCTION_ASSET_BOARD_VISUAL_MAX_REPAIRS) continue;
-          throw new Error(repairIssues[0]);
-        }
-        if (!visualQcEnabled) break;
-        const mediaDataList = await Promise.all(
-          [imageUrl, inputReferenceUrl].filter(Boolean).map((url) => imageUrlToMediaData(url!)),
-        );
-        if (!isGenerationOperationCurrent(operation)) return;
-        const response = await generateAIContent({
-          taskType: "visualQc",
-          onExecutionProvenance: audit => { reviewExecution = audit; },
-          prompt: buildProductionAssetBoardVisualQAPrompt({ project, board, referenceMode }),
-          requireJson: true,
-          schema: storyboardShotQualitySchema,
-          mediaDataList,
-        });
-        if (!isGenerationOperationCurrent(operation)) return;
-        quality = normalizeStoryboardAgentQuality(safeParseAIResponse<unknown>(response, {}));
-        if (isProductionAssetBoardVisualQualityPassing(quality)) break;
-        repairIssues = quality.issues
-          .filter((item) => item.severity !== "advisory")
-          .map((item) => `${item.description}；${item.suggestion}`);
-        if (attempt >= PRODUCTION_ASSET_BOARD_VISUAL_MAX_REPAIRS) {
-          review = { mode: "automatic", executionProvenance: reviewExecution, status: "pending", reviewedAt: Date.now() };
-          break;
-        }
-        imageUrl = "";
-      }
-      if (!imageUrl) throw new Error("资产板图片生成未返回可采用的整板结果。");
-      const candidateId = `asset-board-${window.crypto.randomUUID()}`;
-      const stagedCandidate: ProductionAssetBoardCandidate = {
-        candidateId,
-        board,
-        imageUrl,
-        finalPrompt: compiledRequest?.providerPrompt || adoptedPrompt,
-        source: executionProvenance?.source === "manual_external" ? "upload" : "ai_generation",
-        modelId: executionProvenance?.modelId,
-        executionProvenance,
-        inputReferenceUrl,
-        imageReferenceManifest: compiledRequest?.references.map((reference, index) => ({
-          index: index + 1,
-          imageUrl: reference.imageUrl,
-          label: reference.label,
-          role: reference.role,
-          preserve: reference.preserve,
-          allowChange: reference.allowChange,
-          exclude: reference.exclude,
-        })),
-        promptCompositionManifest: compiledRequest?.manifest,
-        visualStyleCompileManifest: compiledRequest?.visualStyleProjection?.compileManifest,
-        sourceContentHash,
-        selection,
-        quality,
-        referenceMode,
-        layoutContractId: modeSpec.contractId,
-        review: review || (visualQcEnabled
-          ? { mode: "automatic", executionProvenance: reviewExecution, status: "approved", reviewedAt: Date.now() }
-          : { mode: "manual", status: "pending" }),
-      };
-      if (!isGenerationOperationCurrent(operation)) return;
-      const savedProject = await legacyProjectClient.stageProductionAssetBoardCandidate(project.id, {
-        candidateId,
-        boardItemId: board.id,
-        imageUrl,
-        source: stagedCandidate.source,
-        finalPrompt: stagedCandidate.finalPrompt,
-        modelId: stagedCandidate.modelId,
-        executionProvenance: stagedCandidate.executionProvenance,
-        inputReferenceUrl: stagedCandidate.inputReferenceUrl,
-        imageReferenceManifest: stagedCandidate.imageReferenceManifest,
-        promptCompositionManifest: stagedCandidate.promptCompositionManifest,
-        visualStyleCompileManifest: stagedCandidate.visualStyleCompileManifest,
-        sourceContentHash,
-        selectedSkillIds: stagedCandidate.selection?.selectedSkillIds,
-        selectedSkillTitles: stagedCandidate.selection?.selectedSkillTitles,
-        selectedContextIds: stagedCandidate.selection?.selectedContextIds,
-        quality: stagedCandidate.quality,
-        review: stagedCandidate.review,
-        referenceMode: stagedCandidate.referenceMode,
-      });
-      if (!isGenerationOperationCurrent(operation) || !replaceCurrentProjectSnapshot(savedProject)) return;
-      const persisted = savedProject.manualProductionAssets?.pendingReferences?.find((item) => item.id === candidateId);
-      setTransientCandidate({
-        ...stagedCandidate,
-        sourceContentHash: persisted?.sourceContentHash || sourceContentHash,
-        sourceReview: reviewProductionAssetBoardCandidateSource({
-          project: savedProject,
-          candidate: persisted || {
-            boardItemId: board.id,
-            referenceMode,
-            sourceContentHash,
-          },
-        }),
-      });
-      if (quality && !isProductionAssetBoardVisualQualityPassing(quality)) {
-        toast.error(`${modeSpec.label}候选未通过自动质检，已保留供人工预览`);
-      } else {
-        toast.success(`${modeSpec.label}候选已生成，请预览后采用`);
-      }
-    } catch (error) {
-      if (!isGenerationOperationCurrent(operation)) return;
-      const summary = summarizeUnknownError(error);
-      console.error("Production asset board generation failed:", summary.message);
-      toast.error(summary.message || "资产板生成失败");
-      throw new Error(summary.message || "资产板生成失败");
-    } finally {
-      finishGenerationOperation(operation);
-    }
-  };
-
-  const stageUpload = async (imageUrl: string) => {
+  const stageUpload = async (imageUrl: string, source: "upload" | "existing" = "upload") => {
     if (!project || !board || isGenerating) return;
     const operation = beginGenerationOperation(project.id);
     if (!operation) return;
@@ -408,7 +182,7 @@ export const useProductionAssetBoardImage = ({
         board,
         imageUrl: persistedImageUrl,
         finalPrompt: referenceMode === "clean_reference" ? board.cleanPrompt || "" : board.prompt || "",
-        source: "upload",
+        source,
         sourceContentHash,
         referenceMode,
         layoutContractId: modeSpec.contractId,
@@ -419,7 +193,7 @@ export const useProductionAssetBoardImage = ({
         candidateId,
         boardItemId: board.id,
         imageUrl: persistedImageUrl,
-        source: "upload",
+        source,
         finalPrompt: stagedCandidate.finalPrompt,
         sourceContentHash,
         referenceMode,
@@ -491,13 +265,9 @@ export const useProductionAssetBoardImage = ({
   };
 
   return {
-    isPromptOpen,
     isGenerating,
     candidate,
     isAdopting,
-    openPrompt,
-    closePrompt: () => setIsPromptOpen(false),
-    generateCandidate,
     stageUpload,
     adoptCandidate,
     discardCandidate,

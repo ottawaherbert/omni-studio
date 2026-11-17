@@ -1,0 +1,69 @@
+{
+  "date": "2026-09-29",
+  "baselineCommit": "3a83565c",
+  "environment": "内存或隔离临时 SQLite；模型由机械协议回填，外部 provider 禁用；不修改真实作品",
+  "runs": [
+    {
+      "label": "剧本全套回归",
+      "command": "node --import tsx --test --test-concurrency=2 tests/script*.test.ts tests/script-goal-progress.test.tsx",
+      "result": {
+        "tests": 511,
+        "pass": 511,
+        "fail": 0,
+        "cancelled": 0,
+        "skipped": 0,
+        "todo": 0,
+        "duration_ms": 256998.232791
+      },
+      "failedCases": []
+    },
+    {
+      "label": "最后请求预检与节点恢复回归",
+      "command": "node --import tsx --test --test-concurrency=2 tests/script-draft-store*.test.ts tests/script-context-commands.test.ts tests/script-node-recovery.test.ts tests/script-goal-wiring-review.test.ts",
+      "result": {
+        "tests": 38,
+        "pass": 38,
+        "fail": 0,
+        "cancelled": 0,
+        "skipped": 0,
+        "todo": 0,
+        "duration_ms": 7131.977875
+      },
+      "failedCases": []
+    },
+    {
+      "label": "已有 Agent 合同与 HTTP 链兼容性",
+      "command": "node --import tsx --test --test-concurrency=2 tests/agent-script-contract.test.ts tests/agent-script-http.test.ts tests/agent-conversation-context-review.test.ts tests/agent-goal-review.test.ts",
+      "result": {
+        "tests": 22,
+        "pass": 22,
+        "fail": 0,
+        "cancelled": 0,
+        "skipped": 0,
+        "todo": 0,
+        "duration_ms": 24696.52275
+      },
+      "failedCases": []
+    },
+    {
+      "label": "最后页面身份与上游复核提示回归",
+      "command": "node --import tsx --test tests/script-ui-workflow.test.ts tests/script-goal-progress.test.tsx tests/script-workflow-review.test.ts",
+      "result": {
+        "tests": 20,
+        "pass": 20,
+        "fail": 0,
+        "cancelled": 0,
+        "skipped": 0,
+        "todo": 0,
+        "duration_ms": 542.182209
+      },
+      "failedCases": []
+    }
+  ],
+  "note": "各轮包含重叠用例，不能相加报独立测试总数。最后小修使用相关定向回归；全套511项不含后加的节点恢复与最终页面/复核新用例。浏览器结果详见 browser-check.md。",
+  "finalChecks": {
+    "npm run lint": "passed; exit 0",
+    "npm run build": "passed; exit 0; 10.48s; existing >500 kB chunk warning",
+    "git diff --check": "passed; exit 0"
+  }
+}

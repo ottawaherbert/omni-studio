@@ -519,6 +519,10 @@ export interface ProductionWritingScriptSyncPreview extends ProductionScriptMuta
   changes: ProductionWritingScriptSyncChange[];
   blockedReason?: string;
   sourceExportedAt: number;
+  baseRevisionId: string;
+  baseSyncStatus: ProductionScriptWorkspace['syncStatus'];
+  sourceHash: string;
+  resolvesConflict?: boolean;
 }
 
 const writingUnitContent = (unit: ScriptExportPackage["units"][number]) => {
@@ -566,8 +570,14 @@ export const previewWritingScriptSync = (
   }
   const current = currentProductionScriptRevision(workspace);
   if (!current) throw new Error("当前项目没有可同步的剧本修订。");
+  const baseline = {
+    baseRevisionId: workspace.currentRevisionId,
+    baseSyncStatus: workspace.syncStatus,
+    sourceHash: sha256(JSON.stringify(sourcePackage)),
+  };
   if (workspace.syncStatus === "conflict") {
     return {
+      ...baseline,
       workspace,
       episodes: project.episodes,
       episodesToCreate: [],
@@ -631,6 +641,7 @@ export const previewWritingScriptSync = (
   });
   if (!changes.length) {
     return {
+      ...baseline,
       workspace,
       episodes: project.episodes,
       episodesToCreate: [],
@@ -713,6 +724,7 @@ export const previewWritingScriptSync = (
     }
   });
   return {
+    ...baseline,
     workspace: nextWorkspace,
     episodes,
     episodesToCreate,
@@ -724,6 +736,41 @@ export const previewWritingScriptSync = (
     changes,
     sourceExportedAt: sourcePackage.exportedAt,
   };
+};
+
+/** Conflict adoption uses the same visible source comparison as ordinary sync. */
+export const previewWritingScriptConflictResolution = (
+  project: Project,
+  workspace: ProductionScriptWorkspace,
+  sourcePackage: ScriptExportPackage,
+  now = Date.now(),
+): ProductionWritingScriptSyncPreview => {
+  if (workspace.syncStatus !== 'conflict') throw new Error('制片改稿状态已改变，请重新检查剧本来源。');
+  return {
+    ...previewWritingScriptSync(project, { ...workspace, syncStatus: 'current' }, sourcePackage, now),
+    baseSyncStatus: workspace.syncStatus,
+    resolvesConflict: true,
+  };
+};
+
+/** Rebase only production attachments; never replace the author's reviewed source. */
+export const prepareReviewedWritingScriptSync = (
+  project: Project,
+  workspace: ProductionScriptWorkspace,
+  sourcePackage: ScriptExportPackage,
+  preview: ProductionWritingScriptSyncPreview,
+  now = Date.now(),
+): ProductionWritingScriptSyncPreview => {
+  if (preview.blockedReason) throw new Error(preview.blockedReason);
+  if (workspace.currentRevisionId !== preview.baseRevisionId || workspace.syncStatus !== preview.baseSyncStatus) {
+    throw new Error('预览后制片剧本已更新，请重新检查剧本差异后采用。');
+  }
+  if (sha256(JSON.stringify(sourcePackage)) !== preview.sourceHash) {
+    throw new Error('预览后源剧本已更新，请重新检查剧本差异后采用。');
+  }
+  return preview.resolvesConflict
+    ? previewWritingScriptConflictResolution(project, workspace, sourcePackage, now)
+    : previewWritingScriptSync(project, workspace, sourcePackage, now);
 };
 
 /** Keeps the production revision independent. It never overwrites the authoring project. */

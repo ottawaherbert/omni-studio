@@ -1,0 +1,36 @@
+/** Public operating contracts only. Never include project handoffs, settings or credentials. */
+export const OPERATOR_DOCUMENTS = [
+  { id: 'agent-guide', path: 'doc/agent-guide.md', title: '外部 Agent 操作手册', kind: 'guide' },
+  { id: 'design', path: 'doc/design.md', title: '系统设计与制作规则', kind: 'guide' },
+  { id: 'production-quality', path: 'doc/production-quality-workflow.md', title: '制作质量检查与正式交付', kind: 'guide' },
+  { id: 'virtual-production', path: 'doc/virtual-production.md', title: '3D 虚拟制片操作', kind: 'guide' },
+  { id: 'studio-design', path: 'doc/virtual-studio-library-design.md', title: '影视城质量与性能标准', kind: 'guide' },
+  { id: 'production-examples', path: 'examples/virtual-production/README.md', title: '布景正反案例与背景调度', kind: 'guide', files: ['prepared.glb', 'blockout.glb', 'case.json', 'build.ts', 'workshop-prepared.png', 'workshop-blockout.png', 'street-prepared.png', 'street-blockout.png', 'reverse-prepared.png', 'background-motion.mp4', 'inspection.json'] },
+  { id: 'production-example-data', path: 'examples/virtual-production/case.json', title: '案例原生世界与场次方案（使用前映射ID）', kind: 'schema' },
+  { id: 'production-example-source', path: 'examples/virtual-production/build.ts', title: '案例建模脚本（作品内容示范）', kind: 'adapter' },
+  { id: 'h3', path: 'doc/comfyui-yz-h3-production.md', title: '指定 H3 核心与可变参考输入', kind: 'guide' },
+  { id: 'h3-author-source', path: 'examples/comfyui/yz-h3-author-source.json', title: '用户指定的 YZ H3 作者原件（未经适配）', kind: 'schema' },
+  { id: 'external-import', path: 'external-creation-kit/shared/import-handoff.md', title: '外部创作包映射', kind: 'guide' },
+  { id: 'script-schema', path: 'packages/script/src/schema.ts', title: '作者当前稿', kind: 'schema' },
+  { id: 'script-tasks', path: 'packages/script/src/taskContracts.ts', title: '写作任务返回合同', kind: 'schema' },
+  { id: 'script-outline', path: 'packages/script/src/outlineGuides.ts', title: '大纲范围与节拍', kind: 'schema' },
+  { id: 'script-task-context', path: 'packages/script/src/conversation.ts', title: '写作任务输入上下文（非聊天助手）', kind: 'schema' },
+  { id: 'model-config-schema', path: 'src/config/aiConfigDefaults.ts', title: '模型配置字段与默认值（无用户凭证）', kind: 'schema' },
+  { id: 'creative-source-projection', path: 'src/domains/creativeSourceProjection.ts', title: '来源投影字段', kind: 'schema' },
+  { id: 'interactive-schema', path: 'src/domains/interactive/types/schema.ts', title: '互动体验、图、绑定与运行时', kind: 'schema' },
+  { id: 'operator-schema', path: 'src/services/operator/types.ts', title: 'Operator 运行与审计', kind: 'schema' },
+  ...['project', 'production', 'referenceGovernance', 'videoAnalysis', 'adaptation', 'game'].map(name => ({
+    id: `types-${name}`, path: `src/types/${name}.ts`, title: `制片类型 ${name}`, kind: 'schema',
+  })),
+  ...[
+    'aiConfig', 'asset', 'comfyWorkflow', 'contentIdentity', 'creativeDirection', 'creativeSource',
+    'directorPlan', 'directorProfile', 'filmTimeline', 'generation', 'previs', 'productionQuality', 'scriptDelivery',
+    'skill', 'skillMetadata', 'skillPrompt', 'spatial', 'speech', 'system', 'visualArtifact',
+    'visualArtifactRecipe', 'visualOverride', 'visualStyle', 'visualStyleImplementation',
+    'visualStyleProfile', 'worldBuild', 'manualAI', 'creativeSkillDraft', 'operatorApi', 'project', 'visualArtifactProjection',
+  ].map(name => ({
+    id: `domain-${name}`, path: `packages/domain/src/${name}.ts`, title: `领域合同 ${name}`, kind: 'schema',
+  })),
+  { id: 'writing-production-adapter', path: 'src/services/production/writingExportLegacyAdapter.ts', title: '作者交付转制片的纯适配器', kind: 'adapter' },
+  { id: 'production-source-adapter', path: 'src/services/production/productionSourceIntake.ts', title: '外部文本转制片的纯适配器', kind: 'adapter' },
+] as const;

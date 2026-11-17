@@ -1,13 +1,15 @@
 import type { Express } from "express";
 import { dbHelpers } from "../db";
 import { appendShotTakeCandidate } from "../../services/production/shotTakeReview";
+import { appendStoryboardBoardVisualTake } from "../../services/production/storyboardCompositeBoard";
 import type { Episode } from "../../types/project";
 
 export const registerStudioCandidateRoutes = (app: Express) => {
   app.post("/api/projects/:id/episodes/:epId/scenes/:sceneId/studio-candidates", (req, res) => {
     try {
-      const { shotId, boardId, take, draftPreview } = req.body || {};
-      if (typeof shotId !== "string" || (!draftPreview && (!take?.id || !take?.createdAt))) {
+      const { shotId, boardId, pageId, visualTake, take, draftPreview } = req.body || {};
+      const candidate = visualTake || take;
+      if (typeof shotId !== "string" || (!draftPreview && (!candidate?.id || !candidate?.createdAt)) || visualTake && (!boardId || !pageId)) {
         return res.status(400).json({ error: "缺少候选内容或目标镜头" });
       }
       const episode = dbHelpers.getEpisodeById(req.params.id, req.params.epId) as Episode | undefined;
@@ -19,7 +21,16 @@ export const registerStudioCandidateRoutes = (app: Express) => {
       } else if (boardId) {
         const board = scene.manualStoryboard?.boards?.find((item) => item.boardId === boardId || item.board?.id === boardId);
         if (!board) return res.status(404).json({ error: "原故事板已删除，生成素材仍保留" });
-        board.takes = [...(board.takes || []).filter((item) => item.id !== take.id), take];
+        if (visualTake) {
+          const page = board.board?.visualPages?.find(item => item.id === pageId);
+          if (!page) return res.status(404).json({ error: "原故事板页已删除，生成素材仍保留" });
+          board.board!.visualPages = board.board!.visualPages!.map(item => item.id === pageId
+            ? appendStoryboardBoardVisualTake({ page: item, take: visualTake }) : item);
+          board.confirmedAt = undefined;
+          board.updatedAt = Date.now();
+        } else {
+          board.takes = [...(board.takes || []).filter((item) => item.id !== take.id), take];
+        }
       } else {
         scene.shots = scene.shots.map((item) => item.id === shotId ? appendShotTakeCandidate(item, take) : item);
       }

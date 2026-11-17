@@ -1,4 +1,4 @@
-import { hashValue } from '../../agent-core/src/identity';
+import { hashValue } from '../../domain/src/contentIdentity';
 import { parseScriptProject, type DeliveryUnit, type Scene, type ScriptProject, type StructureNode } from './schema';
 
 export type StructureInsertion = { nodeId?: string; beforeSceneId?: string; afterSceneId?: string };

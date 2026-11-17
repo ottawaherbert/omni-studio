@@ -419,7 +419,8 @@ function assertOperatorRouteSourceContracts(
 
 reportSelfCheckProgress("checking source contracts");
 const aiServiceSource = fs.readFileSync(new URL("../src/services/ai.ts", import.meta.url), "utf-8");
-assert.ok(aiServiceSource.includes("/api/proxy/openai-image"));
+assert.ok(aiServiceSource.includes("submitGenerationRequest"));
+assert.equal(aiServiceSource.includes("/api/proxy/openai-image"), false);
 assert.equal(aiServiceSource.includes("dangerouslyAllowBrowser"), false);
 assert.equal(aiServiceSource.includes("new OpenAI"), false);
 assert.equal(isOpenAICompatibleTextChannelType("openai"), true);
@@ -571,11 +572,11 @@ for (const coreDoc of OPERATOR_CORE_DOCUMENTS) {
 reportSelfCheckProgress("checking capability manifest");
 const capabilityManifest = buildOperatorCapabilityManifest();
 assert.equal(capabilityManifest.handbookVersion, OPERATOR_HANDBOOK_VERSION);
-assert.equal(capabilityManifest.operationPolicy.mode, "backend_api_only");
+assert.equal(capabilityManifest.operationPolicy.mode, "business_api_preferred");
 assert.equal(capabilityManifest.storyboardStrategyImpactSystem.schemaVersion, "storyboard-strategy-impact-system.v1");
 assert.equal(capabilityManifest.storyboardStrategyImpactSystem.builderFunction, "buildStoryboardStrategyImpactPlan");
 assert.ok(capabilityManifest.storyboardStrategyImpactSystem.requiredBehavior.some((rule) => rule.includes("automaticRetryBudget=0")));
-assert.equal(capabilityManifest.premiumProductionSystem.mission.includes("commercial-grade production work"), true);
+assert.equal(capabilityManifest.premiumProductionSystem.mission.includes("actual creative brief"), true);
 assert.ok(capabilityManifest.premiumProductionSystem.qualityLadder.some((step) => step.id === "commercial_brief"));
 assert.ok(capabilityManifest.premiumProductionSystem.qualityLadder.some((step) => step.id === "continuity_ledger"));
 const canonicalStageTypeSet = new Set<string>(
@@ -1540,16 +1541,10 @@ const operatorClientSource = fs.readFileSync(new URL("../apps/web/src/clients/op
 assert.ok(operatorClientSource.includes("/api/operator/runs?projectId="));
 assert.ok(operatorClientSource.includes("/api/operator/artifacts?projectId="));
 assert.ok(operatorClientSource.includes("/api/operator/assets?projectId="));
-const runPhase12DepartmentUiSourceSelfChecks = () => {
-  const departmentBoardsPanelSource = fs.readFileSync(new URL("../src/components/storyboard/DepartmentBoardsPanel.tsx", import.meta.url), "utf-8");
-  assert.ok(departmentBoardsPanelSource.includes("cinematography"));
-  assert.ok(departmentBoardsPanelSource.includes("performance_directing"));
-  assert.ok(departmentBoardsPanelSource.includes("action_choreography"));
-  assert.ok(departmentBoardsPanelSource.includes("departmentCoverage"));
-  assert.ok(departmentBoardsPanelSource.includes("departmentQaSummary"));
-  assert.ok(departmentBoardsPanelSource.includes("production_design"));
-};
-runPhase12DepartmentUiSourceSelfChecks();
+assert.equal(fs.existsSync(new URL("../src/components/storyboard/DepartmentBoardsPanel.tsx", import.meta.url)), false, "unreachable legacy department UI must remain retired");
+const currentStoryboardUi = fs.readFileSync(new URL("../src/pages/Storyboard.tsx", import.meta.url), "utf-8");
+assert.ok(currentStoryboardUi.includes("manualFilmTeamReadModel"), "current storyboard must retain department context");
+assert.ok(currentStoryboardUi.includes("buildStoryboardTeamPromptContext"), "department context must reach shot planning");
 const manualGatewaySource = fs.readFileSync(new URL("../src/services/production/manualGateway.ts", import.meta.url), "utf-8");
 assert.ok(manualGatewaySource.includes("productionClient.createOperatorRun"));
 assert.ok(manualGatewaySource.includes("productionClient.appendOperatorRunEvent"));
@@ -3921,10 +3916,6 @@ assert.equal(plannedCharacterCoversDiscoveredName({ name: "沈瑶", brief: "被�
 assert.equal(getShotPacingWarning("short-drama", 0.35, 8, 24.5), null);
 assert.equal(getShotPacingWarning("short-drama", 0.35, 20, 15), "镜头数远超标准可能过碎");
 assert.equal(getShotPacingWarning("movie", 2, 1, 100), "镜头数偏少可能节奏拖沓");
-const bibleAISource = fs.readFileSync(new URL("../src/hooks/useBibleAI.ts", import.meta.url), "utf-8");
-assert.ok(bibleAISource.includes("logBibleAIError"));
-assert.ok(bibleAISource.includes("summarizeUnknownError"));
-assert.equal(bibleAISource.includes("console.error(error)"), false);
 const studioAISource = fs.readFileSync(new URL("../src/hooks/useStudioAI.ts", import.meta.url), "utf-8");
 const storyboardAISource = fs.readFileSync(new URL("../src/hooks/useStoryboardAI.ts", import.meta.url), "utf-8");
 const storyboardPageSource = fs.readFileSync(new URL("../src/pages/Storyboard.tsx", import.meta.url), "utf-8");
@@ -3948,10 +3939,9 @@ assert.ok(visualsPromptSource.includes("dialogueLines"));
 assert.ok(visualsPromptSource.includes("正式项目角色必须填写有效 characterId 和 text"));
 assert.ok(visualsPromptSource.includes("临时人物必须填写 speakerName 和 text"));
 assert.ok(visualsPromptSource.includes("即使只有一句角色台词，也要写入 dialogueLines"));
-assert.ok(visualsPromptSource.includes("180 度轴线"));
-assert.ok(visualsPromptSource.includes("视线匹配"));
-assert.ok(visualsPromptSource.includes("动作顺接"));
-assert.ok(visualsPromptSource.includes("空间方位连续性"));
+assert.ok(visualsPromptSource.includes("轴线、视线、动作和空间承接"));
+assert.ok(visualsPromptSource.includes("不适用的项可注明不适用"));
+assert.ok(visualsPromptSource.includes("观众可辨认的承接点"));
 const skillForgeSource = fs.readFileSync(new URL("../src/components/SkillForge.tsx", import.meta.url), "utf-8");
 const promptRegistrySource = fs.readFileSync(new URL("../src/config/prompts/index.ts", import.meta.url), "utf-8");
 assert.equal(promptRegistrySource.includes("generateSkillProfile"), false);
@@ -5009,7 +4999,7 @@ assert.equal(assetBoardPlan.propBoards.length, 1);
 assert.equal(assetBoardPlan.variantBoards.length, 2);
 const resolvedAssetStyleLock = resolveVisualStyleLock(storyboardAssetReferenceProject as any);
 reportSelfCheckProgress("resolved production asset visual style");
-assert.ok(resolvedAssetStyleLock.assetBoardInstruction.includes("3d_animation"));
+assert.ok(resolvedAssetStyleLock.assetBoardInstruction.includes("皮克斯式 3D 卡通体块"));
 assert.equal(assetBoardPlan.characterBoards[0].strategyId, "assetBoard.characterIdentity.artbook.v1");
 assert.equal(assetBoardPlan.sceneBoards[0].strategyId, "assetBoard.locationSetIdentity.production.v1");
 assert.equal(assetBoardPlan.propBoards[0].strategyId, "assetBoard.propIdentity.production.v1");
@@ -5341,8 +5331,8 @@ const weakShotGroupIssues = validateStoryboardRules([
     }],
   },
 ] as any);
-assert.ok(weakShotGroupIssues.some((issue) => issue.target === "scene.scene-weak-shot-group.continuity.axis"));
-assert.ok(weakShotGroupIssues.some((issue) => issue.target === "scene.scene-weak-shot-group.continuity.matchOnAction"));
+assert.ok(!weakShotGroupIssues.some((issue) => issue.target === "scene.scene-weak-shot-group.continuity.axis"));
+assert.ok(!weakShotGroupIssues.some((issue) => issue.target === "scene.scene-weak-shot-group.continuity.matchOnAction"));
 assert.ok(weakShotGroupIssues.some((issue) => issue.target === "scene.scene-weak-shot-group.shotGroup.sizeVariety"));
 assert.ok(weakShotGroupIssues.some((issue) => issue.target === "scene.scene-weak-shot-group.shotGroup.informationProgression"));
 const strongContinuityIssues = validateStoryboardRules([

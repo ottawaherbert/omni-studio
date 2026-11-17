@@ -29,14 +29,13 @@ import type {
 } from '../domains/interactive/types/schema';
 import { auditNarrativeGraph } from '../domains/interactive/qa/graphQAEngine';
 import type { InteractiveProductionPrepTarget } from '../domains/interactive/ports/productionPrepPort';
-import { hasCurrentContentFitReview } from '../domains/interactive/binding/contentFitReview';
+import { hasCurrentContentFitReview, hasCurrentMediaFitReview } from '../domains/interactive/binding/contentFitReview';
 import {
   artifactRefListEquals,
   bindingMediaTakeRefs,
   bindingScriptSceneRefs,
 } from '../domains/interactive/binding/nodeContentBinding';
 import {
-  bindingNeedsMediaReview,
   recommendBindingSourceReview,
   reconcileBindingSourceReview,
   type BindingSourceReviewReason,
@@ -1825,11 +1824,7 @@ export const interactiveRepository = {
       const mediaTakeRefs = binding?.mediaTakeRefs?.length
         ? binding.mediaTakeRefs
         : binding?.mediaTakeRef ? [binding.mediaTakeRef] : [];
-      const reviewedChecksums = new Set(binding?.mediaFitReview?.mediaChecksums || []);
-      const mediaReviewCurrent = mediaTakeRefs.length > 0
-        && reviewedChecksums.size === mediaTakeRefs.length
-        && mediaTakeRefs.every((ref) => reviewedChecksums.has(ref.checksum))
-        && !bindingNeedsMediaReview(binding!);
+      const mediaReviewCurrent = hasCurrentMediaFitReview(binding);
       const projectedScenarioGroups = new Map<string, {
         requiredProductionSceneIds: Set<string>;
         currentProductionSceneIds: Set<string>;
@@ -1945,6 +1940,7 @@ export const interactiveRepository = {
       return {
         nodeId: node.id,
         title: node.brief.title,
+        bindingVersionIndex: binding?.versionIndex || 0,
         scriptSceneRefs: bindingScriptSceneRefs(binding),
         requiresMedia,
         mediaTakeRefs,
@@ -2052,6 +2048,7 @@ export const interactiveRepository = {
     const nodeManifests: InteractiveRuntimeBuild['nodeManifests'] = current.graph.nodes.map((node) => ({
       nodeId: node.id,
       title: node.brief.title,
+      bindingVersionIndex: approvedBindings.get(node.id)?.versionIndex || 0,
       scriptSceneRefs: bindingScriptSceneRefs(approvedBindings.get(node.id)),
       requiresMedia: false,
       mediaTakeRefs: [],

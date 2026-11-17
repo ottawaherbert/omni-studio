@@ -1,3 +1,4 @@
+import { renderSceneContinuityBasis } from "./sceneVisualPlan";
 import { buildVideoContinuityContext } from "../../../packages/production/src/services/production/videoContinuityContext";
 import { resolveProductionCreativeVisual, creativeExecutionManifest, hasShotVisualDirection, renderProductionCreativeContext, type ProductionCreativeScope } from "../../../packages/production/src/services/production/creativeDirection";
 import { appearancePrompt, appearanceSummary } from "./productionAppearance";
@@ -552,7 +553,7 @@ export const buildManualStudioVideoIntent = ({
   const audioPolicy = audioPolicyFor(referenceBindings, audioMode, target, generationMode);
   const interactiveContext = resolveManualStudioInteractiveContext(project, scene, target);
   const creativeIntent = (scene.shots || []).filter(s => (target.shotIds?.length ? target.shotIds : [shot.id]).includes(s.id)).map(s => `镜头 ${s.id}：\n${renderProductionCreativeContext(project, { episode, scene, shot: s }, "video", false) + ((target.shotIds?.length || 1) > 1 && hasShotVisualDirection(project, s) ? "\n本镜视觉规范：\n" + buildManualStudioProjectVisualStyleProjection(project, { creativeScope: { episode, scene, shot: s }, targets: visualProjectionTargetsForVideo(project, s, boards), shotOverride: s.visualOverride }).rendered.instruction : "")}`).join("\n\n");
-  const continuityContext = buildVideoContinuityContext({ sceneId: scene.id, shots: scene.shots || [], unitShotIds: target.shotIds?.length ? target.shotIds : [shot.id] });
+  const continuityContext = [renderSceneContinuityBasis(scene.visualPlan, target.shotIds?.length ? target.shotIds : [shot.id]), buildVideoContinuityContext({ sceneId: scene.id, shots: scene.shots || [], unitShotIds: target.shotIds?.length ? target.shotIds : [shot.id] })].filter(Boolean).join("\n\n");
   const intentSourceHash = manualStoryboardHash({
     continuityContext,
     creativeIntent,

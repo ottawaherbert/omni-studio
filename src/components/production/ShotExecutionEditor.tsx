@@ -1,17 +1,27 @@
+import { LOCATION_VIEWS, locationViewLabels } from '../../clients/productionAssetWorkflowClient';
 import type { Shot, ShotDirecting } from "../../clients/domainTypes";
 
 const input = "w-full rounded-md border border-border-soft/40 bg-bg-primary px-2 py-1.5 text-xs text-text-primary";
 const basic = [["visualAction", "可见动作"], ["shotSize", "景别"], ["cameraAngle", "机位"], ["cameraMovement", "运镜"], ["microExpression", "表演与反应"]] as const;
-const extra = [["focalLength", "焦段"], ["composition", "构图"], ["blocking", "人物位置、视线与调度"], ["lighting", "光线"], ["continuityNote", "连续性与承接"], ["soundDesign", "声音设计"], ["editingNote", "剪辑说明"]] as const;
+const extra = [["focalLength", "焦段"], ["composition", "构图"], ["blocking", "人物位置、视线与调度"], ["lighting", "光线"], ["continuityNote", "连续性与承接"], ["soundDesign", "声音设计"], ["motivation", "本镜目的"], ["editingNote", "估时与切出依据"]] as const;
 export function ShotExecutionEditor({ shot, onChange, extraOnly = false }: { shot: Shot; onChange: (shot: Shot) => void; extraOnly?: boolean }) {
   const directing: ShotDirecting = shot.directing || { dialogue: [], soundCues: [] };
   const changeDirection = (patch: Partial<ShotDirecting>) => onChange({ ...shot, directing: { ...directing, ...patch } });
   return <div className="space-y-3" aria-label="镜头拍法编辑">
     <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
       {[...(extraOnly ? [] : basic), ...extra.filter(([field]) => !extraOnly || field !== "lighting")].map(([field, label]) => <label key={field} className="text-xs text-text-secondary">{label}<textarea aria-label={label} className={input + " mt-1 min-h-16"} value={field === "lighting" ? shot.lighting ?? shot.lightingAtmo ?? "" : shot[field] || ""} onChange={e => onChange({ ...shot, [field]: e.target.value, ...(field === "lighting" ? { lightingAtmo: e.target.value } : {}) })} /></label>)}
-      <label className="text-xs text-text-secondary">时长（秒）<input aria-label="镜头时长（秒）" className={input + " mt-1"} type="number" min="0.1" step="0.1" value={shot.duration || ""} onChange={e => onChange({ ...shot, duration: Number(e.target.value) })} /></label>
+      <label className="text-xs text-text-secondary">叙事预计时长（秒）<input aria-label="镜头时长（秒）" className={input + " mt-1"} type="number" min="0.1" step="0.1" value={shot.duration || ""} onChange={e => onChange({ ...shot, duration: Number(e.target.value) })} /></label>
       <label className="text-xs text-text-secondary">转场<select aria-label="镜头转场" className={input + " mt-1"} value={shot.transition || "none"} onChange={e => onChange({ ...shot, transition: e.target.value as Shot["transition"] })}><option value="none">硬切</option><option value="fade">叠化</option><option value="black">黑场</option></select></label>
     </div>
+    {shot.locationId && <fieldset className="rounded-md border border-border-soft/40 p-3"><legend className="px-1 text-xs text-text-secondary">场景参考视角</legend>
+      <div className="flex flex-wrap gap-x-4 gap-y-2">{LOCATION_VIEWS.map(view => <label key={view} className="flex items-center gap-1.5 text-xs text-text-secondary"><input type="checkbox" checked={(shot.locationReferenceViews?.length ? shot.locationReferenceViews : ['main']).includes(view)} onChange={e => {
+        const current = shot.locationReferenceViews?.length ? shot.locationReferenceViews : ['main' as const];
+        const next = e.target.checked ? [...current, view] : current.filter(v => v !== view);
+        onChange({ ...shot, locationReferenceViews: next.length ? next : ['main'] });
+      }} />{locationViewLabels[view]}</label>)}</div>
+      <p className="mt-2 text-xs leading-5 text-text-muted">按本镜机位选择已采用的场景图。顶视图只辅助布局；生成视频使用已审分镜。缺少或过期的已选视角会在生成前提示。</p>
+    </fieldset>}
+    <p className="text-xs leading-5 text-text-muted">按动作、对白和必要反应估时，在切出依据中说明何时结束。生成时长可含余量，成片不必保留全部素材；短镜头不必延长。</p>
     {!!shot.dialogueLines?.length && <details className="text-xs text-text-secondary"><summary className="cursor-pointer">逐句表演与进入时间</summary><div className="mt-2 space-y-3">{shot.dialogueLines.map((line, lineIndex) => {
       const current = directing.dialogue.find(item => item.lineIndex === lineIndex) || { lineIndex, instruction: "" };
       const update = (patch: Partial<typeof current>) => changeDirection({ dialogue: [...directing.dialogue.filter(item => item.lineIndex !== lineIndex), { ...current, ...patch }].sort((a, b) => a.lineIndex - b.lineIndex) });

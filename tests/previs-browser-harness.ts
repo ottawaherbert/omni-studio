@@ -1,0 +1,35 @@
+import express from 'express';
+import { createServer } from 'vite';
+import { resolve } from 'node:path';
+import { mkdir } from 'node:fs/promises';
+import { previsFixture, previsGenerationConfig } from './fixtures/previs';
+process.env.DISABLE_HMR = 'true';
+const root = process.env.PREVIS_BROWSER_ROOT || '/tmp/omni-previs-browser';
+if (!root.startsWith('/tmp/')) throw new Error('Browser verification must use an isolated /tmp workspace');
+process.env.OMNI_DB_PATH = resolve(root, 'fixture.db');
+await mkdir(root, { recursive: true });
+const { db, dbHelpers } = await import('../src/server/db');
+const { registerPrevisRoutes } = await import('../src/server/routes/previsRoutes');
+const { registerGenerationRoutes } = await import('../src/server/generation/routes');
+const { registerLegacyProjectRoutes } = await import('../src/server/routes/legacyProjectRoutes');
+const { GenerationEngine } = await import('../src/server/generation/engine');
+const { GenerationStore } = await import('../src/server/generation/store');
+const { savePrevisDocument } = await import('../src/server/previsStore');
+const fixture = previsFixture('previs-browser');
+if (!dbHelpers.getProjectShellById(fixture.project.id)) {
+  dbHelpers.saveProject(fixture.project);
+  savePrevisDocument(fixture.project.id, 'world', { plan: fixture.world }, 0);
+}
+const config = process.env.PREVIS_BUILD_LIVE === '1' ? dbHelpers.getAIConfig().config : await previsGenerationConfig();
+const engine = new GenerationEngine(new GenerationStore(db), () => config, root);
+engine.providers.submit = async () => { throw new Error('隔离验收禁止调用供应商。'); };
+const app = express(); app.use(express.json({ limit: '25mb' })); app.use('/media', express.static(root));
+registerPrevisRoutes(app, engine.media); registerPrevisRoutes(app, engine.media, {basePath:'/api/operator/previs'}); registerGenerationRoutes(app, engine); registerLegacyProjectRoutes(app);
+app.get('/api/ai-config', (_req, res) => res.json({ config }));
+app.use('/api', (_req, res) => res.status(503).json({ error: '隔离白模验收不连接外部服务。' }));
+const vite = await createServer({ configFile: 'apps/web/vite.config.ts', server: { middlewareMode: true, hmr: false }, appType: 'custom' });
+app.get('/production/world', async (req, res) => res.type('html').send(await vite.transformIndexHtml(req.originalUrl, `<!doctype html><html lang="zh-CN"><head><meta charset="UTF-8"><title>3D 虚拟制片验收</title></head><body><div id="root"></div><script type="module" src="/@fs/${resolve('tests/fixtures/previs-browser.tsx')}"></script></body></html>`)));
+app.use(vite.middlewares);
+const port = Number(process.env.PREVIS_BROWSER_PORT || 4348);
+const server = app.listen(port, '127.0.0.1', () => console.log(`http://127.0.0.1:${port}/production/world?projectId=previs-browser`));
+for (const signal of ['SIGINT', 'SIGTERM'] as const) process.on(signal, () => { server.close(); void vite.close(); db.close(); process.exit(0); });

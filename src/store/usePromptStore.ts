@@ -1,4 +1,5 @@
-const retiredScriptPrompts = new Set(["interactiveWritingAuthoring","generateScenes", "generateInteractiveScenes", "expandScene", "regenerateScene", "rewriteScriptBlock", "polishScriptText", "generateInteractiveScript", "showDontTell", "parseScriptBlocks", "generateScript"]);
+import {templateBaselines,templateOverrides,retiredAssistantPrompts} from '../config/prompts/templatePreferences';
+const retiredScriptPrompts = new Set([...retiredAssistantPrompts,"generatePrompts","generateMultiGridPrompt","interactiveWritingAuthoring","generateScenes", "generateInteractiveScenes", "expandScene", "regenerateScene", "rewriteScriptBlock", "polishScriptText", "generateInteractiveScript", "showDontTell", "parseScriptBlocks", "generateScript"]);
 const activeTemplates = (templates: Record<string, PromptTemplate>) => Object.fromEntries(Object.entries(templates).filter(([id, template]) => template && !retiredScriptPrompts.has(id)));
 import { upgradeAppearanceTemplate } from "../config/prompts/appearanceContract";
 import { upgradeDirectorPlanTemplate } from "../config/prompts/directorPlanContract";
@@ -9,6 +10,8 @@ import { defaultTemplates, PromptTemplate } from '../config/prompts';
 import { upgradeScenePlanSourceContract } from '../config/prompts/scenePlanSourceContract';
 
 interface PromptStore {
+  baselineHashes:Record<string,string>;
+  builtinSelections: string[];
   templates: Record<string, PromptTemplate>;
   updateTemplate: (id: string, template: string) => void;
   resetTemplate: (id: string) => void;
@@ -18,8 +21,13 @@ export const usePromptStore = create<PromptStore>()(
   persist(
     (set) => ({
       templates: defaultTemplates,
+      builtinSelections: [],
+      baselineHashes:templateBaselines(defaultTemplates),
       updateTemplate: (id, template) =>
         set((state) => ({
+          builtinSelections: template === defaultTemplates[id]?.template
+            ? [...new Set([...state.builtinSelections, id])]
+            : state.builtinSelections.filter(item => item !== id),
           templates: {
             ...state.templates,
             [id]: { ...state.templates[id], template },
@@ -27,6 +35,7 @@ export const usePromptStore = create<PromptStore>()(
         })),
       resetTemplate: (id) =>
         set((state) => ({
+          builtinSelections: [...new Set([...state.builtinSelections, id])],
           templates: {
             ...state.templates,
             [id]: defaultTemplates[id],
@@ -35,22 +44,25 @@ export const usePromptStore = create<PromptStore>()(
     }),
     {
       name: 'omni-prompt-storage',
-      version: 65,
+      version: 67,
       merge: (persistedState: any, currentState: PromptStore) => {
         return {
           ...currentState,
           ...persistedState,
+          baselineHashes:templateBaselines(currentState.templates),
+          builtinSelections: Array.isArray(persistedState?.builtinSelections)
+            ? persistedState.builtinSelections.filter((id: unknown) => typeof id === 'string' && defaultTemplates[id] && !retiredScriptPrompts.has(id)) : [],
           templates: {
             ...currentState.templates,
-            ...activeTemplates(persistedState?.templates || {}),
-            planCharacterRoster: currentState.templates.planCharacterRoster,
-            planLocationRoster: currentState.templates.planLocationRoster,
-            planPropRoster: currentState.templates.planPropRoster,
+            ...activeTemplates(templateOverrides(currentState.templates,persistedState?.templates||{},persistedState?.baselineHashes||{})),
           },
         };
       },
       migrate: (persistedState: any, version: number) => {
         const state = persistedState as PromptStore;
+        // Old migrations may refresh shipped defaults, but cannot identify author
+        // text by storage version alone. Keep unknown/custom originals verbatim.
+        const authorOverrides = activeTemplates(templateOverrides(defaultTemplates, state.templates || {}, state.baselineHashes || {}));
         let newTemplates = { ...defaultTemplates, ...(state.templates || {}) };
         if (version < 64 && newTemplates.generateShots) {
           newTemplates.generateShots = { ...newTemplates.generateShots, template: upgradeDirectorPlanTemplate(newTemplates.generateShots.template) };
@@ -62,7 +74,10 @@ export const usePromptStore = create<PromptStore>()(
           for (const c of previous || '') fingerprint = Math.imul(fingerprint ^ c.charCodeAt(0), 16777619);
           // Only replace the shipped default. Author templates remain editable;
           // the task boundary is also included in currentProfile for legacy templates.
-          if (!previous || (fingerprint >>> 0) === 329721191) newTemplates.productionAssetCharacterProfile = defaultTemplates.productionAssetCharacterProfile;
+          if (!previous || (fingerprint >>> 0) === 329721191) {
+            newTemplates.productionAssetCharacterProfile = defaultTemplates.productionAssetCharacterProfile;
+            delete authorOverrides.productionAssetCharacterProfile;
+          }
         }
 
         if (version < 63 && newTemplates.generateShots) {
@@ -81,7 +96,10 @@ export const usePromptStore = create<PromptStore>()(
           for (const id of ['productionSimplePlan', 'productionSimpleReview']) {
             const current = defaultTemplates[id];
             const priorDefault = current.template.replace('【相邻场次原文，仅用于承接核对，不纳入本次输出】\n{{adjacentScenes}}\n', '');
-            if (!state.templates?.[id] || state.templates[id].template === priorDefault) newTemplates[id] = current;
+            if (!state.templates?.[id] || state.templates[id].template === priorDefault) {
+              newTemplates[id] = current;
+              delete authorOverrides[id];
+            }
           }
         }
 
@@ -171,9 +189,7 @@ export const usePromptStore = create<PromptStore>()(
 
         }
 
-        // Ensure these critical multi-step templates are always present
-        newTemplates['validateCharacters'] = defaultTemplates['validateCharacters'];
-        newTemplates['refineCharacters'] = defaultTemplates['refineCharacters'];
+        // Missing templates already inherit defaults above; never overwrite author edits.
 
         // Force update everything that changed
         if (version < 10) {
@@ -214,7 +230,7 @@ export const usePromptStore = create<PromptStore>()(
         if (version === 0) {
           for (const key in newTemplates) {
             if (newTemplates[key] && typeof newTemplates[key].template === 'string') {
-              newTemplates[key].template = newTemplates[key].template.replace(/\\n/g, '\n');
+              newTemplates[key] = { ...newTemplates[key], template: newTemplates[key].template.replace(/\\n/g, '\n') };
             }
           }
         }
@@ -225,7 +241,7 @@ export const usePromptStore = create<PromptStore>()(
         }
         return {
           ...state,
-          templates: activeTemplates(newTemplates),
+          templates: activeTemplates({ ...newTemplates, ...authorOverrides }),
         };
       },
     }

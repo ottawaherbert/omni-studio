@@ -30,6 +30,7 @@ import {
 
 export const OPERATOR_CORE_DOCUMENTS = [
   "README.md",
+  "doc/agent-guide.md",
   "doc/design.md",
   "doc/handoff.md",
 ] as const;
@@ -45,16 +46,18 @@ export const buildOperatorCapabilityManifest = () => {
         {
           id: "shot",
           role: "baseline",
-          requiredInputs: ["adopted_shot_first_frame", "videoPrompt"],
-          optionalInputs: ["asset_identity_board", "scene_asset_variant_pack"],
-          readiness: "confirmed shot plan, visual prompts, and shot QA",
+          requiredInputs: ["videoPrompt"],
+          optionalInputs: ["adopted_shot_first_frame", "asset_identity_board", "scene_asset_variant_pack", "character_voice_reference"],
+          inputRule: "Read the live generation capability: first_frame_video requires a single start frame; reference_video accepts its declared mix of images, videos and audio. A shot target does not imply I2V or a required first frame.",
+          readiness: "current visuals stage passed after actual media inspection; actual video inputs include its inspected images; no separate user approval round",
         },
         {
           id: "storyboard",
           role: "extension",
-          requiredInputs: ["adopted_composite_storyboard", "videoPrompt", "formal_asset_references"],
-          materializationRule: "Use the composite board and asset references to generate and adopt a target-specific first-frame Take before invoking a single-frame video provider.",
-          readiness: "confirmed composite storyboard structure, board visual, and storyboard QA",
+          requiredInputs: ["adopted_composite_storyboard", "videoPrompt"],
+          optionalInputs: ["formal_asset_references", "character_voice_reference"],
+          materializationRule: "For a reference_video capability accepting board_sequence, send only this unit's adopted board plus explicitly selected references. Only a first_frame_video provider requires an adopted target-specific first-frame Take; do not reduce all multimodal providers to I2V.",
+          readiness: "current visuals stage passed on the selected actual board/reference images; no separate user approval round",
         },
       ],
       providerInputContracts: [
@@ -149,21 +152,97 @@ export const buildOperatorCapabilityManifest = () => {
   const storyboardTemplateRendererSystem = buildStoryboardTemplateRendererSystem();
   const storyboardStrategyImpactSystem = buildStoryboardStrategyImpactSystem();
   return {
+  discovery: {
+    entry: 'GET /api/operator/handbook',
+    documents: 'GET /api/operator/documents; GET /api/operator/documents/:id',
+    instruction: 'Start with doc/agent-guide.md for the requested domain. Read only its relevant schemas and specialist guide. doc/design.md owns product rules; doc/handoff.md owns local project progress and is not a public API document.',
+    boundaries: 'Native scripts, projects, interactive experiences, generation tasks and previs worlds have separate owners and version contracts. Canonical batch stages below apply only when explicitly using the batch artifact workflow, not to every edit or native interactive project.',
+    productionBoundary: 'Production Agents may start/check the existing local service with npm run dev:fullstack and restart after checking process ownership and in-flight work; reuse an existing instance first. This does not authorize source/config changes. Default to production-only: system source, tests, dependencies, global prompts/skills and manuals are read-only. Author GLB, scene JSON and Blender/Three.js content scripts in an independent production directory; save works through business APIs. API or rendering defects go in the project handoff, not source patches. System changes require an explicit maintenance task. tools/production-workspace.mjs can launch a macOS child process with source writes denied and runtime data/Vite cache exceptions; ordinary desktop sessions are not automatically sandboxed.',
+    examples: 'GET /api/operator/documents/production-examples provides scoped positive/negative set and background-staging examples, source and actual renders. Examples are local set studies, not a finished city or a substitute for project-specific inspection.',
+  },
+  interactiveWorkspace: {
+    basePath: '/api/interactive/experiences',
+    guide: 'doc/agent-guide.md#7-互动影游',
+    schema: 'GET /api/operator/documents/interactive-schema',
+    commands: ['GET /', 'POST /', 'GET /:id', 'PUT /:id/details', 'PUT /:id/experience-spec', 'PUT /:id/story-architecture', 'PUT /:id/state-schema', 'PUT /:id/graph', 'PUT /:id/graph-layout', 'PUT /:id/story-source', 'GET /:id/writing-scenes', 'PUT /:id/bindings/script', 'PUT /:id/bindings', 'PUT /:id/bindings/batch', 'POST /:id/structure-preview-build', 'POST /:id/production-preparation', 'GET /:id/production-prep', 'POST /:id/production-prep', 'POST /:id/production-plan', 'POST /:id/production-plan/:planId/adopt', 'GET /:id/production-media?nodeId=...', 'POST /:id/runtime-build', 'GET /:id/runtime-export', 'GET /:id/authoring-status'],
+    policy: 'External Agents may author native documents directly without model calls. PUT graph uses nodes[].choices; the server persists transitions and derives choices on full GET. Do not submit transitions-only or whiteboard projections as save payloads. Read current versions; bind exact writing/media references. Structure preview is not a final media build. episode.gameData is legacy and not the owner of new experiences.',
+  },
+  productionWorkspace: {
+    basePath: '/api/projects',
+    guide: 'doc/agent-guide.md#4-制片导入资产场次与分镜',
+    commands: ['GET /', 'POST /', 'GET /:id', 'PATCH /:id', 'PUT /:id', 'GET /:id/episodes/:episodeId', 'PUT /:id/episodes/:episodeId', 'PATCH /:id/episodes/:episodeId/scenes/:sceneId', 'PATCH /:id/episodes/:episodeId/scenes/:sceneId/shots/:shotId', 'PATCH /:id/episodes/:episodeId/scenes/:sceneId/storyboard-units/:unitId', 'GET /:id/episodes/:episodeId/scenes/:sceneId/collaboration', 'PATCH /:id/episodes/:episodeId/scenes/:sceneId/collaboration', 'PATCH /:id/episodes/:episodeId/scenes/:sceneId/edit', 'PATCH /:id/assets/:assetId/production-use'],
+    policy: 'Prefer scoped scene/shot/collaboration/edit and asset-use PATCH tools: submit only intended changes, no manual revision fields. Server reads current state inside a short transaction, preserves unrelated work and archives replaced shots. Scene edit operations split/trim/move/duplicate/remove/transition/replace operate pinned clips, never duplicate narrative shots. Read collaboration for saved observations, bounded work records and a read-only actual media outcome index. Ordinary planning makes one model call; strict batch QA is optional, while current production quality stage dependencies apply to formal progression. Legacy POST/PUT use native Project, episode PUT uses native Episode with current productionRevision. Lists and shell projections are not full snapshots. Metadata PATCH has no general CAS. Writing delivery can be transformed by the existing local pure adapter; no standalone delivery import HTTP route exists.',
+  },
+  writingWorkspace: {
+    basePath: '/api/scripts',
+    currentProject: 'GET /api/scripts/:id; PUT /api/scripts/:id with {project,expectedRevision}. Never write SQLite directly.',
+    task: 'POST /api/scripts/:id/jobs with {unitId,sceneId,operation,prompt,expectedRevision,methodIds,methodVersions}; use actual stable IDs, explicit scopeId/seasonId/unitIndices where applicable. Starting a job never calls a model.',
+    outlineScope: 'Use outline/story_outline/season_outline/unit_outline for the actual owner. Full replacements return {summary,outline}. Local edits supply outlineRange:{start,end,text} and outlineBeatIds when editing beats, then return OUTLINE_RANGE_CONTRACT {summary,content,nodes:null,beats}. The server freezes the owner/range and preserves outside text, selected beat IDs, unit membership and scene links; never send a local edit as a full outline replacement. Read the owner original in outlineTaskContext before prompting.',
+    reviewScope: 'reviewSceneIds selects up to 30 scenes in the declared unit; supply those scene bodies and report only on that scope. Other scene summaries are context, not reviewed bodies. plan may use sceneId=unitId for a unit-level anchor, including non-active and empty units; adoption only adds new scenes.',
+    returnResult: 'POST /api/scripts/:id/jobs/:jobId/result with {rawResult,provenance:{source:manual_external,provider,modelId}}; GET jobs/:jobId to inspect validation and candidates; POST jobs/:jobId/approve with choiceIndex for choice proposals. Adopt only within user-authorized scope.',
+    export: 'GET /api/scripts/:id/export?format=json|markdown|fountain; GET /api/scripts/:id/delivery',
+    templates: 'GET /api/prompts/scriptAssist for task wrapper. The operation-specific JSON contracts are in packages/script/src/taskContracts.ts; they are content contracts, not an internal assistant.',
+    retired: 'No internal chat or autonomous writing runtime. Old jobs marked readOnly cannot execute or adopt. GET /api/script-archives lists paginated historical exports; current works and media remain untouched.',
+  },
+  productionQuality: {
+    basePath: '/api/operator/quality', uiBasePath: '/api/production/quality',
+    guide: 'doc/production-quality-workflow.md', schema: 'GET /api/operator/documents/domain-productionQuality',
+    stages: ['project_plan', 'scene_plan', 'shot_plan', 'preparation', 'visuals', 'segments', 'scene_cut', 'episode_cut'],
+    responsibility: 'Director owns overall creative coherence; coordinator owns scope, dependencies and bounded progress. Professionals perform actual checks. One person or external agent may hold multiple roles; no internal autonomous multi-agent orchestration and no eight user-approval rounds.',
+    commands: ['GET /status?target=<JSON>', 'PUT /projects/:id/responsibility', 'POST /inspections', 'GET /inspections/:id', 'POST /inspections/:id/review', 'POST /deliveries'],
+    inspection: 'POST /inspections {target,stage,evidence?} freezes current content and actual media; visuals/segments default to current adopted media. Scene/episode cuts require actual review video evidence. Inspect snapshot, images, video and sound, then POST /inspections/:id/review {verdict,findings:[{check,passed,note}],reviewerName}. Every criterion needs an explicit decision and actual observation; never default pass or fake creator approval. Code cannot prove honest viewing or creative quality.',
+    progression: 'Overall project/scene before shot split, then preparation, group visuals, actual video/sound, whole scene, whole episode. Missing, failed or stale checks block dependent formal generation, not draft edits or failure preservation. Preflight, submit, dispatch and imports recheck applicable prerequisites. Selected previs must actually be sent for the target composition; videos must use visuals-inspected images. Scratch is experimental and cannot directly adopt into formal work.',
+    changes: 'Invalidate only relevant source checks; preserve old content, candidates and in-flight tasks. No manual technical-version management, no automatic re-generation or retrospective passes. Use productionWorkingAgreement/workRecords limits; stop the failed scope and dependencies at the limit, continue unaffected work.',
+    delivery: 'Asset composition exports are unreviewed previews. POST /deliveries {inspectionId} returns the exact currently passed whole-cut media without re-encoding another file; episode delivery requires episode_cut, scene-only delivery uses scene_cut.',
+    sound: 'Speech, Gemini AUDIO and custom BGM require explicit purpose: production plus target {projectId,episodeId,sceneId,shotIds?} checks preparation before calling the provider; preview is audition/experiment without target. Gemini TTS does not automatically repost on failure. Segment inspection includes current unmuted independent sound and actual video source-range coverage.',
+  },
+  generationWorkbench: {
+    basePath: '/api/operator/generation',
+    capabilities: 'GET /api/operator/generation/capabilities',
+    workspace: 'GET /api/operator/generation/workspaces/current?target=<JSON target>',
+    context: 'GET /api/operator/generation/context?target=<JSON target>',
+    characterReferenceLayouts: 'All new clean character sheets use body_face, stored per character/state in characterReferenceLayouts.body_face. Standard generation templates and selection are retired; historical media and fields are retained. Legacy generic clean character targets also generate body_face. Read buildVideoStoryboardAssetBoardPlan(project).characterReferenceBoards for stable asset targets. body_face: three headless body/clothing views plus one complete face close-up; body regions constrain costume/proportions and face region constrains identity. Story frames still require a complete head. Saving a candidate does not adopt; use ordinary candidate review. Actual adopted state references and duties feed generation; body_face is character_identity only, never a first frame. Legacy sheets are retained; no bulk regeneration or model quality guarantee.',
+    locationSpatialAnchor: 'Asset and AssetVariant locationSpatialAnchor stores layout and cameras keyed by main/reverse/oblique/top, each with position and lookAt. State fields inherit base values unless overridden. Explicit directions and fixed landmarks feed current image prompts, storyboard references and source checks; do not infer compass directions from screen left/right. Start with a main and complementary angle; add views only as shots need them. No compulsory four-image batch.',
+    locationViews: 'Location assets and their state variants keep independent reverse/oblique/top images in locationViews; main uses the existing clean reference. Read buildVideoStoryboardAssetBoardPlan(project).sceneViewBoards for stable board IDs and use ordinary asset targets/candidate review. Reverse and oblique require the same-state main; top requires main+reverse+oblique. Shot PATCH locationReferenceViews accepts main/reverse/oblique/top. Selected missing/stale inputs or insufficient capacity block image preflight; top is environment layout only, never a first frame. Video still uses reviewed storyboards. No 3D dependency or automatic generation.',
+    storyboardUnits: 'Save one authored unit via productionWorkspace storyboard-units PATCH with ordered shotIds and board.panels (shotId, durationSeconds, framePurpose, subjectAction/visualBeat). Read back stable board/page/video-unit IDs. Preserve existing media and other units; no client revision or adoption fields. Use distinct board/page targets for per-unit joint grids; scene overview is not a multi-unit storage slot.',
+    referenceStaging: 'Comfy services stage one reference task per shared pool while GPU jobs run at configured concurrency. Successful uploads survive finite pre-POST recovery; content filenames avoid cross-task collisions. Expired pre-POST leases recover on ticks; uncertain POSTs never replay.',
+    sceneStoryboard: 'target.kind=scene with explicit shotIds; no video unit required. Edit storyboardLayout columns/rows/shotIds; repeated shot IDs represent keyframes, blank cells may trail.',
+    mediaReferences: 'sourceShotIds and derivedFrom describe provenance; role controls destination use. Use extract_frame with framePosition=end or time and frameTimeSeconds. Do not assume extracted frames must be first_frame.',
+    assetPurpose: 'Asset type, reference purpose and layout are separate. Choose target.referenceMode clean_reference for usable generation inputs or production_board for design review; do not generate both by default. Character reference defaults to front/side/back plus face, not eight expressions. Props need views of actual story-critical structure, not mandatory four columns. Existing images, custom briefs and frozen plans remain. Record per-reference role/usageNote: identity, environment, composition, motion and board_sequence must not silently contradict one another.',
+    h3Multimodal: 'Use live recipes without supersededBy for new work. referenceAdapter=h3_multimodal_v1 expands native H3 reference conditioning while retaining the source model, LoRA, SelfLift sampling and upscaler. Select any supported mix of image/video/audio; example slot counts are not model limits. usageNote describes the intended subject/effect. Character voice references carry sourceCharacterId. voice_timbre is identity only; full_dialogue is dialogue/performance reference, not guaranteed waveform reuse. Video soundtrack is not implicitly sent. Preflight generates per-modality Picture/Video/Audio tags from the exact enabled input order. New combinations are compiled, not service/creative verified; pause and workflow policies still apply. Old recipes remain available for old tasks and frozen plans.',
+    externalResults: 'POST /imports with planRevisionId, mediaUrl, commandId checks current quality prerequisites and registers a measured candidate, never automatically adopts or invokes a provider.',
+    adoptionBoundary: 'POST /executions/:id/review with resultId, verdict, notes and optional observations after inspecting actual media. No manual revision or hash fields are required; if legacy callers send them, mismatches are still rejected. Server assigns reviewer=external_agent; technical/source/CAS checks and history remain. PATCH /projects/:id/policy allows only {patch:{allowExperimental:boolean},expectedRevision,notes} for an authorized project experiment, with external audit. Other policy fields return 403. Never bypass human locks, pauses, quality dependencies or write adoption pointers directly.',
+    commands: ['GET /context', 'POST /imports', 'POST /references', 'POST /executions/:id/register-results', 'POST /executions/:id/review', 'POST /tasks', 'PATCH /tasks/:id', 'POST /tasks/:id/proposals', 'POST /tasks/:id/apply-proposal', 'POST /tasks/:id/preflight', 'POST /executions', 'POST /batches', 'GET /executions/:id', 'POST /executions/:id/reconcile', 'POST /executions/:id/cancel', 'POST /executions/:id/associate', 'POST /queue'],
+    policy: 'Submit a frozen plan directly with planRevisionId, planHash and idempotencyKey. No grantId, media/service authorization form, attempt quota or budget confirmation is required. Do not request a grant or ask the user to run an authorization command. Agent cannot unpause generation, overwrite human locks or adopt results as creator. Query unknown submissions; never blindly repost. Canvas position never changes production order. Formal execution additionally requires current productionQuality stage checks; scratch experiments cannot bypass formal adoption checks.',
+  },
+  virtualProduction: {
+    status: 'optional_advanced_tools', basePath: '/api/operator/previs', guide: 'doc/virtual-production.md',
+    worldQuality: 'Read doc/virtual-studio-library-design.md world-building correction before construction. Build a coherent whole-drama environment: terrain, road and pedestrian networks, parcels, varied functional facilities, public spaces, neighboring fabric and skyline, appropriate to the script and era. Existing inn/lab samples are building components, NOT complete studios. Save worldBrief and gaps; assign location spaceId, usage and detailTier. Same physical space and explicit physical connections retain surrounding and horizon geometry for shots. Inspect actual aerial/street/reverse/corner/interior-exterior/high-camera views and a route before claiming a world complete. A repeated-building performance test is not creative acceptance.',
+    library: 'GET /library/studios and /library/studios/:id?revision=N return immutable plans/models and known gaps. POST /library/district installs the reusable modern Qingshui neighborhood, not a mandatory world template. POST /library/studios/:id/previews {revision} renders actual saved viewpoints; GET that path with ?revision=N returns PNG URLs and notes. Inspect these images, not merely JSON. POST /library/samples installs building components only. POST /library/models accepts embedded GLB (model/gltf-binary, name/license query); source kept, non-metal untextured runtime LODs generated in a worker. POST /library/studios publishes {id,expectedRevision,commandId,name,description,tags,license,plan}; clear project-specific asset/scene bindings first. Compose into project world with fixed instance references and shared model manifests. Do not imply component assembly is an accepted district.',
+    world: 'GET /:projectId reads the persistent whole-drama world and current script context. PUT /:projectId with {plan,expectedRevision} extends that world. Reuse location IDs across episodes; never rebuild fixed sets per shot. No internal AI orchestration is required. Prefer scoped PATCH /:projectId with locations/objects/viewpoints/routes/connections upserts keyed by id and optional worldBrief/title/description: omitted items remain, no manual save stamps. Build/apply tasks also manage their own save protection.',
+    building: 'GET /build-contract provides declarative world-blueprint format, component catalog, coordinates and limits. GET /:projectId/build-options lists configured text models. POST /:projectId/builds {commandId,mode:api|external,modelId?,sourceTaskId?,instructions} freezes the full script and existing world. Human AI Build button uses this same task. Optional sourceTaskId refines an unapplied candidate or failed return without applying it; source must still match the current script/world. GET /:projectId/builds lists history; GET /:projectId/builds/:id returns prompt, state, candidate and sourceCurrent. External agents POST /:id/result {rawResult:JSON string}; API mode calls the selected text model once, then uses the same compiler. Use existing model IDs, kit:component, or bounded declarative modelRecipes; never execute generated JavaScript. Add/modify stable IDs while preserving omitted old entities. GET/POST /:id/previews renders actual candidate inspection PNGs without publishing or adopting. GET /:id/returns retains raw return attempts. POST /:id/apply saves through normal world validation/CAS and rejects changed script or world. Readiness is not visual acceptance; coarsely inspect representative actual views within the project working agreement. Provisional use is not human final approval. Failed/interrupted tasks never silently retry.',
+    contactQuality: 'Unintended interpenetration fails creative acceptance. Follow project.productionWorkingAgreement for coarse-review scope and bounded major-fix attempts; unresolved failures go to the author, never an endless repair loop. Static references need relevant actual camera views; dynamic references need relevant motion checks, not endpoint-only checks. Use transformed geometry and actual support surfaces, never a world-Y=0 shortcut or camera changes to hide known errors. Do not use a known failed reference downstream; continue unaffected work. Legitimate structural joints are not collisions. POST /:projectId/checks {scope:world|scene|episode|project,episodeId?,sceneId?,shotIds?,objectIds?,fps:12|24|48} freezes the saved content; GET /checks/:id returns current-source status and persisted actual-mesh findings by object/part/shot/time. Errors and incomplete checks cannot be called passed. Dynamic sampling adapts up to240Hz; no rigid-body solver or navigation. Full current scene failures block affected previs references in generation preflight and execution.',
+    staging: 'GET /:projectId/:episodeId/:sceneId; PUT with {plan,expectedRevision,expectedEpisodeRevision,expectedWorldRevision}. plan.locationId references the project world; matching nonempty location.spaceId includes its physical surroundings automatically. includedLocationIds adds explicitly chosen other zones. Physical connection edges also preserve connected surroundings; narrative edges do not. Missing spaceId and physical links keeps legacy local-only behavior. parentId organizes places without changing world coordinates. viewpoints/routes preserve reusable local-camera inspections. pivot defines a local rotation hinge; actor.grounding optionally follows actual surfaces within maxStep (default authored height); seatHeight sets seat top above the support. State leftHand/rightHand are actor-local metre targets; leftElbow/rightElbow are bend-direction vectors; leftHandRotation/rightHandRotation use radians. Legacy arm angles remain supported without targets. Scene props may attach to actor leftHand/rightHand/waist sockets. State attachment overrides the base binding; null releases to scene coordinates. At a binding change preserve the world transform, then animate in the new space. Do not interpolate position across different binding spaces. Keyframes bind stable shotId/timeInShot, camera and object states; characters and props retain assetId. World layout is separate from per-scene event state. Prefer PATCH with only changed locationId/includedLocationIds/light and objects/frames entries keyed by id; the server merges camera and states and manages save stamps internally.',
+    images: 'POST /:projectId/:episodeId/:sceneId/exports with {expectedRevision,frameIds,columns,sourceHash,imageUrl,commandId}. The browser Three.js renderer produces real PNGs. Single frame, arbitrary grid and video are independent tools, not required workflow stages.',
+    video: 'POST /:projectId/videos with {scope:scene|episode|project,episodeId?,sceneId?,shotIds?,fps:12|24}. Read the frozen timeline, render deterministic Three.js frames, POST /:projectId/videos/:id/frames {start,images:[JPEG data URLs]} (up to 12), then /finish for measured MP4. GET the job resumes from receivedFrames. POST /:projectId/videos/:id/capture starts the server-owned local Chrome renderer; GET /capture reports status. It continues after UI closure and resumes persisted frames. POST /capture/pause pauses after the current batch; POST /capture resumes. Scene exports freeze LOD along the camera path. UI foreground rendering remains available. Complete episode/project export reports missing shot plans instead of skipping them.',
+    generation: 'Whitebox outputs are optional composition/motion references with exact source scope; never label them final approved AI storyboards. Retain independent identity/environment/prop references. Existing generation preflight checks provider capacity, user pauses and YZ H3 core. Full previs can exceed 14s; H3 input units still cannot. Changes to relevant locations/frames invalidate dependent references, not unrelated ordinary tasks.',
+  },
   handbookVersion: OPERATOR_HANDBOOK_VERSION,
   operationPolicy: {
-    mode: "backend_api_only",
-    instruction: "AI Operator must operate O.M.N.I. through backend APIs and persisted storage, not browser clicks.",
-    browserUsage: "optional_human_visual_inspection_only",
-    browserBoundary: "Browser inspection can verify that persisted results are visible, but it is not an execution channel.",
+    mode: "business_api_preferred",
+    instruction: "Prefer documented business APIs for reliable writes. Read project.productionWorkingAgreement (also returned by generation/context and workspace); ask once at project kickoff for missing candidate counts, coarse-review passes, major-fix limits and provisional selection preferences. Never hardcode two candidates or restart review loops; hand remaining issues to the human and continue unaffected work. For production timing read generation/context.timingReview and preflight plan.timingReview/issues: duration is revisable editorial time; editingNote holds timing/cut basis, motivation holds purpose. Equal lengths are review hints, not automatic failure. Provider padding is not narrative duration; described notes are not creative acceptance. UI operation is supported when needed; never bypass version, provenance, pause or adoption contracts with direct database writes.",
+    browserUsage: "inspection_and_domain_ui",
+    browserBoundary: "Use the same domain operations through UI or API. Perform only the agreed coarse review; hand off creative acceptance to the human without claiming approval.",
   },
   premiumProductionSystem: {
-    mission: "Treat every Operator run as commercial-grade production work, not a demo or schema-fill exercise.",
-    primarySuccessMetric: "The persisted work should be coherent, emotionally forceful, format-aware, and plausibly monetizable for its target audience/platform.",
-    executionPrinciple: "Build the skeleton before details, refresh structured memory before every generation step, and let role-specific QA challenge the work before commit.",
+    scope: "optional_planning_dimensions; qualityLadder.requiredBefore and qaCouncil apply only when the author explicitly chooses strict batch QA; productionQuality dependencies apply to ordinary formal production",
+    mission: "Match the actual creative brief. These are optional quality dimensions, not required commercial or genre formulas.",
+    primarySuccessMetric: "The persisted work should be coherent, emotionally forceful, format-aware, and appropriate to its audience and intended format.",
+    executionPrinciple: "Build the skeleton before details. Ordinary production follows the author-agreed candidate count and bounded coarse-review/fix rounds; final creative review belongs to the human. Reuse unchanged context and completed checks. Role QA councils are optional explicit batch tools, not an ordinary production prerequisite.",
     qualityLadder: [
       {
         id: "commercial_brief",
-        purpose: "Define target audience, platform fit, monetization hook, differentiating promise, cost boundary, and why the work deserves to be made.",
+        purpose: "Define audience, intended experience, format and production constraints; monetization only when the brief requires it.",
         requiredBefore: ["intake", "concept", "bible", "structure"],
       },
       {
@@ -178,7 +257,7 @@ export const buildOperatorCapabilityManifest = () => {
       },
       {
         id: "episode_value_plan",
-        purpose: "For each episode, define first-three-second hook, scene value turns, emotional escalation, paid/retention hook, and next-episode pull.",
+        purpose: "Plan episode rhythm and payoff appropriate to the format; three-second hooks, payment points and cliffhangers are optional commercial brief choices.",
         requiredBefore: ["script", "storyboard"],
       },
       {
@@ -188,7 +267,7 @@ export const buildOperatorCapabilityManifest = () => {
       },
       {
         id: "shot_continuity_plan",
-        purpose: "For each shot sequence, verify eyeline, match-on-action, prop flow, screen direction, duration math, vertical readability, and imagePrompt specificity.",
+        purpose: "Review motivated cuts, state and visual coherence, duration and actual aspect ratio; use eyeline and match-on-action only where relevant.",
         requiredBefore: ["prompt", "expensive_generation_planning"],
       },
     ],
@@ -205,15 +284,15 @@ export const buildOperatorCapabilityManifest = () => {
       "head_writer_qa: protects story causality, promise/payoff, theme, and escalation",
       "character_editor_qa: protects motivation, voice, relationship change, and emotional truth",
       "continuity_script_supervisor_qa: protects timeline, state, props, location damage, eyeline, and match-on-action",
-      "director_storyboard_qa: protects camera motivation, spatial clarity, duration, rhythm, and vertical frame readability",
-      "operator_governance_qa: protects no hardcoding, no browser operations, no hidden failures, and no chat-memory-as-fact",
+      "director_storyboard_qa: protects camera motivation, spatial clarity, duration, rhythm, and readability in the project aspect ratio",
+      "operator_governance_qa: protects no hardcoding, no direct database bypass, no hidden failures, and no chat-memory-as-fact",
     ],
     antiDemoRules: [
       "Do not treat full schemas, green tests, or episode counts as proof of a good work.",
-      "Do not repair a project by editing generated data to satisfy personal taste; fix general prompts, QA, schema, or workflow when a repeatable issue appears.",
+      "Production agents may repair work content only within the agreed major-fix scope. Record suspected system defects for maintenance; never modify system source, global prompts, QA, schemas or workflows without a separate explicit maintenance request.",
       "Do not overfit to one title, episode, role name, or test fixture.",
-      "When repeated QA warnings appear across episodes, summarize the systemic cause before applying repairs.",
-      "One deep episode audit is allowed to expose quality classes; batch-level checks are required to protect generalization.",
+      "Repeated nonblocking warnings do not justify repeated review or repair. Record the observation once; fix only obvious major work problems within the agreed limit.",
+      "Deep audits and batch-level checks require an explicit request for that scope; ordinary production stops at the agreed coarse-review limit and hands fine review to the author.",
     ],
   },
   longFormMemorySystem: {
@@ -305,14 +384,24 @@ export const buildOperatorCapabilityManifest = () => {
     ],
     requiredUpdateTargets: [
       "OPERATOR_HANDBOOK_VERSION",
+      "doc/agent-guide.md",
       "doc/design.md",
       "doc/handoff.md",
       "production self-check assertions",
       "operator E2E self-check when the operation contract changes",
     ],
-    documentationPolicy: "Keep only core docs as the active source of truth. Merge temporary findings into core docs, then delete the temporary file.",
+    documentationPolicy: "agent-guide owns operating procedures; design owns product rules; local handoff owns project progress. Specialist guides and native schemas own their detailed contracts. Link to the owner instead of copying fields, project-specific pauses or historical instructions into multiple guides.",
   },
   apiGroups: [
+    {
+      id: "production-quality",
+      purpose: "current actual-content inspections, overall creative responsibility and reviewed cut delivery",
+      routes: [
+        "GET /api/operator/quality/status", "PUT /api/operator/quality/projects/:id/responsibility",
+        "POST /api/operator/quality/inspections", "GET /api/operator/quality/inspections/:id",
+        "POST /api/operator/quality/inspections/:id/review", "POST /api/operator/quality/deliveries",
+      ],
+    },
     {
       id: "system",
       purpose: "health, runtime feedback, maintenance",
@@ -340,7 +429,7 @@ export const buildOperatorCapabilityManifest = () => {
     },
     {
       id: "project-authority",
-      purpose: "project, episode, scene, shot, interactive gameData authority tree",
+      purpose: "production project, episode, scene and shot authority; interactive experiences use their native domain API",
       routes: [
         "GET /api/projects",
         "POST /api/projects",
@@ -355,7 +444,7 @@ export const buildOperatorCapabilityManifest = () => {
     },
     {
       id: "production-audit",
-      purpose: "traditional page mode and AutoStudio audit trail",
+      purpose: "optional production audit records shared by UI and external Operators",
       routes: [
         "GET /api/production-runs",
         "GET /api/production-runs/:runId",
@@ -428,7 +517,7 @@ export const buildOperatorCapabilityManifest = () => {
     },
     {
       id: "model-proxy",
-      purpose: "traditional mode model provider calls; optional for Operator mode",
+      purpose: "provider adapters and historical status queries; new image/video submissions require the generation fixed-plan API, not direct proxy POST",
       routes: [
         "POST /api/proxy/doubao",
         "POST /api/proxy/minimax",
@@ -501,7 +590,9 @@ export const buildOperatorCapabilityManifest = () => {
     {
       id: "interactive-game",
       formats: ["interactive-fmv-game"],
-      coverage: "covered_by_operator_api",
+      coverage: "legacy_batch_projection_only",
+      currentWorkspace: "/api/interactive/experiences",
+      instruction: "The artifacts below belong to legacy batch projections. New interactive works use interactiveWorkspace and its graph/binding/runtime contracts.",
       stages: [
         ...workflowOrderSystem.interactive.canonicalStages.map((stage) => stage.stageType),
       ],
@@ -591,7 +682,7 @@ export const buildOperatorCapabilityManifest = () => {
         "style_reference_analysis",
         "visual_style_lock_candidate",
       ],
-      qaChecks: ["source-governance via production self-check", "operator full QA after routing into a project"],
+      qaChecks: ["source-governance via production self-check", "coarse review under the project working agreement; full operator QA only for explicitly selected batch workflows"],
     },
   ],
   intentionallyOutOfScope: [

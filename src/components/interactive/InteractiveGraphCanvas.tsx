@@ -1,19 +1,15 @@
 import { memo, useEffect, useMemo, useRef, useState } from 'react';
 import {
   applyNodeChanges,
-  Background,
   Connection,
-  Controls,
   Edge,
   MarkerType,
-  MiniMap,
   Node,
   NodeChange,
-  ReactFlow,
   ReactFlowProvider,
   useReactFlow,
 } from '@xyflow/react';
-import '@xyflow/react/dist/style.css';
+import { InfiniteCanvas } from '../canvas/InfiniteCanvas';
 
 import type { GraphLayoutRevision, NarrativeGraphVersion, NarrativeNode, NodeContentBinding } from '../../clients/interactiveProductionClient';
 import { bindingMediaTakeRefs, bindingScriptSceneRefs } from '../../domains/interactive/binding/nodeContentBinding';
@@ -264,7 +260,7 @@ function InnerCanvas({
           </div>
         </div>
       )}
-      <ReactFlow
+      <InfiniteCanvas
         nodes={nodes}
         edges={edges}
         nodeTypes={nodeTypes}
@@ -280,17 +276,7 @@ function InnerCanvas({
         fitViewOptions={{ padding: 0.3 }}
         proOptions={{ hideAttribution: true }}
         colorMode={isDark ? 'dark' : 'light'}
-      >
-        <Background gap={24} size={1.5} color={isDark ? 'rgba(255,255,255,0.08)' : 'rgba(0,0,0,0.12)'} />
-        <Controls className="!bottom-12 !border-border-soft/40 !bg-bg-surface/90 dark:!bg-neutral-900/90 !text-text-primary !rounded-2xl !shadow-xl overflow-hidden" showInteractive={false} />
-        <MiniMap
-          zoomable
-          pannable
-          className="!bottom-12 !hidden !border !border-border-soft/40 !bg-bg-surface/90 dark:!bg-neutral-900/90 !rounded-2xl overflow-hidden !shadow-2xl sm:!block cursor-pointer"
-          nodeColor={() => '#00cae0'}
-          maskColor={isDark ? 'rgba(15,15,18,0.75)' : 'rgba(245,247,251,0.75)'}
-        />
-      </ReactFlow>
+      />
     </div>
   );
 }

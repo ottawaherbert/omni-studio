@@ -40,6 +40,21 @@ const withQuery = (url: string, query: object) => {
 };
 
 export const productionClient = {
+  editScene: (projectId:string,episodeId:string,sceneId:string,patch:object) =>
+    fetch(`${projectEpisodePath(projectId,episodeId)}/scenes/${encodeURIComponent(sceneId)}`,{method:'PATCH',headers:{'Content-Type':'application/json'},body:JSON.stringify(patch)}).then(response=>parseProductionResponse<ProductionEpisodeDTO>(response)),
+  editShot: (projectId:string,episodeId:string,sceneId:string,shotId:string,patch:object) =>
+    fetch(`${projectEpisodePath(projectId,episodeId)}/scenes/${encodeURIComponent(sceneId)}/shots/${encodeURIComponent(shotId)}`,{method:'PATCH',headers:{'Content-Type':'application/json'},body:JSON.stringify(patch)}).then(response=>parseProductionResponse<ProductionEpisodeDTO>(response)),
+  saveSceneCollaboration: (projectId: string, episodeId: string, sceneId: string, patch: import("../../../../packages/domain/src/productionCollaboration").CollaborationPatch) =>
+    fetch(`${projectEpisodePath(projectId,episodeId)}/scenes/${encodeURIComponent(sceneId)}/collaboration`, {method:'PATCH',headers:{'Content-Type':'application/json'},body:JSON.stringify(patch)}).then(response=>parseProductionResponse<ProductionEpisodeDTO>(response)),
+  editSceneClips: (projectId: string, episodeId: string, sceneId: string, edit: object) =>
+    fetch(`${projectEpisodePath(projectId,episodeId)}/scenes/${encodeURIComponent(sceneId)}/edit`, {method:'PATCH',headers:{'Content-Type':'application/json'},body:JSON.stringify(edit)}).then(response=>parseProductionResponse<ProductionEpisodeDTO>(response)),
+  saveAssetProductionUse: (projectId: string, assetId: string, use: import("../../../../packages/domain/src/productionCollaboration").AssetProductionUse) =>
+    fetch(`/api/projects/${encodeURIComponent(projectId)}/assets/${encodeURIComponent(assetId)}/production-use`,{method:'PATCH',headers:{'Content-Type':'application/json'},body:JSON.stringify(use)}).then(response=>parseProductionResponse<{assetId:string;productionUse:import("../../../../packages/domain/src/productionCollaboration").AssetProductionUse}>(response)),
+  saveSceneDirection: (projectId: string, episodeId: string, sceneId: string, brief: { intent: string; rhythm: string }) =>
+    fetch(`${projectEpisodePath(projectId, episodeId)}/scenes/${encodeURIComponent(sceneId)}/director-plan`, {
+      method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(brief),
+    }).then(response => parseProductionResponse<ProductionEpisodeDTO>(response)),
+
   listRuns: (projectId?: string) =>
     fetch(withQuery(productionRunPath(), { projectId })).then((response) =>
       parseProductionResponse<ProductionRunDTO[]>(response),

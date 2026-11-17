@@ -10,7 +10,6 @@ import { createScriptDelivery, exportText } from '../packages/script/src/exporte
 import { blocksToScreenplayText, replaceScreenplaySelection, screenplayTextToBlocks, screenplayBlockTextRanges } from '../packages/script/src/fountainAdapter';
 import { createLegacyProductionProjectFromWritingSource, createLegacyProductionProjectFromWritingExport } from '../src/services/production/writingExportLegacyAdapter';
 import { createInteractiveWritingPort } from '../src/server/interactiveWritingPort';
-import { selectionBlockIds } from '../packages/script/src/agentScope';
 import { bodyEvidenceSelection } from '../apps/web/src/features/script/scriptAnalysisNavigation';
 import { productionWritingUnitSourceContext } from '../src/services/production/writingSourceContext';
 import { productionBreakdownCanonicalAssetContext } from '../src/services/production/manualSceneBreakdown';
@@ -54,31 +53,6 @@ test('v2 交付保留明确规格、确认资料和对白组，两个制片入�
   const old = {...delivery,schemaVersion:'script-delivery.v1' as const};
   delete old.aspectRatio; delete old.language; delete old.productionMethod; delete old.authorRequirements;
   assert.equal(createLegacyProductionProjectFromWritingSource({package:old,productionProjectId:'old',importId:'old'}).aspectRatio, '16:9');
-});
-
-test('人物括号对白经 Fountain 实际解析保持归属，局部改写保留旁侧块', () => {
-  const p=project();
-  p.units[0].scenes[0].location='房间';
-  p.units[0].scenes[0].blocks=[
-    {id:'before',type:'action',text:'门关上。'},
-    {id:'parenthetical',type:'parenthetical',text:'低声'},
-    {id:'dialogue',type:'dialogue',speakerName:'阿明',text:'别出声。'},
-    {id:'after',type:'action',text:'灯灭了。'},
-  ];
-  const text=blocksToScreenplayText(p.units[0].scenes[0].blocks);
-  assert.match(text,/阿明\n\(低声\)\n别出声。/);
-  const parsed=new fountain.Fountain().parse(exportText(p,'fountain'),true).tokens;
-  const character=parsed.findIndex(token=>token.type==='character'&&token.text==='阿明');
-  assert.deepEqual(parsed.slice(character,character+3).map(token=>token.type),['character','parenthetical','dialogue']);
-  assert.equal(parsed.some(token=>token.type==='action'&&token.text==='(低声)'),false);
-  const start=text.indexOf('别出声。');
-  assert.deepEqual(selectionBlockIds(p,p.units[0].id,p.units[0].scenes[0].id,{start,end:start+4,text:'别出声。'}),['dialogue']);
-  assert.equal(bodyEvidenceSelection(p.units[0].scenes[0].blocks,[],{blockId:'dialogue',quote:'别出声。'})?.start,start);
-  const edited=replaceScreenplaySelection(p.units[0].scenes[0].blocks,[],{start,end:start+4,text:'别出声。'},'别开门。');
-  assert.equal(edited[0].id,'before');
-  assert.equal(edited.at(-1)?.id,'after');
-  assert.match(blocksToScreenplayText(edited),/阿明\n\(低声\)\n别开门。/);
-  assert.deepEqual(screenplayTextToBlocks(blocksToScreenplayText(edited)).blocks.map(block=>block.type),edited.map(block=>block.type));
 });
 
 test('空括号说明不产生虚假选区，仍保留对白坐标',()=>{

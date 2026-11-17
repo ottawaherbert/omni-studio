@@ -1,3 +1,5 @@
+import { characterReferenceOwner } from './characterReferenceLayouts';
+import { buildLocationViewPrompt, withLocationSpatialAnchor, stripLocationSpatialAnchor } from './locationViews';
 import { appearanceFields, appearanceSummary } from "./productionAppearance";
 import type { AssetVariant, Project } from "../../types/project";
 import { assetDesignOwner, assetVisualDescription } from './productionAssetDesign';
@@ -24,7 +26,7 @@ export const visualOnlySavedAssetBrief = (prompt: string) => {
   const legacyPurpose = '，这是供图片与视频生成模型直接读取的无额外说明排版的视觉参考，不是资料海报。';
   if (!prompt.includes(legacyPurpose)) return prompt;
   return prompt.replace(legacyPurpose, '。')
-    .replace('生成一张纯净三视图。', '生成一张纯净角色参考图（三视图及上半身身份特写）。')
+    .replace('生成一张纯净三视图。', '生成一张去头身体三视图＋完整脸部特写。')
     .replace(/^视觉继承来源：[^\n]*\n?/m, '')
     .replace('基础身份、结构、比例、材质和空间骨架只从输入参考读取；整张图只表现当前状态，不做前后对比。', '以输入参考图为基础，保留未列出的外观，明确指定的局部变化优先。所有视图呈现同一外观，不做前后对比。')
     .replace('资产档案或作者明确要求的铭文、编号、招牌、印刷内容及屏幕文字属于资产身份，必须保留原文及所在部位，不得按说明文字删除；未声明的文字不得编造。', '保留参考图中以及明确指定的铭文、编号、招牌、印刷内容和屏幕文字，保持原文及所在部位；不添加其他文字。')
@@ -35,12 +37,24 @@ export const visualOnlySavedAssetBrief = (prompt: string) => {
 
 /** Include the effective asset style in the editable/copyable prompt, including saved clean briefs. */
 export const buildProductionAssetBoardPromptPreview = (project: Project, board: VideoStoryboardAssetBoardItem, mode: ProductionAssetReferenceMode) => {
+  if (board.characterReferenceLayout) mode = 'clean_reference';
+  if (board.locationView) {
+    const asset = project.assets.find(a => a.id === board.assetId);
+    if (!asset) throw new Error('场景资产已不存在。');
+    return withProductionAssetBoardStyle(buildLocationViewPrompt(asset, board.locationView, board.variantId), project, board);
+  }
   if (board.variantId && !sourceForBoard(project, board).variant) throw new Error('状态变体已移除，请刷新并复用基础参考。');
   const owner = assetDesignOwner(project, board.assetId);
   const source = board.variantId ? owner?.variants?.find(v => v.id === board.variantId) : owner;
-  const saved = mode === "clean_reference" ? source?.cleanReferencePrompt || board.cleanPrompt : source?.boardPrompt;
+  const character = mode === 'clean_reference' && board.assetType === 'character' && project.characters.find(c => c.id === board.assetId);
+  // Legacy saved turnaround prompts remain historical data, never the active layout.
+  const saved = character ? characterReferenceOwner(character, board.variantId)?.characterReferenceLayouts?.body_face?.prompt
+    : mode === "clean_reference" && board.assetType === 'character' ? undefined
+    : mode === "clean_reference" ? source?.cleanReferencePrompt || board.cleanPrompt : source?.boardPrompt;
   const core = saved ? visualOnlySavedAssetBrief(saved) : buildProductionAssetBoardExecutionPrompt(project, board, mode);
-  return withProductionAssetBoardStyle(core, project, board);
+  const layout = mode === 'clean_reference' && board.assetType === 'character'
+    ? resolveProductionAssetReferenceModeSpec(board, mode).compositionInstruction : '';
+  return withProductionAssetBoardStyle(layout && !core.includes(layout) ? `${core}\n\n【角色参考版式】\n${layout}` : core, project, board);
 };
 
 /** Saved layout briefs can predate a profile edit. Refresh only our managed block;
@@ -51,13 +65,15 @@ export const withProductionAssetBoardStyle = (prompt: string, project: Project, 
   const label = board.assetType === 'character' ? '当前角色外观' : '当前资产外观';
   const currentIdentity = identity && !core.includes(identity)
     ? `【${label}】\n${identity}\n基础外观以本段为准；明确列出的局部变化优先，其余外观保持一致。\n【${label}结束】` : "";
-  return [core, currentIdentity, assetStyleInstruction(project, board)].filter(Boolean).join("\n\n");
+  const result = [core, currentIdentity, assetStyleInstruction(project, board)].filter(Boolean).join("\n\n");
+  const location = board.assetType === "location" && project.assets.find(a => a.id === board.assetId);
+  return location ? withLocationSpatialAnchor(result, location, board.locationView || "main", board.variantId) : result;
 };
 
 /** The image compiler adds the same style through its audited projection. */
 export const productionAssetBoardPromptCore = (prompt: string, project: Project, board: VideoStoryboardAssetBoardItem) => {
   const style = assetStyleInstruction(project, board);
-  const text = prompt.trim();
+  const text = stripLocationSpatialAnchor(prompt).trim();
   return style && text.endsWith(style) ? text.slice(0, -style.length).trimEnd() : text;
 };
 
@@ -141,7 +157,7 @@ const singleAssetInstruction = (board: VideoStoryboardAssetBoardItem) => {
   if (board.assetType === "location") {
     return "单资产规则：画面里只能研究当前同一个空场景；固定装修和固有家具可以保留，但不得加入角色，也不得把可移动道具另做英雄视图或研究分区。";
   }
-  return "单资产规则：画面里只能出现当前一个道具及其多视角、细节或状态；不得加入角色、其他道具、场景背景或额外比例参照物。";
+  return "单资产规则：主体只包含当前道具及其多视角与细节，保持同一基础状态。仅在合同要求的持握/比例研究小区允许局部中性手部，不能出现完整演员、额外人物、其他道具或剧情背景；其他区域不得加入比例参照物。";
 };
 
 export const buildProductionAssetBoardExecutionPrompt = (
@@ -149,12 +165,13 @@ export const buildProductionAssetBoardExecutionPrompt = (
   board: VideoStoryboardAssetBoardItem,
   referenceMode: ProductionAssetReferenceMode = "production_board",
 ) => {
+  if (board.locationView) return buildLocationViewPrompt(project.assets.find(a => a.id === board.assetId)!, board.locationView, board.variantId);
   const source = sourceForBoard(project, board);
   if (board.variantId && !source.variant) throw new Error('状态变体已移除，请刷新并复用基础参考。');
   if (referenceMode === "clean_reference") {
     const spec = resolveProductionAssetReferenceModeSpec(board, referenceMode);
     const lines = [
-      `生成一张${board.assetType === "character" ? "纯净角色参考图（三视图及上半身身份特写）" : spec.label}。`,
+      `生成一张${spec.label}。`,
       `主体：${board.assetName}。`,
     ];
     if (board.variantId) {

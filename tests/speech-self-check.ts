@@ -43,7 +43,7 @@ dbHelpers.saveAIConfig({ ...defaultAIConfig, channels: [{ id: 'local-test', name
 const app = express(); app.use(express.json()); registerSpeechRoutes(app, { mediaAssetsDir: path.join(directory, 'media') });
 const server = app.listen(0, '127.0.0.1'); await new Promise<void>(resolve => server.once('listening', resolve));
 try {
-  const post = (body: unknown) => fetch(`http://127.0.0.1:${(server.address() as any).port}/api/audio/speech`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
+  const post = (body: any) => fetch(`http://127.0.0.1:${(server.address() as any).port}/api/audio/speech`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ purpose: 'preview', ...body }) });
   const result = await post({ text: '别着急，我在这里。', voice: 'Serena', language: 'Chinese', instructions: '低声说', projectId: 'voice-test' });
   assert.equal(result.status, 200);
   const { url } = await result.json();
@@ -70,7 +70,7 @@ try {
   const controller = new AbortController();
   const interrupted = fetch(`http://127.0.0.1:${(server.address() as any).port}/api/audio/speech`, {
     method: 'POST', headers: { 'Content-Type': 'application/json' }, signal: controller.signal,
-    body: JSON.stringify({ text: '等待取消', voice: 'Serena', projectId: 'cancelled-voice' }),
+    body: JSON.stringify({ purpose: 'preview', text: '等待取消', voice: 'Serena', projectId: 'cancelled-voice' }),
   });
   const interruptedAssertion = assert.rejects(interrupted, /abort/i);
   await held;

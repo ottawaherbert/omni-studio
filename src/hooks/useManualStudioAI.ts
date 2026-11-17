@@ -679,7 +679,7 @@ export function useManualStudioAI({ project, episode, scene, assets, generationR
     const configuredModel = config.models.find((item) => item.id === configuredRouteId);
     const supportedVideoModels = action === "video" && !videoPreparation?.externalOnly ? config.models.filter((model) => {
       if (!model.capabilities.includes("video")) return false;
-      return config.channels.some((item) => item.id === model.channelId);
+      return config.channels.some((item) => item.id === model.channelId && item.enabled !== false) && !config.comfyWorkflows.some(w => w.id === model.comfyWorkflowId && w.enabled === false);
     }) : [];
     const modelOptions: VideoGenerationPromptConfiguration["modelOptions"] = supportedVideoModels.map((model) => {
       const channel = config.channels.find((item) => item.id === model.channelId)!;
@@ -692,6 +692,7 @@ export function useManualStudioAI({ project, episode, scene, assets, generationR
       const resolvedAdapter = resolveVideoModelAdapter({
         channelType: channel.type,
         modelId: model.modelId,
+        comfyCapabilities: model.comfyCapabilities,
         configuredAdapterId: model.videoAdapterId,
       });
       const inferredH3Way = localH3 ? MINIMAX_H3_REF2VA_ADAPTER_ID : selectMiniMaxH3GenerationWay({
@@ -703,7 +704,7 @@ export function useManualStudioAI({ project, episode, scene, assets, generationR
         : undefined;
       const compatibleAdapters = localH3
         ? [resolvedAdapter]
-        : listCompatibleVideoModelAdapters({ channelType: channel.type, modelId: model.modelId });
+        : listCompatibleVideoModelAdapters({ channelType: channel.type, modelId: model.modelId, comfyCapabilities: model.comfyCapabilities });
       const generationWayAdapters = compatibleAdapters.length ? compatibleAdapters : [resolvedAdapter];
       const resolutionOptions = localH3
         ? []
@@ -764,9 +765,10 @@ export function useManualStudioAI({ project, episode, scene, assets, generationR
       const adapter = resolveVideoModelAdapter({
         channelType: selectedChannel.type,
         modelId: selectedModel.modelId,
+        comfyCapabilities: selectedModel.comfyCapabilities,
         configuredAdapterId: input.generationWayId,
       });
-      if (!videoAudioModeOptionsForCapabilities(adapter.capabilities, selectedChannel.type !== 'comfyui').some(option => option.id === input.audioMode)) {
+      if (!videoAudioModeOptionsForCapabilities(adapter.capabilities, selectedChannel.type !== 'comfyui' || Boolean(selectedModel.comfyCapabilities)).some(option => option.id === input.audioMode)) {
         throw new Error('当前生成方式不支持所选声音策略。参考音频需选择支持该能力的模型；已有录音可以保留用于后期配音。');
       }
       const intent = buildManualStudioVideoIntent({
@@ -790,7 +792,7 @@ export function useManualStudioAI({ project, episode, scene, assets, generationR
         sourceHash,
         visualProjectionTargets: visualProjectionContext.targets,
       });
-      const previewIntent = selectedChannel.type === "comfyui" ? prepareComfyUIH3Intent(intent) : intent;
+      const previewIntent = selectedChannel.type === "comfyui" && !selectedModel.comfyCapabilities ? prepareComfyUIH3Intent(intent) : intent;
       const plan = adapter.compile({
         intent: previewIntent,
         modelConfigId: selectedModel.id,
@@ -1027,6 +1029,15 @@ export function useManualStudioAI({ project, episode, scene, assets, generationR
       let videoCandidateIndex: number | undefined;
       let videoIdempotencyKey: string | undefined;
       let compiledImageRequest: CompiledImageGenerationRequest | undefined;
+      let generatedCandidateId: string | undefined;
+      const generationTarget = {
+        projectId: requestedProjectId,
+        ...(request.draftPreview
+          ? { kind: "scratch" as const, scratchId: `draft:${latestShot.id}:${window.crypto.randomUUID()}`, shotIds: [] }
+          : !isImage && request.target.kind === "storyboard_board"
+            ? { kind: "video_unit" as const, episodeId: requestedEpisodeId, sceneId: requestedSceneId, boardId: request.target.boardId, unitId: request.target.videoGenerationUnitId, shotIds: request.target.shotIds || [latestShot.id] }
+            : { kind: "shot" as const, episodeId: requestedEpisodeId, sceneId: requestedSceneId, shotIds: [latestShot.id] }),
+      };
       const configState = useAIConfigStore.getState();
       const selectedVideo = !isImage && request.videoGeneration ? metadata?.videoGeneration : undefined;
       const modelId = isImage ? configState.routing.imageGen : selectedVideo?.modelConfigId || configState.routing.videoGen;
@@ -1036,6 +1047,9 @@ export function useManualStudioAI({ project, episode, scene, assets, generationR
         videoIntent = request.externalIntent ? { ...request.externalIntent, directorIntent: finalPrompt } : undefined;
       } else if (isImage) {
         generatedUrl = await generateAIImage({
+          projectId: latestProject.id,
+          target: generationTarget,
+          onGenerationResult: result => { generatedCandidateId = result.candidateId; },
           promptCore: finalPrompt,
           aspectRatio: latestProject.aspectRatio as any || "16:9",
           references: compressedReferences,
@@ -1055,9 +1069,10 @@ export function useManualStudioAI({ project, episode, scene, assets, generationR
         const adapter = resolveVideoModelAdapter({
           channelType: configuredChannel.type,
           modelId: configuredModel.modelId,
+          comfyCapabilities: configuredModel.comfyCapabilities,
           configuredAdapterId: selectedVideo.generationWayId,
         });
-        if (!videoAudioModeOptionsForCapabilities(adapter.capabilities, configuredChannel.type !== 'comfyui').some(option => option.id === selectedVideo.audioMode)) {
+        if (!videoAudioModeOptionsForCapabilities(adapter.capabilities, configuredChannel.type !== 'comfyui' || Boolean(configuredModel.comfyCapabilities)).some(option => option.id === selectedVideo.audioMode)) {
           throw new Error('当前视频生成方式不支持所选声音策略，请重新选择；已有录音可用于后期配音。');
         }
         const modeContract = adapter.modes[0];
@@ -1093,7 +1108,7 @@ export function useManualStudioAI({ project, episode, scene, assets, generationR
           sourceHash: request.sourceHash,
           visualProjectionTargets,
         });
-        videoIntent = configuredChannel.type === "comfyui"
+        videoIntent = configuredChannel.type === "comfyui" && !configuredModel.comfyCapabilities
           ? prepareComfyUIH3Intent(builtVideoIntent)
           : builtVideoIntent;
         const latestUnit = request.target.kind === "storyboard_board"
@@ -1141,6 +1156,8 @@ export function useManualStudioAI({ project, episode, scene, assets, generationR
           candidateIndex: videoCandidateIndex,
         })}`;
         const result = await generateVideoFromIntent({
+          target: generationTarget,
+          onGenerationResult: result => { generatedCandidateId = result.candidateId; },
           intent: videoIntent,
           modelConfigId: configuredModel.id,
           adapterId: adapter.id,
@@ -1193,6 +1210,8 @@ export function useManualStudioAI({ project, episode, scene, assets, generationR
         }
         const providerAspectRatio = project.aspectRatio === "9:16" ? "9:16" : "16:9";
         generatedUrl = await generateAIVideo({
+          target: generationTarget,
+          onGenerationResult: result => { generatedCandidateId = result.candidateId; },
           prompt: providerVideoPrompt,
           imageUrl: startingImageUrl!,
           durationSeconds: request.target.durationSeconds,
@@ -1378,7 +1397,7 @@ export function useManualStudioAI({ project, episode, scene, assets, generationR
         visualReuseFingerprint: visualScenario?.reuseFingerprint,
         createdAt: now,
       };
-      const takeId = `take-${request.action}-${now}`;
+      const takeId = generatedCandidateId || `take-${request.action}-${now}`;
       const media = isImage
         ? createAIGeneratedMediaReference("image", generatedUrl!, modelId)
         : videoTask

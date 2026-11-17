@@ -4,6 +4,13 @@ import { randomUUID } from "node:crypto";
 import type Database from "better-sqlite3";
 
 const GRACE_MS = 24 * 60 * 60 * 1000;
+// These domains own files that are not represented by persisted /media/ URLs:
+// original GLBs are keyed by model.hash, previews use on-disk indexes, and
+// resumable video frames use task IDs and frame counts. Missing URL references
+// cannot establish that any of these files are disposable, including files
+// whose import or capture was interrupted before its record was saved. Leave
+// cleanup to the owning domain (e.g. frames after successful video encoding).
+const DOMAIN_OWNED_DIRECTORIES = new Set(["spatial", "previs"]);
 const quoteIdentifier = (name: string) => `"${name.replace(/"/g, '""')}"`;
 const trashRoot = (mediaDir: string) => `${path.resolve(mediaDir)}.recycle`;
 type MediaCandidate = { relativePath: string; bytes: number };
@@ -37,7 +44,11 @@ export const previewUnusedMedia = (db: Database.Database, mediaDir: string): Med
     for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
       const fullPath = path.join(dir, entry.name);
       if (entry.isSymbolicLink()) continue;
-      if (entry.isDirectory()) { walk(fullPath); continue; }
+      if (entry.isDirectory()) {
+        if (dir === root && DOMAIN_OWNED_DIRECTORIES.has(entry.name)) continue;
+        walk(fullPath);
+        continue;
+      }
       if (!entry.isFile()) continue;
       const stat = fs.statSync(fullPath);
       const relativePath = path.relative(root, fullPath).split(path.sep).join("/");

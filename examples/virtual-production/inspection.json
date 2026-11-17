@@ -1,0 +1,82 @@
+{
+  "recordedAt": "2026-10-27T05:49:32.863Z",
+  "caseHash": "4558e8d07c9b6703427030070ce65741125812b54c8583e958c0b6f02a5fe0ab",
+  "models": [
+    {
+      "file": "prepared.glb",
+      "hash": "8e1e4abc69446898a55593fd3791cc98e1332983d8f6640915ba417393b666ef",
+      "bytes": 273968,
+      "triangles": 7776
+    },
+    {
+      "file": "blockout.glb",
+      "hash": "245d15ee99e4b8f7376861b40b50e9c1e6cae8ab065ed0d2eebf499e4acdfc44",
+      "bytes": 87052,
+      "triangles": 1560
+    }
+  ],
+  "movie": {
+    "seconds": 16,
+    "fps": 12,
+    "frames": 192,
+    "scope": "两镜背景承接预演，非单次H3输入"
+  },
+  "measurements": {
+    "browser": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) HeadlessChrome/156.0.0.0 Safari/537.36",
+    "gpu": "ANGLE (Apple, ANGLE Metal Renderer: Apple M4, Unspecified Version)",
+    "resolution": [
+      1280,
+      720
+    ],
+    "samples": 149,
+    "medianMs": 16.699999999254942,
+    "p95Ms": 17.5,
+    "triangles": 11992,
+    "drawCalls": 54,
+    "loadedBytes": 273968,
+    "releasedPool": {
+      "resources": 0,
+      "references": 0
+    },
+    "limitation": "局部案例短路线；不代表整城性能、所有设备或创作验收。"
+  },
+  "contactReport": {
+    "renderVersion": "previs-render.v2",
+    "sourceHash": "5413e9588889ce7681312aafadafd95a1bff32c022f794007781416c88e21c8d",
+    "fps": 24,
+    "sampledFrames": 962,
+    "checkedObjectIds": [
+      "bg-walker",
+      "bg-neighbor",
+      "bg-shopkeeper"
+    ],
+    "issues": [],
+    "passed": true,
+    "complete": true,
+    "limitations": [
+      "毫米级数值容差用于排除表面接触；不代替实际图像和动作验收。",
+      "检查实际加载LOD与可见物体的三角网格；结构装配相交须按用途复核。",
+      "按速度/尺寸自适应采样，最高240Hz；并非任意速度下的数学连续碰撞证明。",
+      "无刚体物理、自动寻路或手指模拟。"
+    ]
+  },
+  "visualAcceptance": {
+    "reviewer": "external_agent",
+    "scope": "局部结构、连接完整的人偶、背景跨镜承接与接地；非全城及精细表演",
+    "observations": [
+      "实看重拍后的街边、修理台与反向检查图，人物颈肩踝连接完整，人物和自行车未埋地",
+      "16秒双镜背景预演962个动态网格检查点通过，跨镜沿用路线与脚步节奏",
+      "只作为局部结构、简化步态与背景调度示范，不包括手指或修灯细动作"
+    ],
+    "evidence": [
+      "street-prepared.png",
+      "workshop-prepared.png",
+      "reverse-prepared.png",
+      "background-motion.mp4"
+    ],
+    "notAccepted": [
+      "任意新模型/新路径的无穿模保证",
+      "自动导航/物理求解、精细手指或全城验收"
+    ]
+  }
+}

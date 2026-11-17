@@ -5,14 +5,19 @@ import {
   discardProductionAssetBoardReferenceCandidate,
   stageProductionAssetBoardReferenceCandidate,
 } from "../../services/production/productionAssetBoardCandidate";
-import { dbHelpers } from "../db";
+import path from "node:path";
+import { db, dbHelpers } from "../db";
+import { GenerationError } from "../../../packages/domain/src/generation";
+import { GenerationStore } from "../generation/store";
+import { ProductionQuality } from "../productionQuality";
 
 const sendCandidateRouteError = (res: Response, err: unknown, fallback: string) => {
+  if (err instanceof GenerationError) return res.status(err.statusCode).json({ error: err.message, code: err.code });
   console.error(fallback, err);
   return res.status(500).json({ error: fallback });
 };
 
-export const registerProductionAssetBoardCandidateRoutes = (app: Express) => {
+export const registerProductionAssetBoardCandidateRoutes = (app: Express, mediaRoot = path.resolve("OMNI_Workspace", "Media_Assets")) => {
   app.post("/api/projects/:id/production-asset-board-candidates", async (req, res) => {
     try {
       const project = dbHelpers.getProjectById(req.params.id);
@@ -31,6 +36,7 @@ export const registerProductionAssetBoardCandidateRoutes = (app: Express) => {
     try {
       const project = dbHelpers.getProjectById(req.params.id);
       if (!project) return res.status(404).json({ error: "Project not found in DB" });
+      new ProductionQuality(new GenerationStore(db), mediaRoot).require("project_plan", { projectId: req.params.id });
       const updates = adoptProductionAssetBoardReferenceCandidate({
         project,
         candidateId: req.params.candidateId,

@@ -1,7 +1,7 @@
 import { parseModelJson, assertModelSchema } from '../../../../packages/model-output/src';
-import { ModelResponseError } from '../../../../packages/agent-core/src/model';
-import { createAgentModelTransport } from './agentModelTransport';
-interface TextJsonInput { prompt: string; systemInstruction?: string; role: string; requireJson?: boolean; responseSchema?: Record<string, unknown>; modelRoute?: string; }
+import { ModelResponseError } from './textTransportTypes';
+import { createTextModelTransport } from './textModelTransport';
+interface TextJsonInput { prompt: string; systemInstruction?: string; role: string; requireJson?: boolean; responseSchema?: Record<string, unknown>; modelRoute?: string; modelConfigId?: string; timeoutMs?: number; }
 import { requestManualAIText } from "../../../../src/server/manualAI";
 import type { AIChannel, AIModel } from "../../../../src/config/aiConfigDefaults";
 import { dbHelpers } from "../../../../src/server/db";
@@ -49,8 +49,14 @@ export const parseGenericAIJson = (raw: string, schema?: Record<string, unknown>
   return value as Record<string, unknown>;
 };
 
-const resolveTextRoute = (requestedRoute = "scriptGen") => {
+const resolveTextRoute = (requestedRoute = "scriptGen", requestedModelId?: string) => {
   const { config } = dbHelpers.getAIConfig();
+  if (requestedModelId) {
+    const model=config.models.find(m=>m.id===requestedModelId&&m.capabilities.includes("text"));
+    const channel=model&&config.channels.find(c=>c.id===model.channelId);
+    if(!model||!channel)throw new Error("所选文本模型不存在，请重新选择。");
+    return {model,channel};
+  }
   const routeKey = requestedRoute in config.routing
     ? requestedRoute as keyof typeof config.routing
     : "scriptGen";
@@ -105,10 +111,10 @@ const generateText = async (input: TextJsonInput) => {
     const text = await manual;
     if (text !== undefined) return { text, metadata: { provider: "manual_external", modelId: "external-chat", promptCompositionManifest: reviewedManifest } } satisfies GeneratedModelText;
   }
-  const { model, channel } = resolveTextRoute(input.modelRoute);
+  const { model, channel } = resolveTextRoute(input.modelRoute,input.modelConfigId);
   const config = structuredClone(dbHelpers.getAIConfig().config);
   config.routing.scriptGen = model.id;
-  const transport = createAgentModelTransport({ getConfig: () => config, providerAccess: {
+  const transport = createTextModelTransport({ timeoutMs:input.timeoutMs, getConfig: () => config, providerAccess: {
     normalizeOpenAIBaseUrl: normalizeOpenAICompatibleBaseUrl,
     normalizeCredentialedTarget: normalizeCredentialedProviderTarget,
     parseOpenAIResponse: parseOpenAICompatibleProviderText,
@@ -123,7 +129,7 @@ const generateText = async (input: TextJsonInput) => {
     outputFormat: input.requireJson ? 'json' as const : 'text' as const };
   const result = await transport.sendOnce(request, { attemptId: crypto.randomUUID(), signal: new AbortController().signal });
   if (result.failure) throw new ModelResponseError(result);
-  if (result.validationErrors?.length) throw new Error(result.validationErrors.join('；'));
+  if (result.validationErrors?.length) throw new ModelResponseError({...result,failure:{kind:'INVALID_RESPONSE',code:'TEXT_PROVIDER_INVALID_RESPONSE',message:result.validationErrors.join('；')}});
   return { text: result.text, metadata: { provider: channel.type, modelId: model.modelId,
     providerRequestId: result.providerRequestId, ...result.usage, promptCompositionManifest: reviewedManifest } } satisfies GeneratedModelText;
 };
@@ -183,13 +189,17 @@ export const composeServerGenericJsonRequest = (
   };
 };
 
-export const generateServerGenericAIJson = async (input: { prompt: string; systemInstruction?: string; responseSchema?: Record<string, unknown>; modelRoute?: string }) => {
+export const generateServerGenericAIJson = async (input: { prompt: string; systemInstruction?: string; responseSchema?: Record<string, unknown>; modelRoute?: string; modelConfigId?: string; timeoutMs?: number }) => {
   if (input.responseSchema) assertModelSchema(input.responseSchema);
   const composition = composeServerGenericJsonRequest(input);
   const generated = await generateText({ ...input, prompt: composition.prompt, systemInstruction: composition.systemInstruction, role: 'generic_json', requireJson: true });
   // Non-durable callers have no invocation budget or replay journal. Surface an
   // invalid result rather than performing an untracked extra model request.
-  const parsed = parseGenericAIJson(generated.text, input.responseSchema);
+  let parsed: Record<string, unknown>;
+  try { parsed = parseGenericAIJson(generated.text, input.responseSchema); }
+  catch (error) { throw new ModelResponseError({text:generated.text,
+    provenance:{channel:'provider',producer:generated.metadata.provider,model:generated.metadata.modelId},
+    failure:{kind:'INVALID_RESPONSE',code:'TEXT_PROVIDER_INVALID_JSON',message:(error as Error).message}}); }
   Object.defineProperty(parsed, Symbol.for('writing.modelCallMetadata'), { value: {
     ...generated.metadata, promptCompositionManifest: generated.metadata.promptCompositionManifest || composition.manifest,
   }, enumerable: false });

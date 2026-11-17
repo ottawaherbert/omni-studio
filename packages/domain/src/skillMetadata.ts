@@ -30,7 +30,7 @@ export function validateSkillMetadata(skill: Pick<SkillDTO, 'purposes' | 'applic
 
 /** Explicit template/stage contracts only; never infer from a Skill title or body. */
 export function skillTaskForPrompt(templateId: string, stage?: string): string | undefined {
-  const templates: Record<string, string> = { generateImage: 'image', generateVideo: 'video', generateShots: 'planning', generateImagePrompts: 'planning', generateVideoPrompts: 'planning', scriptChat: 'writing', scriptAssist: 'writing', scriptIdeation: 'writing', interactiveVisualRefinement: 'interactive' };
+  const templates: Record<string, string> = { generateImage: 'image', generateVideo: 'video', generateShots: 'planning', generateImagePrompts: 'planning', generateVideoPrompts: 'planning', scriptAnalysis: 'writing', scriptAssist: 'writing', interactiveVisualRefinement: 'interactive' };
   const stages: Record<string, string> = { storyboard: 'planning', asset_sync: 'assets', asset_detail: 'assets', production_breakdown: 'planning', script: 'writing', scene: 'writing', structure: 'writing', concept: 'writing', bible: 'writing', intake: 'writing', interactive_bible: 'interactive', game_blueprint: 'interactive', graph_generation: 'interactive', interactive_script: 'interactive', interactive_storyboard: 'interactive' };
   return templates[templateId] || (stage ? stages[stage] : undefined);
 }

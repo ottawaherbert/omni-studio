@@ -24,8 +24,10 @@ const summarizeMode = (mode: ProductionMode) => ({
 });
 
 export const buildOperatorWorkflowContract = () => ({
+  scope: "explicit_canonical_batch_only",
+  ordinaryProductionInstruction: "普通人工或外部Agent制作不执行本批量QA清单。按项目productionWorkingAgreement约定候选数、粗审轮数和重大问题返工上限，粗审后交作者精审；不自动启用逐阶段审批。",
   version: "operator-workflow-order-v1",
-  strictInstruction: "AI Operator must follow its canonical batch stage order. These stages do not define prerequisites for the current manual creation UI. Quality ladders and memory ledgers are preflight/gate work inside those stages, not new stages that can reorder batch production.",
+  strictInstruction: "AI Operator must follow its canonical batch stage order. This contract applies only to canonical batch production. Existing works, imports, local edits and generation-workbench jobs use their own domain contracts through API or UI. Quality ladders and memory ledgers are preflight/gate work inside those stages, not new stages that can reorder batch production.",
   formalStageSource: {
     linear: "linearStageDefinitions",
     interactive: "interactiveStageDefinitions",
@@ -61,7 +63,7 @@ export const buildOperatorWorkflowContract = () => ({
       appliesToModes: ["linear", "interactive"] as ProductionMode[],
       requiredBefore: ["bible", "interactive_bible", "structure", "game_blueprint"] as ProductionStageType[],
       mustNotBecomeStandaloneStage: true,
-      instruction: "商业定位是 concept/interactive_bible 前后的质量门，不能跳过 intake/concept 或替代 bible。",
+      instruction: "商业目标仅在项目要求包含商业发行时适用；批量流程的质量检查不替代 bible，也不强加付费点或固定钩子。",
     },
     {
       id: "series_or_feature_skeleton",

@@ -10,12 +10,6 @@ interface SettingsState {
   setIsTestMode: (enabled: boolean) => void;
   aiProvider: AIProvider;
   setAiProvider: (provider: AIProvider) => void;
-  isFastMode: boolean;
-  setIsFastMode: (enabled: boolean) => void;
-  isAutoProductionModeEnabled: boolean;
-  setIsAutoProductionModeEnabled: (enabled: boolean) => void;
-  isStoryChapterGateEnabled: boolean;
-  setIsStoryChapterGateEnabled: (enabled: boolean) => void;
   theme: ThemeMode;
   setTheme: (theme: ThemeMode) => void;
   edgeLineMode: EdgeLineMode;
@@ -29,12 +23,6 @@ export const useSettingsStore = create<SettingsState>()(
       setIsTestMode: (enabled) => set({ isTestMode: enabled }),
       aiProvider: 'google', // Default to google
       setAiProvider: (provider) => set({ aiProvider: provider }),
-      isFastMode: false,
-      setIsFastMode: (enabled) => set({ isFastMode: enabled }),
-      isAutoProductionModeEnabled: true,
-      setIsAutoProductionModeEnabled: (enabled) => set({ isAutoProductionModeEnabled: enabled }),
-      isStoryChapterGateEnabled: false,
-      setIsStoryChapterGateEnabled: (enabled) => set({ isStoryChapterGateEnabled: enabled }),
       theme: 'light',
       setTheme: (theme) => set({ theme }),
       edgeLineMode: 'bezier',

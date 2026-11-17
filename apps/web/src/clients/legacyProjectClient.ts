@@ -106,6 +106,7 @@ export const legacyProjectClient = {
       promptCompositionManifest?: ManualProductionAssetReferenceAudit["promptCompositionManifest"];
       visualStyleCompileManifest?: ManualProductionAssetReferenceAudit["visualStyleCompileManifest"];
       sourceContentHash?: string;
+      sourceRunId?: string;
       selectedSkillIds?: string[];
       selectedSkillTitles?: string[];
       selectedContextIds?: string[];
@@ -195,6 +196,8 @@ export const legacyProjectClient = {
   appendStudioCandidate: (projectId: string, episodeId: string, sceneId: string, candidate: {
     shotId: string;
     boardId?: string;
+    pageId?: string;
+    visualTake?: import("../../../../src/types/project").ManualStoryboardBoardVisualTake;
     take?: NonNullable<Shot["takes"]>[number];
     draftPreview?: Shot["draftPreview"];
   }) => writeJson<{ scene: Scene; episode: Episode }>(`${episodePath(projectId, episodeId)}/scenes/${encodeURIComponent(sceneId)}/studio-candidates`, "POST", candidate),

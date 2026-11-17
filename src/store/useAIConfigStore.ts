@@ -140,6 +140,7 @@ export const useAIConfigStore = create<AIConfigState>()((set, get) => {
     },
 
     saveConfig: async (snapshot) => {
+      if (saveTimer && typeof window !== 'undefined') { window.clearTimeout(saveTimer); saveTimer = null; }
       const config = normalizeAIConfig({
         ...configSnapshotFromState(get()),
         ...(snapshot || {}),

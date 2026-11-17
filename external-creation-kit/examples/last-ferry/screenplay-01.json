@@ -1,0 +1,406 @@
+{
+  "format": "omni-external-screenplay.v1",
+  "projectId": "project_last_ferry",
+  "deliveryId": "delivery_last_ferry_001",
+  "partId": "part_01",
+  "scenes": [
+    {
+      "id": "scene_001",
+      "unitId": "unit_01",
+      "order": 1,
+      "title": "钥匙在掌心",
+      "location": "渡口售票厅",
+      "timeOfDay": "傍晚",
+      "storyTime": "末班渡船离港前后，同一天",
+      "route": "共同",
+      "summary": "林岚看见失物柜，沈叔说明交接与赶船不能兼得。",
+      "purpose": "让玩家在知道代价的前提下决定是否交出钥匙。",
+      "characterIds": [
+        "char_lin",
+        "char_shen"
+      ],
+      "entryState": "林岚持有钥匙，沈叔不知道。",
+      "exitState": "两条路径都尚未执行选择。",
+      "status": "complete",
+      "estimatedSeconds": 35,
+      "blocks": [
+        {
+          "id": "block_01_01",
+          "type": "action",
+          "text": "林岚把船票从帆布包里抽出来。一把铜钥匙勾在票角，落进她掌心。她看向墙边的失物柜，柜锁上贴着一张褪色的交接条。"
+        },
+        {
+          "id": "block_01_02",
+          "type": "dialogue",
+          "text": "那柜子，还没开？",
+          "speakerId": "char_lin"
+        },
+        {
+          "id": "block_01_03",
+          "type": "action",
+          "text": "沈叔用没有缠护腕的那只手把登记簿合上。窗外，船员收起一块踏板。"
+        },
+        {
+          "id": "block_01_04",
+          "type": "dialogue",
+          "text": "你爸的钥匙没交回来。有人来找信，我只能记名字。",
+          "speakerId": "char_shen"
+        },
+        {
+          "id": "block_01_05",
+          "type": "action",
+          "text": "林岚把手停在包口，铜钥匙的齿露在拇指下面。"
+        },
+        {
+          "id": "block_01_06",
+          "type": "dialogue",
+          "text": "要是找到了呢？",
+          "speakerId": "char_lin"
+        },
+        {
+          "id": "block_01_07",
+          "type": "dialogue",
+          "text": "得留下来，一起开柜、核单子。这班就赶不上了。",
+          "speakerId": "char_shen"
+        },
+        {
+          "id": "block_01_08",
+          "type": "action",
+          "text": "沈叔把船票递到检票口一侧，又把登记簿推到另一侧。林岚看着两样东西。此处等待玩家选择。"
+        }
+      ],
+      "continuity": [
+        {
+          "kind": "knowledge",
+          "subjectIds": [
+            "char_shen"
+          ],
+          "factIds": [
+            "fact_key",
+            "fact_ferry"
+          ],
+          "incoming": "不知道林岚拿着钥匙。",
+          "outgoing": "知道林岚在询问钥匙，但还没有看到钥匙。",
+          "routeNote": "两条路线都成立。"
+        }
+      ]
+    },
+    {
+      "id": "scene_002",
+      "unitId": "unit_01",
+      "order": 2,
+      "title": "放到登记簿上",
+      "location": "渡口售票厅",
+      "timeOfDay": "傍晚",
+      "storyTime": "末班渡船离港前后，同一天",
+      "route": "交出钥匙",
+      "summary": "林岚交出钥匙，承认从父亲包里找到，放弃末班船。",
+      "purpose": "使承担责任成为可见动作。",
+      "characterIds": [
+        "char_lin",
+        "char_shen"
+      ],
+      "entryState": "钥匙在林岚掌心。",
+      "exitState": "钥匙在沈叔面前，林岚留在厅内。",
+      "status": "complete",
+      "estimatedSeconds": 20,
+      "blocks": [
+        {
+          "id": "block_02_01",
+          "type": "action",
+          "text": "林岚把铜钥匙放在登记簿上。钥匙碰到金属夹，清响了一下。"
+        },
+        {
+          "id": "block_02_02",
+          "type": "dialogue",
+          "text": "在他的包里。我今天才翻到。",
+          "speakerId": "char_lin"
+        },
+        {
+          "id": "block_02_03",
+          "type": "action",
+          "text": "沈叔没有拿钥匙，先翻开一页空白。"
+        },
+        {
+          "id": "block_02_04",
+          "type": "dialogue",
+          "text": "几点？",
+          "speakerId": "char_shen"
+        },
+        {
+          "id": "block_02_05",
+          "type": "dialogue",
+          "text": "下午。先记我的名字。",
+          "speakerId": "char_lin"
+        },
+        {
+          "id": "block_02_06",
+          "type": "action",
+          "text": "林岚把没用的船票收进包里，拉来柜边的椅子。"
+        }
+      ],
+      "continuity": [
+        {
+          "kind": "prop",
+          "subjectIds": [
+            "char_lin",
+            "char_shen"
+          ],
+          "factIds": [
+            "fact_key"
+          ],
+          "incoming": "钥匙由林岚隐持。",
+          "outgoing": "钥匙交出，来历进入交接记录。",
+          "routeNote": "仅交出路线。"
+        }
+      ]
+    },
+    {
+      "id": "scene_003",
+      "unitId": "unit_01",
+      "order": 3,
+      "title": "收进内袋",
+      "location": "渡口检票口与登船踏板",
+      "timeOfDay": "傍晚",
+      "storyTime": "末班渡船离港前后，同一天",
+      "route": "收起钥匙登船",
+      "summary": "林岚收起钥匙，赶上渡船，仍握有秘密。",
+      "purpose": "兑现保留控制权与推迟查明的代价。",
+      "characterIds": [
+        "char_lin",
+        "char_shen"
+      ],
+      "entryState": "林岚尚未承认钥匙在手里。",
+      "exitState": "林岚在船上，沈叔仍不知道钥匙下落。",
+      "status": "complete",
+      "estimatedSeconds": 20,
+      "blocks": [
+        {
+          "id": "block_03_01",
+          "type": "action",
+          "text": "林岚把钥匙滑进内袋，手指隔着布按住它。她将船票放到检票口。"
+        },
+        {
+          "id": "block_03_02",
+          "type": "dialogue",
+          "text": "我回去再找找。",
+          "speakerId": "char_lin"
+        },
+        {
+          "id": "block_03_03",
+          "type": "action",
+          "text": "沈叔在票上打孔，把票还给她。"
+        },
+        {
+          "id": "block_03_04",
+          "type": "dialogue",
+          "text": "找到了，别再让它搁着。",
+          "speakerId": "char_shen"
+        },
+        {
+          "id": "block_03_05",
+          "type": "action",
+          "text": "林岚沿踏板上船。她回头时，沈叔正用肩顶住沉重的厅门；她停了半步，船员已经收走踏板。"
+        }
+      ],
+      "continuity": [
+        {
+          "kind": "knowledge",
+          "subjectIds": [
+            "char_shen"
+          ],
+          "factIds": [
+            "fact_key"
+          ],
+          "incoming": "没有确认钥匙下落。",
+          "outgoing": "仍未得到钥匙下落的确认。",
+          "routeNote": "仅隐瞒路线，不得沿用交出路线的登记台词。"
+        }
+      ]
+    },
+    {
+      "id": "scene_004",
+      "unitId": "unit_01",
+      "order": 4,
+      "title": "离港广播",
+      "location": "渡口外景",
+      "timeOfDay": "傍晚",
+      "storyTime": "末班渡船离港前后，同一天",
+      "route": "共同；人物均不入镜",
+      "summary": "渡船离开码头，售票厅灯光亮起。",
+      "purpose": "用同一段外景承接两条不同人物位置的路线。",
+      "characterIds": [],
+      "entryState": "一条路线林岚留岸，另一条路线她在船上。",
+      "exitState": "渡船已离港，两种人物位置分别保持。",
+      "status": "complete",
+      "estimatedSeconds": 15,
+      "blocks": [
+        {
+          "id": "block_04_01",
+          "type": "action",
+          "text": "固定远景。渡船的尾灯离开码头边缘，水面晃出两条细红线。售票厅亮起一排冷白灯。画面里看不清船舱，也看不清售票厅内的人。"
+        },
+        {
+          "id": "block_04_02",
+          "type": "action",
+          "text": "广播的结束提示音响过，码头只剩发动机逐渐变轻的声音。保持片刻，不补人物反应特写。"
+        }
+      ],
+      "continuity": [
+        {
+          "kind": "time",
+          "subjectIds": [],
+          "factIds": [
+            "fact_ferry"
+          ],
+          "incoming": "最后一班尚在离港。",
+          "outgoing": "末班已经离开。",
+          "routeNote": "仅复用不暴露人物位置、钥匙和船票状态的远景。"
+        }
+      ]
+    },
+    {
+      "id": "scene_005",
+      "unitId": "unit_01",
+      "order": 5,
+      "title": "留下名字",
+      "location": "渡口失物柜前",
+      "timeOfDay": "傍晚",
+      "storyTime": "末班渡船离港前后，同一天",
+      "route": "交出钥匙后的结局",
+      "summary": "两人打开柜子，发现退信和未完成交接，林岚留下自己的名字。",
+      "purpose": "兑现可追查的共同记录；避免突然替父亲洗清一切。",
+      "characterIds": [
+        "char_lin",
+        "char_shen"
+      ],
+      "entryState": "林岚与沈叔在岸，钥匙已交接。",
+      "exitState": "柜子打开，物品重新登记；林岚承担了自己的经手记录。",
+      "status": "complete",
+      "estimatedSeconds": 35,
+      "blocks": [
+        {
+          "id": "block_05_01",
+          "type": "action",
+          "text": "钥匙转到一半卡住。沈叔松开受伤的手，林岚扶住柜门，等他换手再转。柜门开了。"
+        },
+        {
+          "id": "block_05_02",
+          "type": "action",
+          "text": "一包信放在最上层，几封贴着退回的纸条。下面压着一张写了一半的交接纸。沈叔把两样分开铺在桌上。"
+        },
+        {
+          "id": "block_05_03",
+          "type": "dialogue",
+          "text": "是他想还回去的？",
+          "speakerId": "char_lin"
+        },
+        {
+          "id": "block_05_04",
+          "type": "dialogue",
+          "text": "纸上没写完。只能先记我们看见的。",
+          "speakerId": "char_shen"
+        },
+        {
+          "id": "block_05_05",
+          "type": "action",
+          "text": "林岚点点头，把自己的名字写在“钥匙交回人”一栏。墨水沿旧纸的毛边散开。"
+        },
+        {
+          "id": "block_05_06",
+          "type": "dialogue",
+          "text": "明早第一班，几点？",
+          "speakerId": "char_lin"
+        },
+        {
+          "id": "block_05_07",
+          "type": "dialogue",
+          "text": "六点。我给你留着门。",
+          "speakerId": "char_shen"
+        },
+        {
+          "id": "block_05_08",
+          "type": "action",
+          "text": "沈叔继续逐封登记。林岚把船票压在登记簿下面，防住门缝里吹来的风。"
+        }
+      ],
+      "continuity": [
+        {
+          "kind": "payoff",
+          "subjectIds": [
+            "char_lin",
+            "char_shen"
+          ],
+          "factIds": [
+            "fact_box"
+          ],
+          "incoming": "柜内情况尚不明。",
+          "outgoing": "退信被共同看到，父亲的动机仍待证据，林岚的交接已留痕。",
+          "routeNote": "交出钥匙路线结束。"
+        }
+      ]
+    },
+    {
+      "id": "scene_006",
+      "unitId": "unit_01",
+      "order": 6,
+      "title": "第一班的时间",
+      "location": "渡船靠窗座位",
+      "timeOfDay": "傍晚",
+      "storyTime": "末班渡船离港前后，同一天",
+      "route": "收起钥匙后的结局",
+      "summary": "林岚带着钥匙离开，在时刻表上圈出明早第一班。",
+      "purpose": "兑现独自保管秘密与未来行动仍未执行的状态。",
+      "characterIds": [
+        "char_lin"
+      ],
+      "entryState": "林岚已登船，钥匙仍在内袋。",
+      "exitState": "钥匙未交回，柜中事实未被查明；她决定安排返回。",
+      "status": "complete",
+      "estimatedSeconds": 35,
+      "blocks": [
+        {
+          "id": "block_06_01",
+          "type": "action",
+          "text": "林岚坐在靠窗的位置。码头缩成一条亮线，她把钥匙从内袋取出，摊在膝上的船票旁。"
+        },
+        {
+          "id": "block_06_02",
+          "type": "action",
+          "text": "钥匙柄上贴着父亲写的“失物柜”。胶带翘起，她没有撕，只把边角按平。"
+        },
+        {
+          "id": "block_06_03",
+          "type": "action",
+          "text": "她翻开夹在座椅背后的时刻表，在“首班 06:00”下面画了一条线，又看一眼窗外。岸上的灯已经认不出是哪一扇门。"
+        },
+        {
+          "id": "block_06_04",
+          "type": "dialogue",
+          "text": "六点。",
+          "speakerId": "char_lin"
+        },
+        {
+          "id": "block_06_05",
+          "type": "action",
+          "text": "她把时刻表折好，和钥匙放进同一个口袋。发动机声盖过纸张的轻响。镜头留在空下来的膝头，然后结束。"
+        }
+      ],
+      "continuity": [
+        {
+          "kind": "prop",
+          "subjectIds": [
+            "char_lin"
+          ],
+          "factIds": [
+            "fact_key",
+            "fact_box"
+          ],
+          "incoming": "钥匙由林岚保管，柜内事实未知。",
+          "outgoing": "仍由她保管；返回只是计划，不代表开柜或完成交接。",
+          "routeNote": "隐瞒路线结束，不播放开柜结局的画面。"
+        }
+      ]
+    }
+  ]
+}

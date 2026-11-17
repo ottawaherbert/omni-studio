@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { normalizeDirectorPlan, directorBindingHash, directorPlanStatus, applyDirectorAudioPlan, directorDialogueIndex } from "../packages/production/src/services/production/directorPlan";
 import { renderProductionCreativeContext, creativeExecutionManifest, projectDirectorMediaContext } from "../packages/production/src/services/production/creativeDirection";
+import { productionSceneBasis } from "../src/services/production/productionSceneBasis";
 import { buildProductionSceneContext } from "../src/services/production/productionSceneContext";
 import { snapshotCreativeSkill } from "../packages/domain/src/creativeDirection";
 import { buildCreativeSkillDraftPrompt } from "../packages/domain/src/creativeSkillDraft";
@@ -122,11 +123,12 @@ assert.ok(invalidResult.issues.some(issue => issue.includes("有效镜头")));
 assert.ok(invalidResult.issues.some(issue => issue.includes("超出本场")));
 assert.equal(invalidResult.shots[1].directing!.dialogue[0].startSeconds, undefined);
 const legacy = normalizeDirectorPlan({ project, episode, scene, rawShots: [{}, {}], shots });
-assert.equal(legacy.plan, undefined);
+assert.equal(legacy.plan?.intent, scene.manualStoryboard!.directorPlan!.intent);
+assert.deepEqual(legacy.plan?.applications, [], "legacy responses preserve the brief without claiming new method-to-shot assignments");
 assert.equal(legacy.shots.length, 2);
 assert.ok(legacy.issues[0].includes("仍可采用"));
 const off = { ...project, creativeDirection: { director: { mode: "off" as const } } };
-assert.equal(normalizeDirectorPlan({ project: off, episode, scene, rawShots: raw, shots }).plan, undefined);
+assert.equal(normalizeDirectorPlan({ project: off, episode, scene, rawShots: raw, shots }).plan?.intent, raw[0].directorPlan.intent);
 const localScene = structuredClone(scene);
 localScene.shots![0].creativeDirection = { director: { mode: "replace", skill } };
 const localRaw = structuredClone(raw);
@@ -148,4 +150,23 @@ assert.equal(directorPlanStatus(off, { episode, scene: localScene }), "director_
 const prompt = buildCreativeSkillDraftPrompt({ kind: "director", content: "", references: [], analysisNotes: "分析样本：双人同框，听者回应后切镜。" });
 assert.ok(prompt.includes("作者提供的参考分析"));
 assert.equal(upgradeDirectorPlanTemplate(upgradeDirectorPlanTemplate("作者自定义模板")), "作者自定义模板\n" + directorPlanContract);
+const sourceScene = { ...scene, script: '林渊走到池边。', scriptBlocks: undefined, sourceWritingUnitId: 'source-unit', sourceWritingSceneId: 'source-scene' };
+const sourceProject = { productionSourceSnapshot: { sourceType: 'writing_export', package: { units: [{ id: 'source-unit', scenes: [{ id: 'source-scene', blocks: [{ content: '林渊走到池边。' }], obstacle: '退路被挡', beats: [{ id: 'beat-1', action: '停下' }] }] }] } } } as unknown as Project;
+assert.equal(productionSceneBasis(sourceProject, sourceScene).upstream?.facts?.obstacle, '退路被挡');
+assert.equal(productionSceneBasis(sourceProject, sourceScene).upstream?.facts?.beats?.[0].id, 'beat-1');
+sourceScene.script = '林渊留在茅屋。';
+assert.equal(productionSceneBasis(sourceProject, sourceScene).upstream?.sourceCurrent, false);
+assert.equal(productionSceneBasis(sourceProject, sourceScene).upstream?.facts, undefined);
+const early = normalizeDirectorPlan({project: {}, scene:sourceScene, rawShots:[], shots:[], rawPlan:{intent:'先看清劳动区',rhythm:'静后转动'}});
+assert.equal(early.plan?.intent,'先看清劳动区');
+assert.deepEqual(early.issues, []);
+const withRequirements={...scene,manualStoryboard:{...scene.manualStoryboard!,directorPlan:{...normalized.plan!,requirements:[{id:'door',department:'摄影',description:'门内反向看得到庭院'}]}}};
+assert.equal(normalizeDirectorPlan({project,episode,scene:withRequirements,rawShots:[{},{}],shots}).plan?.requirements?.[0].id,'door','legacy output must not erase adopted production requirements');
 console.log("director-plan-self-check: source-bound adoption, per-stage compiled requests, line performance, actual audio/export positions, changed settings, legacy compatibility and invalid output checks passed");
+
+// A legacy model response must not erase an author-owned basic brief.
+const basicScene={...scene,manualStoryboard:{schemaVersion:'manual-storyboard.v1' as const,updatedAt:1,directorPlan:{...normalized.plan!,intent:'保留作者的观看重点',requirements:undefined,beatDirections:undefined}}};
+assert.equal(normalizeDirectorPlan({project,episode,scene:basicScene,rawShots:[],shots}).plan?.intent,'保留作者的观看重点');
+const remapScene={...scene,manualStoryboard:{schemaVersion:'manual-storyboard.v1' as const,updatedAt:1,directorPlan:{...normalized.plan!,requirements:[{id:'linked',department:'摄影',description:'保留退路',targetIds:['shot-a','room']}],beatDirections:[{beatId:'enter',intent:'迟疑',shotIds:['shot-a']}],assumptions:['静态筹备']}}};
+const remapped=normalizeDirectorPlan({project,episode,scene:remapScene,rawShots:[{sourceShotId:'shot-a'}],shots:[{...shots[0],id:'replacement'}],rawPlan:{intent:'继续筹备',rhythm:'缓'}}).plan!;
+assert.deepEqual(remapped.requirements![0].targetIds,['replacement','room']);assert.deepEqual(remapped.beatDirections![0].shotIds,['replacement']);assert.deepEqual(remapped.assumptions,['静态筹备']);

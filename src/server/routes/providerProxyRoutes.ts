@@ -1,6 +1,10 @@
+import { assertAudioProductionRequest } from './audioProductionPolicy';
+import { GenerationError } from '../../../packages/domain/src/generation';
 import type { Express, Response } from "express";
+import type { PersistedVideoGenerationTask } from '../videoGenerationTaskRepository';
 import { registerSpeechRoutes } from './speechRoutes';
 import { registerComfyUIH3VideoRoute } from "../providers/comfyUIH3Video";
+import { registerComfyUIGatewayRoutes } from '../providers/comfyUIGateway';
 import { registerKieGrokVideoRoute } from "../providers/kieGrokVideo";
 import { registerKieGrokImageRoute } from "../providers/kieGrokImage";
 import { registerMiniMaxH3VideoRoute } from "../providers/minimaxH3Video";
@@ -30,9 +34,10 @@ const requestHeaderValue = (headers: unknown, name: string) => {
 const sendProviderTargetPolicyError = (res: Response, err: unknown) => err instanceof ProviderTargetPolicyError
   ? res.status(err.statusCode).json({ error: err.message })
   : null;
-export const registerProviderProxyRoutes = (app: Express, options?: { mediaAssetsDir?: string }) => {
+export const registerProviderProxyRoutes = (app: Express, options?: { mediaAssetsDir?: string; authorizeGenerationTask?: (task: PersistedVideoGenerationTask) => void }) => {
   if (options?.mediaAssetsDir) registerSpeechRoutes(app, { mediaAssetsDir: options.mediaAssetsDir });
   registerComfyUIH3VideoRoute(app, { mediaAssetsDir: options?.mediaAssetsDir });
+  const comfy = registerComfyUIGatewayRoutes(app, { mediaAssetsDir: options?.mediaAssetsDir, authorizeTask: options?.authorizeGenerationTask });
   registerKieGrokVideoRoute(app);
   registerKieGrokImageRoute(app);
   registerMiniMaxH3VideoRoute(app);
@@ -112,6 +117,12 @@ export const registerProviderProxyRoutes = (app: Express, options?: { mediaAsset
   });
 
   app.post("/api/proxy/gemini", async (req, res) => {
+    try {
+      if (['generateContent', 'generateContentStream'].includes(req.body?.action) && (Array.isArray(req.body?.payload?.config?.responseModalities) && req.body.payload.config.responseModalities.some((kind: unknown) => String(kind).toUpperCase() === 'AUDIO') || req.body?.payload?.config?.speechConfig || /(?:tts|lyria)/i.test(String(req.body?.payload?.model || '')))) assertAudioProductionRequest(req.body, options?.mediaAssetsDir || '');
+    } catch (error) {
+      if (error instanceof GenerationError) return res.status(error.statusCode).json({ code: error.code, error: error.message });
+      throw error;
+    }
     const geminiProxy = resolveGeminiProxyClient(req.body.apiKey, req.body.channelId);
     if (!geminiProxy) return res.status(500).json({ error: "Gemini API key is not configured on the server." });
 
@@ -188,6 +199,7 @@ export const registerProviderProxyRoutes = (app: Express, options?: { mediaAsset
 
   app.post("/api/proxy/custom-bgm", async (req, res) => {
     try {
+      assertAudioProductionRequest(req.body, options?.mediaAssetsDir || '');
       let url: string;
       let model: string;
       try {
@@ -227,9 +239,11 @@ export const registerProviderProxyRoutes = (app: Express, options?: { mediaAsset
       }
       return res.status(response.status).json(data);
     } catch (err: any) {
+      if (err instanceof GenerationError) return res.status(err.statusCode).json({ code: err.code, error: err.message });
       console.error("Custom BGM proxy error:", proxyErrorSummary(err));
       const payload = providerExceptionPayload("自定义音乐供应商", err);
       return res.status(payload.providerStatus || 502).json(payload);
     }
   });
+  return { comfy };
 };

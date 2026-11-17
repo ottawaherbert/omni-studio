@@ -7,6 +7,7 @@ import { scriptClient } from "../../../apps/web/src/clients/scriptClient";
 import type { ScriptProjectSummary } from "../../../packages/domain/src/scriptDelivery";
 import { createLegacyProductionProjectFromWritingSource } from "../../services/production/writingExportLegacyAdapter";
 import type { Project } from "../../types/project";
+import { isInteractiveProductionProject, productionProjectSourceKey as projectSourceKey } from './productionProjectIdentity';
 
 const projectUpdatedAt = (project: Project) => {
   const dynamicUpdatedAt = (project as { updatedAt?: string | number }).updatedAt;
@@ -14,13 +15,6 @@ const projectUpdatedAt = (project: Project) => {
     || (dynamicUpdatedAt ? new Date(dynamicUpdatedAt).getTime() : 0)
     || Number(project.id)
     || 0;
-};
-
-const projectSourceKey = (project: Project) => {
-  const snapshot = project.productionSourceSnapshot;
-  return snapshot?.sourceType === "writing_export"
-    ? `writing:${snapshot.sourceWritingProjectId}`
-    : `project:${project.id}`;
 };
 
 const isProductionProject = (project: Project) =>
@@ -125,7 +119,7 @@ export const useProductionProjectActions = () => {
     setBusyProjectId(writingProjectId);
     try {
       const existingProject = projects
-        .filter(isProductionProject)
+        .filter((project) => isProductionProject(project) && !isInteractiveProductionProject(project))
         .sort(compareProductionProjects)
         .find((project) => project.productionSourceSnapshot?.sourceType === "writing_export"
           && project.productionSourceSnapshot.sourceWritingProjectId === writingProjectId);

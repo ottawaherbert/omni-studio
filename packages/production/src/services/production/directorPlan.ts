@@ -1,3 +1,4 @@
+import { readRequirements, readBeatDirections } from "../../../../../src/services/production/productionCollaboration";
 import { sha256 } from "js-sha256";
 import type { AudioTrack, Episode, Project, Scene, Shot } from "../../../../../src/types/project";
 import type { SceneDirectorPlan, ShotDirecting } from "../../../../domain/src/directorPlan";
@@ -46,7 +47,7 @@ export function directorPlanStatus(project: Partial<Project>, scope: ProductionC
 
 /** Resolve once against the request snapshot. The model cannot choose provenance or IDs. */
 export function normalizeDirectorPlan(input: {
-  project: Partial<Project>; episode?: Episode; scene: Scene; rawShots: unknown[]; shots: Shot[]; now?: number;
+  project: Partial<Project>; episode?: Episode; scene: Scene; rawShots: unknown[]; shots: Shot[]; rawPlan?: unknown; now?: number;
 }): { plan?: SceneDirectorPlan; shots: Shot[]; issues: string[] } {
   const { project, episode, scene, rawShots } = input;
   const scope = { episode, scene };
@@ -62,11 +63,27 @@ export function normalizeDirectorPlan(input: {
   });
   const shotRoles = authoredShots.map(shot => resolveCreativeRole(productionCreativeScopes(project, { ...scope, shot }), "director"));
   const activeRole = role.enabled ? role : shotRoles.find(item => item.enabled);
-  const raw = rawShots.map(record).find(shot => Object.keys(record(shot.directorPlan)).length)?.directorPlan;
+  const raw = input.rawPlan ?? rawShots.map(record).find(shot => Object.keys(record(shot.directorPlan)).length)?.directorPlan;
   const value = record(raw);
   const assetIds = uniq(input.shots.flatMap(shot => [...(shot.characterIdsInShot || []), ...(shot.propIds || []), shot.locationId]));
   let plan: SceneDirectorPlan | undefined;
-  if (activeRole && text(value.intent)) {
+  const previousPlan=scene.manualStoryboard?.directorPlan;
+  const optionalRecord=<T,>(reader:(value:unknown)=>T,value:unknown,label:string):T|undefined=>{
+    if(value===undefined)return undefined;
+    try{return reader(value);}catch{issues.push(`${label}格式需调整，已保留其他有效方案，不自动重试。`);return undefined;}
+  };
+  const remapShotIds=(ids:string[])=>uniq(ids.flatMap(id=>{
+    const matches=rawShots.flatMap((rawShot,index)=>{
+      const raw=record(rawShot);
+      return (text(raw.sourceShotId) || text(record(raw.directing).sourceShotId))===id && input.shots[index] ? [input.shots[index].id] : [];
+    });
+    return matches.length ? matches : [id];
+  }));
+  const requirements=(optionalRecord(readRequirements,value.requirements,'制作需求') ?? previousPlan?.requirements)
+    ?.map(r=>({...r,...(r.targetIds?{targetIds:remapShotIds(r.targetIds)}:{})}));
+  const beatDirections=(optionalRecord(readBeatDirections,value.beatDirections,'节拍意图') ?? previousPlan?.beatDirections)
+    ?.map(b=>({...b,...(b.shotIds?{shotIds:remapShotIds(b.shotIds)}:{})}));
+  if (text(value.intent) || input.rawPlan !== undefined && typeof value.intent === "string") {
     const sourceHash = directorPlanSourceHash(project, scope, assetIds);
     const methodSource = [role, ...shotRoles].filter(item => item.enabled).map(item => renderDirectorDirection(item, "planning")).filter(Boolean).join("\n");
     const script = manualFilmTeamSceneSource(scene).text;
@@ -75,9 +92,9 @@ export function normalizeDirectorPlan(input: {
       const method = text(application.method), evidence = text(application.evidence), decision = text(application.decision);
       const ordinals = list(application.shotNumbers);
       const shotIds = uniq(ordinals.map(number => Number.isInteger(number) ? input.shots[number - 1]?.id : undefined));
-      if (!method || !decision || !shotIds.length) { issues.push(`导演方法 ${index + 1} 缺少方法、拍法或有效镜头落点。`); return []; }
+      if (!method || !decision || (input.shots.length > 0 && !shotIds.length)) { issues.push(`导演方法 ${index + 1} 缺少方法、拍法或有效镜头落点。`); return []; }
       if (ordinals.some(number => !Number.isInteger(number) || !input.shots[number - 1])) issues.push(`导演方法 ${index + 1} 引用了不存在的镜头序号。`);
-      if (!methodSource.includes(method)) issues.push(`导演方法 ${index + 1} 的摘录未在本次 Skill 中找到，请核对。`);
+      if (activeRole && !methodSource.includes(method)) issues.push(`导演方法 ${index + 1} 的摘录未在本次 Skill 中找到，请核对。`);
       if (!evidence || !script.includes(evidence)) issues.push(`导演方法 ${index + 1} 的原文依据未逐字匹配，请核对。`);
       const methodId = text(application.methodId), skillId = text(application.skillId);
       const sources = [role, ...shotRoles].filter(item => item.enabled && (!skillId || item.skill?.id === skillId));
@@ -92,12 +109,20 @@ export function normalizeDirectorPlan(input: {
     plan = {
       schemaVersion: "scene-director.v1", id: "direction-" + sha256(JSON.stringify({ sourceHash, value, shotIds: input.shots.map(shot => shot.id) })).slice(0, 24),
       bindingHash: directorBindingHash(project, scope), sourceHash, assetIds,
-      skillId: activeRole.skill?.id, skillTitle: activeRole.skill?.title || "自定义导演", skillRevision: activeRole.skill?.revision,
+      skillId: activeRole?.skill?.id, skillTitle: activeRole ? activeRole.skill?.title || "自定义导演" : "本场方案", skillRevision: activeRole?.skill?.revision,
       intent: text(value.intent), rhythm: text(value.rhythm), applications,
+      ...(requirements ? {requirements} : {}),
+      ...(beatDirections ? {beatDirections} : {}),
+      ...(Array.isArray(value.assumptions) ? {assumptions:value.assumptions.filter((v:unknown)=>typeof v === "string")} : previousPlan?.assumptions ? {assumptions:previousPlan.assumptions} : {}),
       exceptions: list(value.exceptions).map(text).filter(Boolean), createdAt: input.now ?? Date.now(),
     };
-    if (!applications.length && !plan.exceptions.length) issues.push("本场导演方案没有说明采用的方法或不适用原因。");
+    if (activeRole && !applications.length && !plan.exceptions.length) issues.push("本场导演方案没有说明采用的方法或不适用原因。");
   } else if (activeRole) issues.push("此次返回没有本场导演方案，镜头仍可采用；尚未记录导演方法的具体落点。");
+
+  if(!plan && previousPlan){
+    plan={...previousPlan,assetIds,sourceHash:directorPlanSourceHash(project,scope,assetIds),applications:[],requirements,beatDirections};
+    issues.push('沿用已保存的场面目标与制作需求，具体方法落点以本次镜头为准。');
+  }
 
   const total = input.shots.reduce((sum, shot) => sum + (shot.duration || 0), 0);
   let offset = 0;

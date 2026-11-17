@@ -710,3 +710,21 @@ export const renderAssetBoardOverlay = async (
   }
   return canvas.toDataURL("image/png");
 };
+
+/** Pixel-preserving extraction from a jointly designed overview. No generative upscaling. */
+export async function extractSceneOverviewCells({ imageUrl, columns, rows, indices, targetColumns }: {
+  imageUrl: string; columns: number; rows: number; indices: number[]; targetColumns: number;
+}) {
+  if (!Number.isInteger(columns) || !Number.isInteger(rows) || columns < 1 || rows < 1 || !Number.isInteger(targetColumns) || targetColumns < 1 || !indices.length || new Set(indices).size !== indices.length || indices.some(i => !Number.isInteger(i) || i < 0 || i >= columns * rows)) throw new Error('总览画格映射无效');
+  const image = await loadImage(imageUrl);
+  const cellWidth = Math.floor(image.naturalWidth / columns), cellHeight = Math.floor(image.naturalHeight / rows);
+  if (cellWidth < 1 || cellHeight < 1) throw new Error('图片尺寸不足以裁切');
+  const canvas = document.createElement('canvas');
+  canvas.width = cellWidth * targetColumns;
+  canvas.height = cellHeight * Math.ceil(indices.length / targetColumns);
+  const ctx = canvas.getContext('2d');
+  if (!ctx) throw new Error('无法创建裁切画布');
+  ctx.fillStyle = '#111'; ctx.fillRect(0, 0, canvas.width, canvas.height);
+  indices.forEach((index, output) => ctx.drawImage(image, Math.floor(index % columns * image.naturalWidth / columns), Math.floor(Math.floor(index / columns) * image.naturalHeight / rows), cellWidth, cellHeight, (output % targetColumns) * cellWidth, Math.floor(output / targetColumns) * cellHeight, cellWidth, cellHeight));
+  return { imageUrl: canvas.toDataURL('image/png'), width: canvas.width, height: canvas.height, cellWidth, cellHeight };
+}

@@ -76,6 +76,7 @@ const shotPlanValue = (shot: Shot) => ({
   lightingAtmo: shot.lightingAtmo || "",
   characterIdsInShot: shot.characterIdsInShot || [],
   locationId: shot.locationId || "",
+  ...(shot.locationReferenceViews ? { locationReferenceViews: shot.locationReferenceViews } : {}),
   propIds: shot.propIds || [],
   vehicleIds: shot.vehicleIds || [],
   dialogueLines: shot.dialogueLines || [],
@@ -316,7 +317,7 @@ export const canRebaseManualStoryboardAuthorEdit = (
 export function mergeShotAuthorDraft(original: Shot, draft: Partial<Shot>, current: Shot) {
   if (original.id !== current.id || (draft.id && draft.id !== current.id)) throw new Error("镜头已变化，请重新打开编辑。");
   const same = (a: unknown, b: unknown) => JSON.stringify(a) === JSON.stringify(b);
-  const editable: Array<keyof Shot> = ['visualAction', 'shotSize', 'cameraAngle', 'cameraMovement', 'lighting', 'lightingAtmo', 'microExpression', 'motivation', 'activeVisualLayerIds', 'imagePrompt', 'videoPrompt', 'visualSummary', 'focalLength', 'composition', 'blocking', 'continuityNote', 'soundDesign', 'editingNote', 'duration', 'transition', 'directing'];
+  const editable: Array<keyof Shot> = ['visualAction', 'shotSize', 'cameraAngle', 'cameraMovement', 'lighting', 'lightingAtmo', 'microExpression', 'motivation', 'activeVisualLayerIds', 'imagePrompt', 'videoPrompt', 'visualSummary', 'focalLength', 'composition', 'blocking', 'continuityNote', 'soundDesign', 'editingNote', 'duration', 'transition', 'directing', 'locationReferenceViews'];
   const changedKeys = editable.filter(key => Object.prototype.hasOwnProperty.call(draft, key) && !same(draft[key], original[key]));
   if (changedKeys.some(key => !same(current[key], original[key]) && !same(current[key], draft[key]))) throw new Error("正在编辑的镜头字段已被其他操作修改，草稿仍保留，请核对后重新编辑。");
   return { shot: { ...current, ...Object.fromEntries(changedKeys.map(key => [key, draft[key]])) } as Shot, changedKeys };

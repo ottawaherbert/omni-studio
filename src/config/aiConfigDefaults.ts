@@ -1,3 +1,4 @@
+import type { ComfyCapabilities, ComfyParameterMapping } from '../../packages/domain/src/comfyWorkflow';
 export type ChannelType = 'openai' | 'gemini' | 'minimax' | 'deepseek' | 'doubao' | 'kie' | 'llamacpp' | 'comfyui' | 'custom';
 
 const OPENAI_COMPATIBLE_TEXT_CHANNEL_TYPES: readonly ChannelType[] = ['openai', 'deepseek', 'doubao', 'kie', 'llamacpp'];
@@ -10,6 +11,8 @@ export interface AIChannel {
   type: ChannelType;
   baseUrl: string;
   apiKey: string;
+  enabled?: boolean;
+  comfyQueue?: { executionPoolId?: string; maxInFlight: number; pollIntervalMs: number; waitTimeoutMs: number };
   managedBy?: 'comfyui_h3_workflow';
 }
 
@@ -90,6 +93,8 @@ export interface AIModel {
   capabilities: ('text' | 'vision' | 'image' | 'video' | 'audio')[];
   apiKeyOverride?: string;
   reasoningEffort?: ReasoningEffort;
+  enableThinking?: boolean;
+  maxOutputTokens?: number;
   textOutputMode?: import('./textModelOutput').TextOutputMode;
   visualPromptLanguagePolicy?: 'provider_default' | 'zh' | 'en' | 'bilingual';
   imageAdapterId?: ImageModelAdapterId | string;
@@ -99,13 +104,14 @@ export interface AIModel {
   kieGrokVideo?: KieGrokVideoModelSettings;
   kieGptImage2?: KieGptImage2ModelSettings;
   comfyWorkflowId?: string;
+  comfyCapabilities?: ComfyCapabilities;
   managedBy?: 'comfyui_h3_workflow';
 }
 
-export const openAICompatibleReasoningParams = (model: Pick<AIModel, 'reasoningEffort'>) =>
-  model.reasoningEffort && model.reasoningEffort !== 'provider_default'
-    ? { chat_template_kwargs: { reasoning_effort: model.reasoningEffort } }
-    : {};
+export const openAICompatibleReasoningParams = (model: Pick<AIModel, 'reasoningEffort'|'enableThinking'>) => {
+  const kwargs={...(model.reasoningEffort&&model.reasoningEffort!=='provider_default'?{reasoning_effort:model.reasoningEffort}:{}),...(typeof model.enableThinking==='boolean'?{enable_thinking:model.enableThinking}:{})};
+  return Object.keys(kwargs).length?{chat_template_kwargs:kwargs}:{};
+};
 
 export interface TaskRouting {
   scriptGen: string;
@@ -129,11 +135,7 @@ export const taskCapabilityRequirements: Record<keyof TaskRouting, AIModel['capa
   visualQc: 'vision',
 };
 
-export interface ComfyNodeMapping {
-  systemParam: string;
-  nodeId: string;
-  nodeInput: string;
-}
+export interface ComfyNodeMapping extends ComfyParameterMapping {}
 
 export const COMFYUI_MINIMAX_H3_REFERENCE_WORKFLOW_KIND = 'minimax_h3_reference_video' as const;
 
@@ -155,7 +157,9 @@ export interface ComfyWorkflow {
   workflowJson: any;
   mappings: ComfyNodeMapping[];
   channelId?: string;
-  kind?: 'generic_image' | typeof COMFYUI_MINIMAX_H3_REFERENCE_WORKFLOW_KIND;
+  enabled?: boolean;
+  api?: ComfyCapabilities;
+  kind?: 'api_graph' | 'generic_image' | typeof COMFYUI_MINIMAX_H3_REFERENCE_WORKFLOW_KIND;
   sourceWorkflowName?: string;
   minimaxH3Reference?: ComfyMiniMaxH3ReferenceSettings;
 }
@@ -169,7 +173,7 @@ export interface AIConfigSnapshot {
   comfyWorkflows: ComfyWorkflow[];
 }
 
-export const AI_CONFIG_SCHEMA_VERSION = 13;
+export const AI_CONFIG_SCHEMA_VERSION = 14;
 const AI_CONFIG_LEGACY_BUILT_IN_REMOVAL_VERSION = 6;
 export const LLAMACPP_DEFAULT_BASE_URL = 'http://127.0.0.1:8080/v1';
 export const KIE_DEFAULT_BASE_URL = 'https://api.kie.ai/api/v1';
@@ -446,6 +450,13 @@ export function normalizeAIConfig(input?: Partial<AIConfigSnapshot> | null): AIC
       type: (channel.type || 'openai') as ChannelType,
       baseUrl: String(channel.baseUrl || ''),
       apiKey: String(channel.apiKey || ''),
+      enabled: channel.enabled !== false,
+      ...(channel.type === 'comfyui' ? { comfyQueue: {
+        ...(channel.comfyQueue?.executionPoolId ? { executionPoolId: String(channel.comfyQueue.executionPoolId).slice(0, 120) } : {}),
+        maxInFlight: Math.max(1, Math.min(12, Math.floor(Number(channel.comfyQueue?.maxInFlight) || 2))),
+        pollIntervalMs: Math.max(1000, Math.min(60000, Number(channel.comfyQueue?.pollIntervalMs) || 3000)),
+        waitTimeoutMs: Math.max(10000, Math.min(86400000, Number(channel.comfyQueue?.waitTimeoutMs) || 3600000)),
+      }} : {}),
       managedBy: channel.managedBy === 'comfyui_h3_workflow' ? 'comfyui_h3_workflow' as const : undefined,
     };
   });
@@ -455,7 +466,7 @@ export function normalizeAIConfig(input?: Partial<AIConfigSnapshot> | null): AIC
     .map((workflow: any, index) => {
       const kind = workflow.kind === COMFYUI_MINIMAX_H3_REFERENCE_WORKFLOW_KIND
         ? COMFYUI_MINIMAX_H3_REFERENCE_WORKFLOW_KIND
-        : 'generic_image';
+        : workflow.kind === 'api_graph' ? 'api_graph' : 'generic_image';
       const sourceSettings = workflow.minimaxH3Reference && typeof workflow.minimaxH3Reference === 'object'
         ? workflow.minimaxH3Reference as Record<string, unknown>
         : {};
@@ -464,6 +475,8 @@ export function normalizeAIConfig(input?: Partial<AIConfigSnapshot> | null): AIC
         name: String(workflow.name || '未命名工作流'),
         workflowJson: workflow.workflowJson && typeof workflow.workflowJson === 'object' ? workflow.workflowJson : {},
         mappings: Array.isArray(workflow.mappings) ? workflow.mappings : [],
+        enabled: workflow.enabled !== false,
+        ...(kind === 'api_graph' ? { api: workflow.api } : {}),
         channelId: workflow.channelId ? String(workflow.channelId) : undefined,
         kind,
         sourceWorkflowName: workflow.sourceWorkflowName ? String(workflow.sourceWorkflowName) : undefined,
@@ -520,6 +533,8 @@ export function normalizeAIConfig(input?: Partial<AIConfigSnapshot> | null): AIC
           model.reasoningEffort,
           'provider_default',
         ),
+        ...(Number.isSafeInteger(model.maxOutputTokens)&&Number(model.maxOutputTokens)>=128&&Number(model.maxOutputTokens)<=131072?{maxOutputTokens:Number(model.maxOutputTokens)}:{}),
+        ...(typeof model.enableThinking==='boolean'?{enableThinking:model.enableThinking}:{}),
         textOutputMode: allowedSetting(['auto', 'prompt-json', 'json-object', 'json-schema'] as const, model.textOutputMode, 'auto'),
         visualPromptLanguagePolicy: allowedSetting(
           ['provider_default', 'zh', 'en', 'bilingual'] as const,
@@ -535,6 +550,12 @@ export function normalizeAIConfig(input?: Partial<AIConfigSnapshot> | null): AIC
         comfyWorkflowId: comfyWorkflowIds.has(String(model.comfyWorkflowId || ''))
           ? String(model.comfyWorkflowId)
           : undefined,
+        comfyCapabilities: modelChannel?.type === 'comfyui' ? (() => {
+          const workflow = comfyWorkflows.find(w => w.id === model.comfyWorkflowId && w.channelId === model.channelId && w.kind === 'api_graph');
+          if (!workflow?.api) return undefined;
+          const map = workflow.mappings.find(m => m.systemParam === 'aspectRatio')?.valueMap;
+          return { ...workflow.api, aspectRatios: map ? Object.keys(map) : ['16:9', '9:16', '1:1'] };
+        })() : undefined,
         managedBy: model.managedBy === 'comfyui_h3_workflow' ? 'comfyui_h3_workflow' as const : undefined,
         ...(model.videoGenerationDefaults && typeof model.videoGenerationDefaults === 'object'
           ? {
@@ -623,7 +644,9 @@ export function normalizeAIConfig(input?: Partial<AIConfigSnapshot> | null): AIC
     const rawModelId = String(rawRouting[task] || '');
     const modelId = imageModelRedirects.get(rawModelId) || rawModelId;
     const model = modelIds.has(modelId) ? normalizedModels.find((item) => item.id === modelId) : undefined;
-    result[task] = model?.capabilities.includes(taskCapabilityRequirements[task]) ? modelId : '';
+    const channel = finalChannels.find(c => c.id === model?.channelId);
+    const workflow = comfyWorkflows.find(w => w.id === model?.comfyWorkflowId);
+    result[task] = channel?.enabled !== false && workflow?.enabled !== false && model?.capabilities.includes(taskCapabilityRequirements[task]) ? modelId : '';
     return result;
   }, { ...defaultRouting });
   return {

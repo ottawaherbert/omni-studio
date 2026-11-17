@@ -3,15 +3,12 @@ import assert from 'node:assert/strict';
 import Database from 'better-sqlite3';
 import React, {type ReactNode} from 'react';
 import {renderToStaticMarkup} from 'react-dom/server';
-import {AgentSqliteStore, SqliteConversationStore} from '../packages/agent-sqlite/src';
 import {createScriptProject, newScene, newUnit, removeScriptScene} from '../packages/script/src/project';
 import {createScriptCreationProfile} from '../packages/script/src/creation';
 import {parseScriptProject, type ScriptProject} from '../packages/script/src/schema';
 import {anchorCurrent, anchorFor, beatsForUnit, freezeOutlineGrant, outlineGuideId, visibleOutlineGuides, type OutlineGrant, type OutlineOwner} from '../packages/script/src/outlineGuides';
 import {buildOutlineDevelopment, assertOutlineDevelopment} from '../packages/script/src/outlineDevelopment';
 import {removeBeat, removeStoryline, setBeatStorylineLink, updateBeatText, updateStoryline, visibleStorylinesForOutline} from '../packages/script/src/storylinePlanning';
-import {ScriptCommandService} from '../apps/api/src/agent/scriptCommands';
-import {ScriptWorkspaceStore, workspaceRef} from '../apps/api/src/repositories/scriptWorkspaceStore';
 import {createScriptRepository} from '../apps/api/src/repositories/scriptStore';
 import {OutlineBeats, OutlineBeatTextEditor, outlineNodesForBeat} from '../apps/web/src/features/script/components/OutlineBeats';
 import {ScriptStructure} from '../apps/web/src/features/script/ScriptStructure';
@@ -76,16 +73,6 @@ test('a beat request refuses sibling edits, newly invented identities and relati
   assert.throws(()=>freezeOutlineGrant(project,grant.owner,{outlineBeatIds:['review_selected'],allowStructure:true,structureUnitId:project.units[0].id}),/结构或场序/);
 });
 
-test('manual proposal and adoption reconstruction retain the exact beat whitelist',()=>{
-  const project=fixture(),unit=project.units[0],work={id:'review_workspace',ownerId:'review_author',documentId:project.id,revision:project.revision,document:project};
-  const prepared=(ScriptCommandService.prototype as any).manualScope.call({deps:{}},work,{operation:'outline_development',instruction:'只修改读信节拍',source:{kind:'WORKSPACE'},target:{unitId:unit.id,scopeId:project.id,outlineRange:{start:0,end:6,text:project.brief.outline.slice(0,6)},outlineBeatIds:['review_selected']}});
-  assert.deepEqual(prepared.scope.outlineGrants,[selectedGrant(project)]);
-  const record={id:'review_candidate',status:'VALID',workspaceId:work.id,authorizationId:'review_authorization',baseRef:workspaceRef(work),request:{operation:'outline_development',unitId:unit.id},candidate:{request:{operation:'outline_development',unitId:unit.id}},runId:'review_run'};
-  const service={deps:{drafts:{readCandidate:()=>record},authorizations:{read:()=>({workspaceId:work.id,scope:prepared.scope,sources:[]})},store:{readRun:()=>({input:{}}),db:{prepare:()=>({get:()=>undefined})}}}};
-  const adopted=(ScriptCommandService.prototype as any).applyScope.call(service,work,record.id,work.ownerId);
-  assert.deepEqual(adopted.scope.outlineGrants,[selectedGrant(project)]);
-});
-
 test('manual beat text editing preserves original source, scene links and explicit storylines',()=>{
   const project=fixture(),beforeInput=structuredClone(project),next=updateBeatText(project,project.outlineGuides![0].owner,'review_selected',{title:'当面读信',change:'决定回去核实'});
   assert.equal(next.brief.outline,project.brief.outline);assert.deepEqual(next.units,project.units);assert.deepEqual(next.storylines,project.storylines);
@@ -121,23 +108,6 @@ test('shared season and project owners cannot link private story lines and narro
   assert.throws(()=>setBeatStorylineLink(project,project.outlineGuides![0].owner,'review_selected','review_private',true),/当前大纲/);
   const before=structuredClone(project);
   assert.throws(()=>updateStoryline(project,'review_line',{scopeId:other.scopeId}),/越界|越出/);assert.deepEqual(project,before);
-});
-
-test('outline comparison then partial and full adoption preserve explicit storyline edges',t=>{
-  const db=new Database(':memory:');t.after(()=>db.close());const store=new AgentSqliteStore(db);store.ensureSchema();
-  const conversations=new SqliteConversationStore(store);conversations.ensureSchema();const thread=conversations.open('review_author','script:home','review');
-  const scripts=createScriptRepository(db);scripts.ensureSchema();const workspaces=new ScriptWorkspaceStore(store,scripts,{trustedLegacyProjectOwner:'review_author'});workspaces.ensureSchema();
-  const author=scripts.saveProject(fixture(),0),work=workspaces.create({ownerId:'review_author',threadId:thread.id,requestId:'review-create',source:{projectId:author.id,revision:author.revision}});
-  const revised=changed(work.document),access={ownerId:'review_author',workspaceId:work.id};
-  workspaces.saveAuthor({...access,requestId:'review-save',expectedRevision:work.revision,expectedEpoch:work.writerEpoch,document:revised});
-  const prepare=(outlineOnly=false)=>workspaces.prepareAdoption({...access,workspaceRevision:workspaces.read(work.id,'review_author').revision,expectedAuthorRevision:scripts.getProject(author.id)!.revision,outlineOnly});
-  const partial=prepare(true);assert.deepEqual(partial.document.outlineGuides,author.outlineGuides);assert.deepEqual(partial.document.storylines,author.storylines);
-  workspaces.adopt({...access,requestId:'review-adopt-text',proposalId:partial.id,digest:partial.digest});
-  assert.deepEqual(workspaces.read(work.id,'review_author').document.outlineGuides,revised.outlineGuides);
-  const full=prepare();workspaces.adopt({...access,requestId:'review-adopt-relations',proposalId:full.id,digest:full.digest});
-  const saved=scripts.getProject(author.id)!;assert.deepEqual(saved.outlineGuides,revised.outlineGuides);
-  assert.deepEqual(saved.outlineGuides![0].beats.find(beat=>beat.id==='review_selected')!.storylineIds,['review_line']);
-  assert.deepEqual(saved.units,author.units);assert.deepEqual(saved.storylines,author.storylines);
 });
 
 test('an adopted beat remains in current original-text order and stale quotes stay marked for review',()=>{

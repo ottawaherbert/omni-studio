@@ -1,0 +1,8 @@
+import { useEffect, useRef, useState } from 'react';
+import type { AssetProductionUse } from '../../../packages/domain/src/productionCollaboration';
+export function AssetProductionUseEditor({value,onSave}:{value?:AssetProductionUse;onSave:(value:AssetProductionUse)=>Promise<unknown>}) {
+  const [draft,setDraft]=useState<AssetProductionUse>(value || {}),[dirty,setDirty]=useState(false),[busy,setBusy]=useState(false),[error,setError]=useState('');
+  const baseline=useRef(value || {});
+  useEffect(()=>{if(!dirty){setDraft(value || {});baseline.current=value || {};}},[value]);
+  return <details className="mt-3 border-t border-border-soft pt-3 text-xs"><summary className="cursor-pointer text-text-secondary">拍摄用途与可操作部位</summary><fieldset disabled={busy} className="mt-2 grid min-w-0 gap-2 sm:grid-cols-2">{(['shotScale','dimensions','operations','limitations'] as const).map((key,i)=><label key={key} className="text-text-secondary">{['适用景别','尺寸或尺度依据','需要操作的部位','已验证用途与限制'][i]}<textarea className="mt-1 w-full rounded-md border border-border-soft bg-bg-primary p-2" rows={2} value={draft[key]||''} onChange={e=>{setDirty(true);setDraft({...draft,[key]:e.target.value});}} /></label>)}</fieldset>{error&&<p role="alert">{error}</p>}<button type="button" className="mt-2 text-gold disabled:opacity-40" disabled={!dirty||busy} onClick={async()=>{setBusy(true);try{const patch=Object.fromEntries(Object.entries(draft).filter(([key,value])=>value!==baseline.current[key as keyof AssetProductionUse]));await onSave(patch);baseline.current=draft;setDirty(false);setError('');}catch(e){setError(String(e));}finally{setBusy(false);}}}>保存拍摄用途</button></details>;
+}

@@ -1,5 +1,5 @@
 import {sha256} from 'js-sha256';
-import {hashValue} from '../../agent-core/src/identity';
+import {hashValue} from '../../domain/src/contentIdentity';
 import type {ScriptProject} from './schema';
 import {anchorCurrent, assertOutlineGrant, getOutlineGuide, locateOutlineQuote, outlineGuideId, outlineHash, structureGrantHash, outlineText, replaceOutlineRange, type OutlineGrant, type OutlineGuide} from './outlineGuides';
 import {updateUnitStructure,orderNodeIntervals} from './structure';

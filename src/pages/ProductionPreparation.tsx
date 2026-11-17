@@ -1,3 +1,7 @@
+import { ProductionQualityPanel } from "../components/production/ProductionQualityPanel";
+import { SceneCollaborationPanel } from "../components/production/SceneCollaborationPanel";
+import { productionClient } from "../clients/productionClient";
+import { flushDebouncedProjectSave } from "../clients/stateClient";
 import { useEffect, useMemo, useState } from "react";
 import { Boxes, ChevronLeft, ChevronRight, ClipboardList, FileText, Film, GalleryVerticalEnd, Loader2 } from "lucide-react";
 import { useNavigate, useSearchParams } from "react-router-dom";
@@ -355,8 +359,10 @@ export default function ProductionPreparation() {
               </div>
             )}
             <div className="w-full">
+              {activeScene && <ProductionQualityPanel key={`${currentProject.id}:${activeEpisode.id}:${activeScene.id}`} projectId={currentProject.id} episodeId={activeEpisode.id} sceneId={activeScene.id} shots={activeScene.shots.map((shot,index)=>({id:shot.id,label:`镜头 ${index+1} · ${shot.visualAction || ''}`}))} />}
               {activeTab === "overview" && <ProductionSourceOverviewWorkspace project={currentProject} episode={activeEpisode} updateProject={updateProject} onOpenScene={selectScene} onOpenSourceUnit={(episodeId) => selectEpisode(episodeId, "overview")} newUnitRequestKey={newScriptUnitRequestKey} />}
               {<>
+                {activeTab === "breakdown" && <SceneCollaborationPanel key={activeScene.id} scene={activeScene} entities={[...currentProject.characters,...currentProject.assets].map(a=>({id:a.id,name:a.name}))} onSave={async patch=>{await flushDebouncedProjectSave(currentProject.id);await productionClient.saveSceneCollaboration(currentProject.id,activeEpisode.id,activeScene.id,patch);await setActiveEpisodeId(activeEpisode.id,{view:'production-preparation',sceneId:activeScene.id});}} />}
                 {activeTab === "breakdown" && <ProductionSceneBreakdownWorkspace project={currentProject} episode={activeEpisode} scene={activeScene} updateProject={updateProject} updateScene={updateScene} onContinueBreakdown={goToNextIncompleteBreakdown} nextBreakdownHref={nextBreakdownHref} nextBreakdownTitle={nextIncompleteBreakdownScene?.title} allBreakdownsReady={allBreakdownsReady} remainingBreakdownCount={remainingBreakdownCount} onNext={() => selectTab("assets")} />}
                 {activeTab === "assets" && (<div className="w-full px-3 py-5 sm:px-8 sm:py-7"><ManualProductionAssetsPanel project={currentProject} episode={activeEpisode} episodes={productionFullEpisodes} scene={activeScene} updateProject={updateProject} updateScene={updateScene} filmTeam={filmTeam} onConfirmAssetPack={confirmAssetPack} assetPackConfirmed={assetPackConfirmed} assetPackConfirmBlockedReason={assetPackConfirmBlockedReason} sceneBindingOnly onOpenProjectAsset={(assetId) => navigate(`/production/assets?${new URLSearchParams({ projectId: currentProject.id, episodeId: activeEpisode.id, sceneId: activeScene.id, ...(assetId ? { assetId } : {}), ...(interactiveReturnTo ? { returnTo: interactiveReturnTo } : {}) })}`)} embedded /></div>)}
               </>}

@@ -1,6 +1,7 @@
 import { upgradeAppearanceTemplate } from "./appearanceContract";
 import { upgradeDirectorPlanTemplate } from "./directorPlanContract";
 import { PromptTemplate } from './types';
+import { SCENE_VISUAL_COHERENCE_CONTRACT } from "../../../packages/production/src/services/production/sceneVisualCoherence";
 
 export const base_visual_guidelines = `【全局视觉底线规范 (Negative Constraints)】
 1. 严禁使用“8k、电影级、大师级、超高分辨率”等无意义画质附加词，这会导致 AI 画风趋向虚假的廉价感。
@@ -14,6 +15,8 @@ export const visualsTemplates: Record<string, PromptTemplate> = {
     name: '生成分镜',
     template: upgradeDirectorPlanTemplate(upgradeAppearanceTemplate(`【角色设定】
 你是电影导演与分镜师。把当前场景剧本拆解为可拍摄、可连续执行的 Shot 清单。
+
+${SCENE_VISUAL_COHERENCE_CONTRACT}
 
 ${base_visual_guidelines}
 

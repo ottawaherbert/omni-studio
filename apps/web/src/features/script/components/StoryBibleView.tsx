@@ -432,7 +432,7 @@ export function StoryBibleView({
                 {key:'constraints',label:'作者要求与暂定事项',placeholder:'已明确的保留或避免事项，以及尚待确认的形式与篇幅。没有特殊要求可留空。'}] as const).map(field=>(
                 <section key={field.key} className="space-y-2 py-3 border-b border-border-primary/20">
                   <div className="flex items-center justify-between"><label htmlFor={`blueprint-${field.key}`} className="text-xs font-semibold text-text-primary">{field.label}</label>
-                    <button type="button" title={`与 AI 讨论${field.label}`} aria-label={`与 AI 讨论${field.label}`} onClick={()=>onRequestTask('consult',`请根据已有蓝图，整理一版${field.label}候选供我审阅采用。保留已确定的要求；建议或假设明确标注，不自行添加限制。`)} className="inline-flex items-center justify-center w-8 h-8 rounded-lg text-text-secondary hover:text-text-primary hover:bg-bg-surface-hover"><Sparkles size={16}/></button></div>
+                    <button type="button" title={`分析${field.label}`} aria-label={`分析${field.label}`} onClick={()=>onRequestTask('consult',`请根据已有蓝图，分析${field.label}并给出建议供我手动编辑。保留已确定的要求；建议或假设明确标注，不自行添加限制。`)} className="inline-flex items-center justify-center w-8 h-8 rounded-lg text-text-secondary hover:text-text-primary hover:bg-bg-surface-hover"><Sparkles size={16}/></button></div>
                   <ScriptLongText id={`blueprint-${field.key}`} value={project.brief[field.key]} onChange={event=>onUpdateProject(draft=>{draft.brief[field.key]=event.target.value;})} placeholder={field.placeholder} rows={3} className="w-full text-xs p-3 rounded-lg bg-bg-surface-soft border border-border-primary/30 focus:outline-none leading-relaxed"/>
                 </section>
               ))}
@@ -499,7 +499,7 @@ export function StoryBibleView({
                     type="button"
                     onClick={() => onRequestTask('character')}
                     className="inline-flex shrink-0 items-center justify-center w-8 h-8 rounded-lg text-text-secondary hover:text-text-primary hover:bg-bg-surface-hover focus-visible:outline focus-visible:outline-2"
-                   title="与 AI 讨论人物" aria-label="与 AI 讨论人物"><Sparkles size={16} /></button>
+                   title="分析人物" aria-label="分析人物"><Sparkles size={16} /></button>
                   <button
                     type="button"
                     onClick={() => setIsAddingChar(true)}
@@ -592,7 +592,7 @@ export function StoryBibleView({
                       type="button"
                       onClick={() => onRequestTask('character')}
                       className="inline-flex shrink-0 items-center justify-center w-8 h-8 rounded-lg text-text-secondary hover:text-text-primary hover:bg-bg-surface-hover focus-visible:outline focus-visible:outline-2"
-                     title="与 AI 讨论人物" aria-label="与 AI 讨论人物"><Sparkles size={16} /></button>
+                     title="分析人物" aria-label="分析人物"><Sparkles size={16} /></button>
                     <div className="flex gap-2">
                       <button
                         type="button"
@@ -726,7 +726,7 @@ export function StoryBibleView({
                     type="button"
                     onClick={() => onRequestTask('fact')}
                     className="inline-flex shrink-0 items-center justify-center w-8 h-8 rounded-lg text-text-secondary hover:text-text-primary hover:bg-bg-surface-hover focus-visible:outline focus-visible:outline-2"
-                   title="与 AI 讨论设定" aria-label="与 AI 讨论设定"><Sparkles size={16} /></button>
+                   title="分析设定" aria-label="分析设定"><Sparkles size={16} /></button>
                   <button
                     type="button"
                     onClick={() => setIsAddingFact(true)}
@@ -811,7 +811,7 @@ export function StoryBibleView({
                       type="button"
                       onClick={() => onRequestTask('fact')}
                       className="inline-flex shrink-0 items-center justify-center w-8 h-8 rounded-lg text-text-secondary hover:text-text-primary hover:bg-bg-surface-hover focus-visible:outline focus-visible:outline-2"
-                     title="与 AI 讨论设定" aria-label="与 AI 讨论设定"><Sparkles size={16} /></button>
+                     title="分析设定" aria-label="分析设定"><Sparkles size={16} /></button>
                     <div className="flex justify-end gap-2">
                       <button
                         type="button"

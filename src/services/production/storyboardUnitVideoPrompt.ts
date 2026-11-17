@@ -1,3 +1,4 @@
+import { renderSceneContinuityBasis } from "./sceneVisualPlan";
 import { buildVideoContinuityContext } from "../../../packages/production/src/services/production/videoContinuityContext";
 import type {
   ManualStoryboardBoard,
@@ -20,6 +21,7 @@ const unitPromptShotValue = (shot: Shot, board?: ManualStoryboardBoard) => {
   return {
     id: shot.id,
     durationSeconds: Number(shot.duration || 0),
+    motivation: compact(shot.motivation), editingNote: compact(shot.editingNote),
     videoPrompt: compact(shot.videoPrompt),
     visualAction: compact(shot.visualAction),
     microExpression: compact(shot.microExpression),
@@ -52,7 +54,8 @@ export const buildStoryboardUnitVideoPromptSourceHash = ({
   workflow: Pick<ManualStoryboardBoardWorkflow, "shotId" | "shotIds" | "board">;
   shots: Shot[];
 }) => manualStoryboardHash({
-  continuity: buildVideoContinuityContext({ sceneId: "current_scene", shots, unitShotIds: unitShotIds(workflow) }),
+  continuity: buildVideoContinuityContext({ sceneId: workflow.board?.sceneId || "unknown_scene", shots, unitShotIds: unitShotIds(workflow) }),
+  sceneBasis: workflow.board?.continuityBasis,
   startState: compact(workflow.board?.startState),
   endState: compact(workflow.board?.endState),
   shots: orderedUnitShots(workflow, shots).map((shot) => unitPromptShotValue(shot, workflow.board)),
@@ -91,6 +94,8 @@ export const buildStoryboardUnitVideoPromptText = ({
     return [
       `【镜头 ${index + 1}｜${start.toFixed(1)}-${cursor.toFixed(1)}s】`,
       `画面与动作：${action}`,
+      shot.motivation ? `本镜目的：${compact(shot.motivation)}` : "",
+      shot.editingNote ? `节拍与切出：${compact(shot.editingNote)}` : "",
       camera ? `摄影机：${camera}` : "",
       lighting ? `光影氛围：${lighting}` : "",
       performance ? `表演与调度：${performance}` : "",
@@ -100,7 +105,8 @@ export const buildStoryboardUnitVideoPromptText = ({
     ].filter(Boolean).join("\n");
   });
   return [
-    buildVideoContinuityContext({ sceneId: "current_scene", shots, unitShotIds: unitShotIds(workflow) }),
+    renderSceneContinuityBasis(workflow.board?.continuityBasis, unitShotIds(workflow)),
+    buildVideoContinuityContext({ sceneId: workflow.board?.sceneId || "unknown_scene", shots, unitShotIds: unitShotIds(workflow) }),
     `视频单元时长约 ${cursor.toFixed(1)} 秒，按以下镜头顺序连续执行。`,
     workflow.board?.startState ? `起始状态：${compact(workflow.board.startState)}` : "",
     ...shotBlocks,

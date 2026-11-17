@@ -74,7 +74,7 @@ export function ProductionSceneRail({
           <p className="mt-1 text-[10px] text-text-muted font-medium">共 {scenes.length} 个可制片场次</p>
         </div>
         <span className="rounded-lg bg-bg-surface-soft border border-border-soft/10 px-2 py-0.5 text-[10px] font-bold text-text-secondary">
-          已拆解 {scenes.filter((scene) => sceneBreakdownStatus(scene) === "已确认").length}/{scenes.length}
+          {showStoryboardMetrics ? `已有镜头 ${scenes.filter(scene => sceneShotCount(scene) > 0).length}/${scenes.length}` : `已拆解 ${scenes.filter((scene) => sceneBreakdownStatus(scene) === "已确认").length}/${scenes.length}`}
         </span>
       </div>
       <div className="min-h-0 flex-1 space-y-2 overflow-y-auto p-3 custom-scrollbar">
@@ -100,7 +100,7 @@ export function ProductionSceneRail({
                 <span className={`min-w-0 truncate text-xs font-black ${isActive ? "text-gold" : "text-text-primary"}`}>{String(index + 1).padStart(2, "0")} · {scene.title}</span>
                 {showStoryboardMetrics && scene.targetDuration ? (
                   <span className="text-[9px] font-bold text-text-muted bg-bg-surface-soft px-1.5 py-0.5 rounded border border-border-soft/10 shrink-0">
-                    {formatSceneDurationInSeconds(scene.targetDuration)}
+                    目标 {formatSceneDurationInSeconds(scene.targetDuration)}
                   </span>
                 ) : (
                   <ChevronRight className="h-3.5 w-3.5 shrink-0 opacity-50 text-text-dark" />

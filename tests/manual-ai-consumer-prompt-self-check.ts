@@ -1,3 +1,5 @@
+import { buildGenerationCatalog, generationHash } from '../src/server/generation/catalog';
+import { validateGenerationDraft, type GenerationTaskDraft, type GenerationPlanRevision } from '../packages/domain/src/generation';
 import { useSettingsStore } from '../src/store/useSettingsStore';
 import assert from "node:assert/strict";
 import { answerManualAI, getManualAIPending, withManualAIResult } from "../apps/web/src/clients/manualAIClient";
@@ -30,15 +32,67 @@ useAIConfigStore.setState({ hasHydrated: true, channels: [
   { id: "video", channelId: "video", alias: "video", modelId: "veo-3.1-fast", capabilities: ["video"] },
 ], routing: { ...savedConfig.routing, scriptGen: "text", imageGen: "image", audioGen: "audio", videoGen: "video" } });
 useGlobalStore.setState({ bgmSettings: { ...savedGlobal.bgmSettings, provider: "custom", customApiUrl: "https://example.invalid/bgm", customKeySource: "local", customApiKey: "test-only" } });
+// Mock only the current HTTP transport boundary. Keep the authored prompt, references,
+// capability validation and frozen-plan identity intact across draft/preflight/submit.
+const generationBase = '/api/production/generation';
+const recipes = buildGenerationCatalog(useAIConfigStore.getState()).map(recipe => ({ ...recipe, presets: recipe.presetVariants }));
+let imageTask: GenerationTaskDraft;
+let imagePlan: GenerationPlanRevision;
+let submittedImagePlan: GenerationPlanRevision | undefined;
+let submittedVideoPlan: GenerationPlanRevision | undefined;
 globalThis.fetch = async (input, init) => {
   const url = String(input);
-  const body = JSON.parse(String(init?.body));
+  const body = init?.body === undefined ? undefined : JSON.parse(String(init.body));
   calls.push({ url, body });
   if (url === "/api/proxy/openai-compatible") return Response.json({ choices: [{ message: { content: '{"ok":true}' } }] });
-  if (url === "/api/proxy/doubao") return Response.json({ data: [{ url: "/media/test-image.png" }] });
+  if (url === generationBase + '/capabilities') return Response.json({ recipes });
+  if (url === generationBase + '/tasks') {
+    const recipe = recipes.find(recipe => recipe.capability.id === body.capabilityId)!;
+    assert.ok(['asset_image', 'video'].includes(body.operation));
+    assert.equal(body.target.kind, 'scratch', 'this consumer test has no formal production target');
+    imageTask = { id: 'reviewed-image-task', revision: 1, target: body.target, operation: body.operation,
+      capabilityId: recipe.capability.id, prompt: '', references: [],
+      parameters: Object.fromEntries(recipe.capability.parameters.map(parameter => [parameter.key, {value: parameter.default, source: 'default', locked: false}])),
+      contentType: 'mixed', quality: 'production', narrativeSeconds: 0, sourceHash: 'fixture-source', sourceRevision: 0,
+      label: '手动提示词传输测试', createdAt: 1, updatedAt: 1 };
+    return Response.json({task: imageTask});
+  }
+  if (url.startsWith(generationBase + '/workspaces/current?')) return Response.json({executions: []});
+  if (url === generationBase + '/references') return Response.json({reference: {
+    id: 'reviewed-image-reference', label: body.label, mediaUrl: body.mediaUrl, mediaKind: body.mediaKind,
+    role: body.role, mediaVersionId: 'fixture-reference', enabled: false, locked: false, source: 'user', status: 'candidate',
+  }});
+  if (url === generationBase + '/tasks/reviewed-image-task') {
+    assert.equal(init?.method, 'PATCH'); assert.equal(body.expectedRevision, imageTask.revision);
+    imageTask = {...imageTask, ...body.patch, revision: imageTask.revision + 1};
+    return Response.json({task: imageTask});
+  }
+  if (url === generationBase + '/tasks/reviewed-image-task/preflight') {
+    assert.equal(body.expectedRevision, imageTask.revision);
+    const capability = recipes.find(recipe => recipe.capability.id === imageTask.capabilityId)!.capability;
+    const issues = validateGenerationDraft(imageTask, capability);
+    assert.deepEqual(issues.filter(issue => issue.blocking), []);
+    imagePlan = {id: 'reviewed-image-plan', taskId: imageTask.id, draftRevision: imageTask.revision,
+      target: imageTask.target, operation: imageTask.operation, sourceHash: imageTask.sourceHash,
+      sourceRevision: imageTask.sourceRevision, capability, prompt: imageTask.prompt, references: structuredClone(imageTask.references),
+      parameters: Object.fromEntries(Object.entries(imageTask.parameters).map(([key, parameter]) => [key, parameter.value])),
+      narrativeSeconds: imageTask.narrativeSeconds, requestedSeconds: Number(imageTask.parameters.duration?.value || 0),
+      planHash: generationHash(imageTask), compiledRequestHash: generationHash(imageTask), createdAt: 1, issues};
+    return Response.json({plan: imagePlan, issues});
+  }
+  if (url === generationBase + '/executions') {
+    assert.equal(body.planRevisionId, imagePlan.id); assert.equal(body.planHash, imagePlan.planHash);
+    assert.ok(body.idempotencyKey);
+    if (imagePlan.operation === 'video') {
+      submittedVideoPlan = structuredClone(imagePlan);
+      return Response.json({error: 'Test boundary: video generation deliberately not performed'}, {status: 418});
+    }
+    submittedImagePlan = structuredClone(imagePlan);
+    return Response.json({execution: {id: 'reviewed-image-execution', status: 'succeeded',
+      results: [{mediaUrl: '/media/test-image.png', technicalIssues: []}]}});
+  }
   if (url === "/api/audio/speech") return Response.json({ url: "/media/test-speech.wav" });
   if (url === "/api/proxy/custom-bgm") return Response.json({ url: "/media/test-bgm.wav" });
-  if (url === "/api/proxy/gemini" && body.action === "generateVideos") return new Response("Test boundary: video generation deliberately not performed", { status: 418 });
   throw new Error(`Unexpected request: ${url}`);
 };
 const pending = async () => {
@@ -79,10 +133,14 @@ try {
   assert.throws(() => answerManualAI(request.id, undefined, { prompt: "invalid --ar 16:9" }), /平台参数/);
   answerManualAI(request.id, undefined, imageReview);
   assert.equal(await image, "/media/test-image.png");
-  const imageBody = JSON.parse(calls.at(-1)!.body.rawBody);
+  assert.equal(calls.at(-1)!.url, generationBase + '/executions');
+  assert.ok(submittedImagePlan, 'the edited image prompt must reach fixed-plan submission');
+  const imageBody = submittedImagePlan;
   assert.equal(imageBody.prompt, expected.providerPrompt);
-  assert.deepEqual(imageBody.image, ["/media/reference.png"]);
-  assert.equal(imageBody.size, "1536x2048");
+  assert.deepEqual(imageBody.references.filter(reference => reference.enabled).map(reference => reference.mediaUrl), ['/media/reference.png']);
+  assert.equal(imageBody.parameters.aspectRatio, '3:4');
+  assert.doesNotMatch(imageBody.prompt, /old composition/);
+  assert.ok(!calls.some(call => call.url === '/api/proxy/doubao'), 'the consumer must use the generation workbench transport');
   assert.equal(imageAudit!.manifest.finalHash, expected.manifest.finalHash);
   assert.match(imageBody.prompt, /红围巾/);
   assert.match(imageBody.prompt, /雪落之前/);
@@ -97,7 +155,7 @@ try {
   assert.equal(imageAudit!.providerPrompt, expected.providerPrompt);
   assert.deepEqual(imageExecution, { source: "manual_external", provider: "manual_external", modelId: "manual_external", requestedModelId: "image" });
 
-  const voice = review(() => generateAIVoice({ text: "old dialogue", voiceName: "serena", language: "Chinese", speed: 1, instructions: "old acting", modelConfigId: "audio", projectId: "test-project" }));
+  const voice = review(() => generateAIVoice({ purpose: 'preview', text: "old dialogue", voiceName: "serena", language: "Chinese", speed: 1, instructions: "old acting", modelConfigId: "audio", projectId: "test-project" }));
   request = await pending();
   assert.equal(request.systemInstruction, "old acting");
   assert.match(request.context!, /serena[\s\S]*Chinese/);
@@ -112,7 +170,7 @@ try {
   assert.equal(voiceBody.projectId, "test-project");
   assert.equal(latestAudit().manifest.finalHash, promptContentHash("压低声音，语气坚定。\n\n新台词。"));
 
-  const bgm = review(() => generateAIBgm({ prompt: "old music" }));
+  const bgm = review(() => generateAIBgm({ purpose: 'preview', prompt: "old music" }));
   request = await pending();
   answerManualAI(request.id, undefined, { prompt: "new music", systemInstruction: "Sparse piano." });
   assert.equal(await bgm, "/media/test-bgm.wav");
@@ -123,16 +181,17 @@ try {
   const visualStyleCompileManifest = { schemaVersion: "visual-compile-manifest.v1" as const, recipeId: videoRecipe.id, recipeVersion: videoRecipe.version, intent: "video_clip" as const, presentation: "final_render" as const, targetSelection: { mode: "targeted" as const, targets: [{ entityType: "character" as const, entityId: "test-character" }] }, sourceStyle: { schemaVersion: "visual-style-lock.v3", revision: 1, resolvedContentHash: "test-style" }, appliedMediumProfiles: [], appliedMediumAssignmentIds: [], suppressedFields: [], issueCodes: [], blockIds: [] };
   const imageUrl = "data:image/png;base64,dGVzdA==";
   let videoAudit: any;
-  const directVideo = review(() => generateAIVideo({ prompt: "old video action", imageUrl, durationSeconds: 5, visualStyleCompileManifest, onProviderPromptPrepared: audit => { videoAudit = audit; } }));
+  const directVideo = review(() => generateAIVideo({ prompt: "old video action", imageUrl, durationSeconds: 6, visualStyleCompileManifest, onProviderPromptPrepared: audit => { videoAudit = audit; } }));
   const directRejected = assert.rejects(directVideo, /Test boundary/);
   request = await pending();
   answerManualAI(request.id, undefined, { prompt: "new video action" });
   await directRejected;
-  assert.equal(calls.at(-1)!.body.payload.prompt, videoAudit.finalProviderPrompt);
+  assert.equal(calls.at(-1)!.url, generationBase + '/executions');
+  assert.equal(submittedVideoPlan!.prompt, videoAudit.finalProviderPrompt);
   assert.match(videoAudit.finalProviderPrompt, /new video action/);
   assert.doesNotMatch(videoAudit.finalProviderPrompt, /old video action/);
 
-  const intent = { ...createLegacyVideoGenerationIntent({ prompt: "original intent", imageUrl, durationSeconds: 5 }), visualStyleCompileManifest };
+  const intent = { ...createLegacyVideoGenerationIntent({ prompt: "original intent", imageUrl, durationSeconds: 6 }), visualStyleCompileManifest };
   let intentPlan: any;
   const intentVideo = review(() => generateVideoFromIntent({ intent, idempotencyKey: "test-only", onAdapterPlanPrepared: plan => { intentPlan = plan; } }));
   const intentRejected = assert.rejects(intentVideo, /Test boundary/);
@@ -142,7 +201,7 @@ try {
   assert.equal(getManualAIPending(), undefined, "one video request must not open a second prompt editor");
   assert.match(intentPlan.finalConfirmedPrompt, /edited intent action/);
   assert.match(intentPlan.finalConfirmedPrompt, /visual_recipe_contract/);
-  assert.equal(calls.at(-1)!.body.payload.prompt, intentPlan.finalConfirmedPrompt);
+  assert.equal(submittedVideoPlan!.prompt, intentPlan.finalConfirmedPrompt);
 
   const manualVideo = review(() => generateVideoFromIntent({ intent, idempotencyKey: "manual-test", onAdapterPlanPrepared: plan => { intentPlan = plan; } }));
   request = await pending();

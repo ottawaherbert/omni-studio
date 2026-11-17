@@ -1,6 +1,8 @@
+import { registerProductionCollaborationRoutes } from "./productionCollaborationRoutes";
 import type { Express, Response } from "express";
 
-import { dbHelpers } from "../db";
+import { db, dbHelpers } from "../db";
+import { normalizeDirectorPlan } from "../../../packages/production/src/services/production/directorPlan";
 import {
   createDefaultStyleVariantPolicy,
   createDefaultTargetScale,
@@ -28,6 +30,33 @@ const withProjectProductionDefaults = (rawProject: any) => {
 };
 
 export const registerLegacyProjectRoutes = (app: Express) => {
+  registerProductionCollaborationRoutes(app);
+  // A deliberate, field-scoped edit: callers never manage storage revisions.
+  app.patch("/api/projects/:id/episodes/:epId/scenes/:sceneId/director-plan", (req, res) => {
+    const { intent, rhythm } = req.body || {};
+    if (typeof intent !== 'string' || typeof rhythm !== 'string' || intent.length > 12000 || rhythm.length > 12000) {
+      return res.status(400).json({ error: '请提供观看重点和节奏文字。' });
+    }
+    try {
+      const saved = db.transaction(() => {
+        const project = dbHelpers.getProjectShellById(req.params.id);
+        const episode = dbHelpers.getEpisodeById(req.params.id, req.params.epId);
+        const scene = episode?.scenes.find(item => item.id === req.params.sceneId);
+        if (!project || !episode || !scene) return null;
+        const previous = scene.manualStoryboard?.directorPlan;
+        const normalized = normalizeDirectorPlan({ project, episode, scene, shots: scene.shots || [], rawShots: [], rawPlan: { intent, rhythm } });
+        // Keep authored method decisions and shot associations on a brief edit.
+        const plan = previous
+          ? { ...previous, intent, rhythm }
+          : normalized.plan;
+        scene.manualStoryboard = { ...scene.manualStoryboard, schemaVersion: 'manual-storyboard.v1', directorPlan: plan, updatedAt: Date.now() };
+        return dbHelpers.updateEpisode(req.params.id, req.params.epId, { ...episode, __requireProductionRevision: true });
+      })();
+      if (!saved) return res.status(404).json({ error: '场次不存在。' });
+      return res.json(saved);
+    } catch (err) { return sendLegacyRouteError(res, err, '保存场面方案失败'); }
+  });
+
   app.get("/api/projects", async (req, res) => {
     try {
       // Project lists are global shell data and must never pull every episode,

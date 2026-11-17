@@ -2,11 +2,12 @@ import React, { useRef, useState } from "react";
 import { Loader2, Mic, Music, Wand2, Library, Volume2, FolderOpen } from "lucide-react";
 import { AudioTrack, Project } from "../clients/domainTypes";
 import { BgmGeneratorModal, type BgmGovernedContext, type BgmGenerationResult } from "./BgmGeneratorModal";
-import { flushDebouncedProjectSave, useGlobalStore } from "../clients/stateClient";
+import { flushDebouncedProjectSave, useGlobalStore, useProjectStore } from "../clients/stateClient";
 import toast from "react-hot-toast";
 import { Link } from "react-router-dom";
 import { Modal } from "./ui/Modal";
 import { buildGovernedBgmTrackUpdate } from "../clients/productionStudioWorkflowClient";
+import { resolveAudioLibraryUrl } from "../utils/episodeAudioExport";
 
 interface StudioAudioControlsProps {
   selectedAudioTrack: AudioTrack;
@@ -38,6 +39,8 @@ export const StudioAudioControls: React.FC<StudioAudioControlsProps> = ({
   const [isBgmModalOpen, setIsBgmModalOpen] = useState(false);
   const [isLibraryModalOpen, setIsLibraryModalOpen] = useState(false);
   const { globalAssets } = useGlobalStore();
+  const activeEpisode = useProjectStore(state => state.activeEpisode);
+  const audioScene = activeEpisode?.scenes.find(scene => scene.audioTracks?.some(track => track.id === selectedAudioTrack.id));
   const bgmGovernedContextRef = useRef(bgmGovernedContext);
   bgmGovernedContextRef.current = bgmGovernedContext;
   const globalBgmAssets = globalAssets.filter(a => a.type === 'bgm');
@@ -191,6 +194,7 @@ export const StudioAudioControls: React.FC<StudioAudioControlsProps> = ({
             onClose={() => setIsBgmModalOpen(false)}
             initialPrompt={selectedAudioTrack.text || ''}
             governedContext={bgmGovernedContext}
+            audioContext={{ purpose: 'production', target: { projectId: currentProject.id, episodeId: activeEpisode?.id, sceneId: audioScene?.id, ...(selectedAudioTrack.shotId ? { shotIds: [selectedAudioTrack.shotId] } : {}) } }}
             onGenerated={bgmGovernedContext ? handleGovernedBgmGenerated : undefined}
             onSave={(bgmAssetId) => {
               onUpdateAudioTrack({ linkedAssetId: bgmAssetId });
@@ -246,7 +250,9 @@ export const StudioAudioControls: React.FC<StudioAudioControlsProps> = ({
             <p>资产库中还没有{selectedAudioTrack.type === 'bgm' ? '背景音乐' : '音效'}。先添加声音素材，再返回这里选择。</p>
             <Link className="inline-block text-gold hover:underline" to="/assets">前往全局资产库</Link>
           </div> : allLibraryAssets.map(asset => <button type="button" key={asset.id} onClick={() => {
-            onUpdateAudioTrack({ linkedAssetId: asset.id, url: '', audioMedia: undefined, generationAudit: undefined });
+            const url = resolveAudioLibraryUrl(asset.id, currentProject.assets, globalAssets);
+            if (!url) { toast.error('这份库素材没有可用声音文件，请先补充素材。'); return; }
+            onUpdateAudioTrack({ linkedAssetId: asset.id, url, audioMedia: undefined, generationAudit: undefined });
             setIsLibraryModalOpen(false);
           }} className="w-full rounded-md border border-border-soft p-3 text-left hover:bg-bg-surface-hover">
             <span className="block text-sm font-semibold text-text-primary">{asset.name}</span>

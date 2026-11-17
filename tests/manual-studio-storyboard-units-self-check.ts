@@ -125,6 +125,8 @@ assert.deepEqual(h3Plan.units.map((unit) => unit.shotIds), [
 ]);
 assert.ok(h3Plan.units.every((unit) => unit.strategyDecision?.expectedVideoUnitDurationSeconds === 12));
 assert.ok(h3Plan.units.every((unit) => unit.board?.visualPages?.[0].visualTakes?.[0].imageUrl === adoptedVisualTake.imageUrl));
+assert.ok(h3Plan.units.every((unit) => !unit.board?.visualPages?.[0].activeVisualTakeId), 'a whole-scene image cannot remain adopted for a smaller execution unit');
+assert.ok(h3Plan.units.every((unit) => unit.board?.visualPages?.[0].visualTakes?.[0].status === 'stale'), 'original image remains history until the correct subset is reviewed');
 assert.deepEqual(
   h3Plan.units[0].board?.panels.flatMap((panel) => panel.assetRefs),
   ["parent", "kitchen", "parent", "kitchen", "toaster"],

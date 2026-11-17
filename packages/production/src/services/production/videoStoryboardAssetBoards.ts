@@ -1,3 +1,5 @@
+import { CHARACTER_REFERENCE_LAYOUTS, characterReferenceOwner, characterReferenceImage } from './characterReferenceLayouts';
+import { LOCATION_SUPPLEMENTARY_VIEWS, buildLocationViewPrompt, locationViewCurrentIssue, locationViewImage, locationViewSourceHash, locationViewLabels } from './locationViews';
 import type { Asset, AssetVariant, Character, Project } from "../../../../../src/types/project";
 import type { ContentLockPackage, ProductionBlockLock, ScriptLockPackage } from "./productionLock";
 import type { CastingRequirement, DepartmentPrepPackage, ProductionBreakdownReport } from "./productionPrep";
@@ -38,6 +40,10 @@ export interface AssetBoardLayoutContract {
 }
 
 export interface VideoStoryboardAssetBoardItem {
+  characterReferenceLayout?: import('../../../../../src/types/project').CharacterReferenceLayout;
+  locationView?: import("../../../../../src/types/project").LocationSupplementaryView;
+  locationViewSourceHash?: string;
+  locationViewIssue?: string;
   id: string;
   assetId: string;
   assetType: "character" | "location" | "prop" | "vehicles";
@@ -80,6 +86,8 @@ export interface VideoStoryboardAssetBoardPlan {
   formalAssetBlockers: string[];
   characterBoards: VideoStoryboardAssetBoardItem[];
   sceneBoards: VideoStoryboardAssetBoardItem[];
+  sceneViewBoards: VideoStoryboardAssetBoardItem[];
+  characterReferenceBoards: VideoStoryboardAssetBoardItem[];
   propBoards: VideoStoryboardAssetBoardItem[];
   vehicleBoards: VideoStoryboardAssetBoardItem[];
   variantBoards: VideoStoryboardAssetBoardItem[];
@@ -132,7 +140,7 @@ export const resolveAssetBoardLayoutContract = (
   if (boardKind === "character_board") return contract(
     "asset-board.character.production-sheet.v1",
     ["大型正面全身英雄视角", "正面全身", "侧面全身", "背面全身", "头部正面与侧面"],
-    ["3-6 个可执行姿态与身体重心", "至少 8 格表情与眼神矩阵", "发型/服装/饰品/鞋/手部细节", "至少 3 个轮廓剪影", "项目色板"],
+    ["本次拍摄需要的身份与服装细节；姿态、表情、剪影和色板仅按明确设计需求补充，不设固定数量"],
     "所有区域必须是同一人物、同一年龄、同一脸型体型、同一发型和同一 canonical 服装。",
     ["剧情场景截图", "不同演员拼贴", "不同服装状态混排", "裁断头脸或关键肢体", "依赖图片模型书写长文字"],
   );
@@ -145,8 +153,8 @@ export const resolveAssetBoardLayoutContract = (
   );
   if (boardKind === "prop_board") return contract(
     "asset-board.prop.production-sheet.v1",
-    ["大型英雄视角", "正面", "侧面", "背面", "顶视", "底部/接口"],
-    ["手持或角色比例", "材质与磨损细节", "可交互部件", "开启/关闭或使用方式", "尺寸参照"],
+    ["能识别整体轮廓的主视图", "剧情操作涉及的结构、接口与必要补充角度"],
+    ["明确尺寸比例；持握、开关和细节研究按实际使用需要补充，不固定六面视图"],
     "所有视图必须保持同一轮廓、尺寸、材质、接口和功能结构。",
     ["互斥状态混排", "改变核心结构", "无关场景表演", "品牌/水印/UI", "依赖图片模型书写长文字"],
   );
@@ -198,7 +206,7 @@ const refsForVariant = (variant: AssetVariant) => ({
 
 const boardCanvasRules = [
   "最终成品必须是一张复合制作参考板，不是散图、普通肖像、气氛图或单一视角图片。",
-  "使用清楚分区、留白充足、制作信息可扫描的参考页布局；主视图、正侧背、研究区、细节区和色板区必须能一眼区分。",
+  "使用清楚分区、留白充足的参考页布局；所选视图与必要细节一眼可辨，不为填满版面增加未要求的研究区或色板。",
   "所有研究图必须清晰分离，不重叠、不裁脸、不隐藏关键肢体或结构，不把多个姿势合并成一个角色/资产。",
   "画布顶部和底部保留干净的信息带，不生成中文标题、标签、色板名称、水印或长文字；系统会在出图后确定性叠加真实名称、板型、研究区说明和色板，避免模型乱码。",
   "资产真实名称、角色、视觉标志、variantId 和状态必须保存在结构化字段中，图片模型不得自行编造制作文字。",
@@ -210,11 +218,11 @@ const characterBoardPrompt = (character: Character) =>
     boardCanvasRules,
     `【主体】角色：${character.name}`,
     character.visualIdentity ? `【可见身份锚点】${character.visualIdentity}` : "",
-    "【制作目标】创建一张制作级角色身份板，用于后续图像和视频模型锁定同一角色身份，而不是普通角色参考表。",
-    "【主要构图】一个大型英雄全身视角略微偏离中心作为视觉锚点；围绕它放置中性全身、背面、侧面、坐姿、倾斜姿势、蹲姿、俯视身体角度、仰视身体角度和富有表现力的肖像研究。",
+    "【制作目标】本次选择制作资料板，用于审查角色设计；不代表每项资产还必须再做一套纯净图。下游选择清晰的身份视图，密集整板不是默认生成输入。",
+    "【主要构图】以正面全身、侧面、背面与面部身份特写为基础；只补充本次拍摄需要的服装或结构细节，保持每个视图足够清晰。",
     "【身份锁定】所有视角保持相同面部、面部比例、发型、服装、身体比例、姿势语言和视觉个性；不得在不同视角里改变年龄、脸型、发型、体型或服装基准。",
     "【有用参考细节】清晰呈现面部形状、发型轮廓、服装轮廓、身体形状、手部、姿势、表情范围和角色视觉标志。",
-    "【研究区】包含 2-3 个简化黑色轮廓；包含细微情感变化的表情研究；包含面部、头发、服装关键特征的细节研究。",
+    "【研究区】表情、动作、剪影与色板按实际设计需求选用，不默认要求八表情、三剪影或重复姿势；不得为填满版面另设计一套身份。",
     "【信息区】只预留干净版面，不绘制中文名称或标签；名称、角色、核心情绪和视觉标志由系统确定性排版器叠加。允许少量不含文字的细微箭头。",
   ].filter(Boolean).join("\n"));
 
@@ -237,7 +245,7 @@ const propBoardPrompt = (asset: Asset) =>
     `【主体】道具/装备：${asset.name}`,
     asset.description ? `【基础描述】${asset.description}` : "",
     "【制作目标】创建一张道具身份板，用于锁定外形、尺寸、材质、持握方式、交互部件和状态变化，便于故事板和视频模型稳定复用。",
-    "【主要构图】一个大型英雄视角作为视觉锚点；周围排列正面、侧面、背面、顶视图、底部/接口、持握方式、与手部或角色比例关系、可交互部件和关键细节研究。",
+    "【主要构图】以主视图为视觉锚点；按剧情操作需要选择接口、开关、持握或关键细节，补充确实有用的角度，不固定六面或四栏。",
     "【身份锁定】所有视角保持同一 canonical 道具，不得改变标志性轮廓、材质逻辑、尺寸比例或功能结构。",
     "【状态研究】如有开启、破损、发光、污染、封印解除、耗尽等状态，只作为变体研究；不要把状态变化当成新道具身份。",
   ].filter(Boolean).join("\n"));
@@ -547,6 +555,32 @@ export const buildVideoStoryboardAssetBoardPlan = (
       });
     }),
   );
+  const characterReferenceBoards = [...characterBoards, ...characterVariantBoards].flatMap(base => {
+    const character = characters.find(c => c.id === base.assetId)!;
+    const owner = characterReferenceOwner(character, base.variantId);
+    return CHARACTER_REFERENCE_LAYOUTS.map(layout => {
+      const image = characterReferenceImage(character, layout, base.variantId);
+      return {...base, id: `${base.id}:layout:${layout}`, characterReferenceLayout: layout,
+        cleanPrompt: owner?.characterReferenceLayouts?.[layout]?.prompt,
+        cleanReferenceImageUrl: image, referenceImageUrl: image, productionReferenceImageUrl: undefined,
+        readiness: image ? 'reference_ready' as const : 'prompt_ready' as const};
+    });
+  });
+  const sceneViewBoards = [...sceneBoards, ...assetVariantBoards.filter(b => b.assetType === 'location')].flatMap(base => {
+    const asset = locations.find(a => a.id === base.assetId)!;
+    return LOCATION_SUPPLEMENTARY_VIEWS.map(view => {
+      const image = locationViewImage(asset, view, base.variantId);
+      const prompt = buildLocationViewPrompt(asset, view, base.variantId);
+      return { ...base, id: `${base.id}:view:${view}`, locationView: view,
+        locationViewSourceHash: locationViewSourceHash(project, asset, view, base.variantId),
+        locationViewIssue: image ? locationViewCurrentIssue(project, asset, view, base.variantId) : undefined,
+        assetName: `${base.assetName} · ${locationViewLabels[view]}`,
+        prompt, cleanPrompt: prompt, productionReferenceImageUrl: undefined,
+        cleanReferenceImageUrl: image, referenceImageUrl: image,
+        readiness: image ? 'reference_ready' as const : 'prompt_ready' as const,
+      };
+    });
+  });
   return {
     id: `${project.id}.asset_board_plan`,
     projectId: project.id,
@@ -555,6 +589,8 @@ export const buildVideoStoryboardAssetBoardPlan = (
     ...productionState,
     characterBoards,
     sceneBoards,
+    sceneViewBoards,
+    characterReferenceBoards,
     propBoards,
     vehicleBoards,
     variantBoards: [...characterVariantBoards, ...assetVariantBoards],

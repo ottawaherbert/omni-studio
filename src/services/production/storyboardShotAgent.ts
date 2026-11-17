@@ -1,5 +1,6 @@
 import { appearanceContract } from "../../config/prompts/appearanceContract";
 import { directorPlanContract } from "../../config/prompts/directorPlanContract";
+import { SCENE_VISUAL_COHERENCE_CONTRACT } from "../../../packages/production/src/services/production/sceneVisualCoherence";
 import type { SceneDirectorPlan } from "../../../packages/domain/src/directorPlan";
 import { Type } from "../../clients/aiSchemaClient";
 import type {
@@ -100,9 +101,13 @@ export const storyboardShotSchema = {
   items: {
     type: Type.OBJECT,
     properties: {
+      beatIds: {type:Type.ARRAY,items:{type:Type.STRING}}, eventIds:{type:Type.ARRAY,items:{type:Type.STRING}},
       sourceShotId: { type: Type.STRING },
       directorPlan: { type: Type.OBJECT, properties: {
         intent: { type: Type.STRING }, rhythm: { type: Type.STRING },
+        requirements: {type:Type.ARRAY,items:{type:Type.OBJECT,properties:{id:{type:Type.STRING},department:{type:Type.STRING},description:{type:Type.STRING},reason:{type:Type.STRING},targetIds:{type:Type.ARRAY,items:{type:Type.STRING}},beatIds:{type:Type.ARRAY,items:{type:Type.STRING}}}}},
+        beatDirections: {type:Type.ARRAY,items:{type:Type.OBJECT,properties:{beatId:{type:Type.STRING},intent:{type:Type.STRING}}}},
+        assumptions:{type:Type.ARRAY,items:{type:Type.STRING}},
         applications: { type: Type.ARRAY, items: { type: Type.OBJECT, properties: {
           skillId: { type: Type.STRING }, methodId: { type: Type.STRING }, dimensions: { type: Type.ARRAY, items: { type: Type.STRING } },
           method: { type: Type.STRING }, evidence: { type: Type.STRING }, decision: { type: Type.STRING },
@@ -125,11 +130,11 @@ export const storyboardShotSchema = {
           ...Object.fromEntries(["startChanges", "endChanges"].map(key => [key, { type: Type.OBJECT, properties: Object.fromEntries(["clothing", "dirt", "injury", "hair", "makeup", "other"].map(field => [field, { type: Type.STRING }])) }])),
         },
       } } } },
-      motivation: { type: Type.STRING },
+      motivation: { type: Type.STRING, description: "本镜新增信息或情绪作用，不以填满片长为目的。" },
       visualAction: { type: Type.STRING },
       microExpression: { type: Type.STRING },
       soundDesign: { type: Type.STRING },
-      editingNote: { type: Type.STRING },
+      editingNote: { type: Type.STRING, description: "按动作、对白（可重叠）、反应说明估时和切出条件；不按模型上限或宫格数均分，不默认慢推。" },
       transition: { type: Type.STRING, enum: ["none", "fade", "black"] },
       shotSize: { type: Type.STRING },
       cameraAngle: { type: Type.STRING },
@@ -427,6 +432,9 @@ export const buildStoryboardShotQualityPrompt = ({
   ].filter(Boolean).join("\n\n");
   return `你负责独立检查候选 Shot 是否忠于事实、可执行且可剪接。只返回评分、简短结论和可定位问题。
 
+${SCENE_VISUAL_COHERENCE_CONTRACT}
+逐对检查相邻 Shot，问题写明前后完整镜头 ID、冲突事实及修复建议；没有媒体输入时只评价文字计划，不声称已检查实际画面。
+
 【通过门槛】
 - 总分必须达到 ${STORYBOARD_AGENT_QUALITY_THRESHOLD} 分。
 - 不得存在 blocking 或 warning 问题；仅 advisory 可以随通过结论保留。
@@ -487,6 +495,8 @@ export const buildStoryboardShotRepairPrompt = ({
     context.formalAssetContext ? `【当前场正式资产】\n${context.formalAssetContext}` : "",
   ].filter(Boolean).join("\n\n");
   return `你负责根据事实源和质检意见修订整份候选 Shot。直接返回完整 JSON 数组，不要解释。
+
+${SCENE_VISUAL_COHERENCE_CONTRACT}
 
 【不可改变的边界】
 1. 忠实覆盖剧本中的动作、对白、转折和信息揭示，不新增剧情事实、角色、场景或道具。

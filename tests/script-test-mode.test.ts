@@ -2,8 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { useSettingsStore } from '../src/store/useSettingsStore';
 import { checkTestSubmission, requireTestMode, testModeEnabled } from '../apps/web/src/clients/testMode';
-import { scriptAgentClient, scriptClient } from '../apps/web/src/clients/scriptClient';
-import { scriptConversationClient } from '../apps/web/src/clients/scriptConversationClient';
+import {  scriptClient } from '../apps/web/src/clients/scriptClient';
 import { withManualAIResult, resolveManualAIRequest, getManualAIPending, answerManualAI, cancelManualAI } from '../apps/web/src/clients/manualAIClient';
 
 test('test tools are off by default and API submissions remain available', () => {
@@ -15,20 +14,6 @@ test('test tools are off by default and API submissions remain available', () =>
     assert.throws(()=>checkTestSubmission(body), /测试模式/);
   assert.doesNotThrow(()=>checkTestSubmission({executionChannel:'api'}));
   assert.doesNotThrow(()=>checkTestSubmission({kind:'APPLY'}));
-});
-
-test('normal mode never posts a stale external command or returned test result', async t => {
-  useSettingsStore.setState({isTestMode:false});
-  const oldFetch=globalThis.fetch;let posts=0;
-  globalThis.fetch=(async()=>{posts++;return new Response('{}',{status:200});}) as typeof fetch;
-  t.after(()=>{globalThis.fetch=oldFetch;});
-  await assert.rejects(()=>scriptConversationClient.send('thread',{requestId:'test',expectedVersion:1,text:'test',methodIds:[],template:'',executionChannel:'external'}),/测试模式/);
-  await assert.rejects(()=>scriptAgentClient.submit({kind:'GOAL_START',executionChannel:'external'} as any),/测试模式/);
-  await assert.rejects(()=>scriptAgentClient.submitExternal({id:'test',inputHash:'hash'} as any,'{}',{name:'test'}),/测试模式/);
-  await assert.rejects(()=>scriptClient.createAgentRun('project',{executionMode:'manual'} as any),/测试模式/);
-  assert.equal(posts,0);
-  await scriptConversationClient.send('thread',{requestId:'api',expectedVersion:1,text:'test',methodIds:[],template:'',executionChannel:'api'});
-  assert.equal(posts,1);
 });
 
 test('normal API execution bypasses manual dialogs and a stale manual seed cannot switch to API', async()=>{
